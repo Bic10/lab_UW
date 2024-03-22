@@ -168,10 +168,23 @@ def make_images_folders(machine_name: str, experiment_name: str, image_types: li
     
     return outdir_path_images
 
-        
-def uw_all_plot(outfile_path: str, data: np.ndarray, metadata: dict, step_wf_to_plot: int,
+
+def output_path_choice(outfile_path=None, formato="jpg"):
+    '''
+    Saving or showing option for plot functions
+    - outfile_path: Path to save the plot.
+    - formato: File format for saving the plot.
+    '''
+    if outfile_path:
+        plt.savefig(outfile_path + formato, dpi=300)
+        plt.close()  # Close the figure to prevent it from being displayed
+        print(f"Plot saved to {outfile_path}")
+    else:
+        plt.show()
+
+def uw_all_plot(data: np.ndarray, metadata: dict, step_wf_to_plot: int,
                 highlight_start: int, highlight_end: int, ylim_plot: float, xlim_plot: float,
-                formato: str, ticks_steps_waveforms: float) -> None:
+                ticks_steps_waveforms: float, outfile_path: str = None,  formato: str = ".png")  -> None:
     '''
     Plots stacked waveforms with optional highlighting.
 
@@ -197,7 +210,7 @@ def uw_all_plot(outfile_path: str, data: np.ndarray, metadata: dict, step_wf_to_
     
     outfile_name = os.path.basename(outfile_path)
     
-    f = plt.figure(figsize = (13,4))
+    plt.figure(figsize = (13,4))
     plt.title("Stacked Waveforms of " + outfile_name, fontsize = 12)
     plt.plot(time_ax_waveform, data[::step_wf_to_plot].T, 
              color = 'black', linewidth = 0.8, alpha = 0.5)
@@ -208,12 +221,12 @@ def uw_all_plot(outfile_path: str, data: np.ndarray, metadata: dict, step_wf_to_
     plt.ylim(-ylim_plot,ylim_plot)
     plt.xlim(time_ax_waveform[0], xlim_plot)
     plt.grid(alpha = 0.1)
-    plt.savefig(outfile_path + formato, dpi = 300)
-    plt.close()
+
+    output_path_choice(outfile_path=outfile_path, formato=formato)
     
 
-def amplitude_map(outfile_path: str, data: np.ndarray, metadata: dict, amp_scale: float,
-                  formato: str) -> None:
+def amplitude_map(data: np.ndarray, metadata: dict, amp_scale: float,
+                  formato: str, outfile_path: str = None) -> None:
     '''
     Plots an amplitude map of waveform data.
 
@@ -254,8 +267,8 @@ def amplitude_map(outfile_path: str, data: np.ndarray, metadata: dict, amp_scale
 
     fig.tight_layout()
     
-    plt.savefig(outfile_path + formato, dpi = 300)
-    plt.close()
+    output_path_choice(outfile_path=outfile_path, formato=formato)
+
     
 
 ## SPECTRAL ANALYSIS
@@ -283,8 +296,8 @@ def lowpass_mask(data_length: int, winlen: int) -> np.ndarray:
     return lowpass_filter
 
 
-def amplitude_spectrum_map(outfile_path: str, signal_freqs: np.ndarray, amp_spectrum: np.ndarray,
-                           metadata: dict, formato: str = ".png") -> None:
+def amplitude_spectrum_map(signal_freqs: np.ndarray, amp_spectrum: np.ndarray,
+                           metadata: dict, outfile_path: str = None, formato: str = ".png") -> None:
     '''
     Plots an amplitude map of waveform data.
 
@@ -315,12 +328,12 @@ def amplitude_spectrum_map(outfile_path: str, signal_freqs: np.ndarray, amp_spec
     cbar = plt.colorbar(pad=0.04)
     cbar.set_label("Spectral Amplitude", fontsize=14)
 
-    plt.savefig(outfile_path + formato, dpi=300)
-    plt.close()
+    output_path_choice(outfile_path=outfile_path, formato=formato)
 
 
 
-def signal2noise_separation_lowpass(outfile_path: str, waveform_data: np.ndarray, metadata: dict, freq_cut: float = 5) -> tuple[np.ndarray, np.ndarray]:
+
+def signal2noise_separation_lowpass(waveform_data: np.ndarray, metadata: dict, freq_cut: float = 5, outfile_path: str = None, formato:str = ".png") -> tuple[np.ndarray, np.ndarray]:
     '''
     Separates signal and noise using a low-pass filter.
 
@@ -358,18 +371,20 @@ def signal2noise_separation_lowpass(outfile_path: str, waveform_data: np.ndarray
     noise_reconstructed = np.fft.ifft(noise_fourier).real
 
     if wave_num == 1:
-        filtered_amp_and_phase_spectrum_plot(outfile_path, signal_freqs, amp_spectrum, phase_spectrum,
-                                               filtered_amp_spectrum, lowpass_filter, sampling_rate)
+        filtered_amp_and_phase_spectrum_plot(signal_freqs, amp_spectrum, phase_spectrum,
+                                               filtered_amp_spectrum, lowpass_filter, sampling_rate, 
+                                               outfile_path=outfile_path, formato=formato)
     else:
-        amplitude_spectrum_map(outfile_path, signal_freqs, filtered_amp_spectrum[:, :winlen], metadata,
-                                formato=".png")
+        amplitude_spectrum_map(signal_freqs, filtered_amp_spectrum[:, :winlen], metadata, outfile_path=outfile_path,
+                                formato=formato)
 
     return filtered_signal, noise_reconstructed
 
 
-def filtered_amp_and_phase_spectrum_plot(outfile_path: str, signal_freqs: np.ndarray, amp_spectrum: np.ndarray,
+def filtered_amp_and_phase_spectrum_plot(signal_freqs: np.ndarray, amp_spectrum: np.ndarray,
                                           phase_spectrum: np.ndarray, filtered_amp_spectrum: np.ndarray,
-                                          lowpass_filter: np.ndarray, sampling_rate: float) -> None:
+                                          lowpass_filter: np.ndarray, sampling_rate: float, 
+                                          formato : str = ".png", outfile_path: str = None) -> None:
     '''
     Plots the filtered amplitude and phase spectrum.
 
@@ -420,15 +435,16 @@ def filtered_amp_and_phase_spectrum_plot(outfile_path: str, signal_freqs: np.nda
     ax[1].set_title("Phase Spectrum")
 
     plt.tight_layout()
-    plt.savefig(outfile_path)
-    plt.close()
+
+    output_path_choice(outfile_path=outfile_path, formato=formato)
 
 
 
 
-def signal_vs_filtered_signal_plot(outfile_path: str, single_waveform: np.ndarray, 
+
+def signal_vs_filtered_signal_plot(single_waveform: np.ndarray, 
                                    single_waveform_filtered: np.ndarray, metadata: dict[str, np.ndarray], 
-                                   freq_cut: float, formato: str = ".png") -> None:
+                                   freq_cut: float, formato: str = ".png", outfile_path: str = None) -> None:
     """
     Plot a comparison between a waveform and its filtered version.
 
@@ -449,7 +465,8 @@ def signal_vs_filtered_signal_plot(outfile_path: str, single_waveform: np.ndarra
     plt.ylabel('Amplitude [.]')
     plt.title("Effect of lowpass filtering at %2.2f MHz" % freq_cut)
     plt.legend()
-    plt.savefig(outfile_path + formato, dpi=300)
-    plt.close()
+
+    output_path_choice(outfile_path=outfile_path, formato=formato)
+
 
     
