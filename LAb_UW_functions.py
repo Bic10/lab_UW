@@ -49,7 +49,7 @@ def remove_empty_lines(infile: iter, number_of_samples: int, encoding: str = 'is
 
 def make_UW_data(infile_path: str) -> tuple[np.ndarray, dict]:
     '''
-    Reads data from a binary file and extracts metadata.
+    Reads data from a binary file and extracts data and metadata.
 
     Args:
     - infile_path: Path to the input binary file.
@@ -116,7 +116,7 @@ def extract_metadata_from_tsv(infile: iter, encoding: str = 'iso8859') -> tuple[
     return acquisition_info, time_info
 
 
-def make_infile_path_list(machine_name: str, experiment_name: str) -> list[str]:
+def make_infile_path_list(machine_name: str, experiment_name: str, data_type:str) -> list[str]:
     '''
     Generates a list of input file paths based on the machine name and experiment name.
 
@@ -129,7 +129,7 @@ def make_infile_path_list(machine_name: str, experiment_name: str) -> list[str]:
     '''
     code_path = os.getcwd()
     parent_folder = os.path.abspath(os.path.join(code_path, os.pardir))
-    indir_path = os.path.join(parent_folder,"experiments_"+ machine_name, experiment_name, "data_tsv_files")
+    indir_path = os.path.join(parent_folder,"experiments_"+ machine_name, experiment_name, data_type)
 
     infile_path_list = []   
     for infile_name in os.listdir(indir_path):
