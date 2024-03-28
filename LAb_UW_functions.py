@@ -2,10 +2,9 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
-import pandas as pd
+import matplotlib.colors as mcolors
 import os
 import re
-import sys
 
 def remove_starting_noise(data: np.ndarray, metadata: dict, remove_initial_samples: int = 0) -> tuple[np.ndarray, dict]:
     '''
@@ -138,7 +137,33 @@ def make_infile_path_list(machine_name: str, experiment_name: str, data_type:str
 
     return infile_path_list
 
+def make_data_analysis_folders(machine_name: str, experiment_name: str, data_types: list[str]) -> list[str]:
+    '''
+    Creates folders for storing elaborated data on the based on the machine name, experiment name, and data types.
+
+    Args:
+    - machine_name: Name of the machine.
+    - experiment_name: Name of the experiment.
+    - data_types: List of data types.
+
+    Returns:
+    - List of folder paths for each data type.
+    '''
+    folder_name = "data_analysis"
+
+    code_path = os.getcwd()
+    parent_folder = os.path.abspath(os.path.join(code_path, os.pardir))
+    folder_path = os.path.join(parent_folder,"experiments_"+ machine_name, experiment_name, folder_name)
+
+    outdir_path_datas = []
+    for im in data_types:
+        outdir_path_data = os.path.join(folder_path, im)
+        outdir_path_datas.append(outdir_path_data)
+
+        if not os.path.exists(outdir_path_data):
+            os.makedirs(outdir_path_data)  
     
+    return outdir_path_datas    
 
 def make_images_folders(machine_name: str, experiment_name: str, image_types: list[str]) -> list[str]:
     '''
@@ -169,18 +194,24 @@ def make_images_folders(machine_name: str, experiment_name: str, image_types: li
     return outdir_path_images
 
 
-def output_path_choice(outfile_path=None, formato="jpg"):
+
+def output_path_choice(plot, outfile_path=None, formato="jpg"):
     '''
     Saving or showing option for plot functions
+    - plot: The plot object to be saved or shown.
     - outfile_path: Path to save the plot.
     - formato: File format for saving the plot.
     '''
     if outfile_path:
+        outfile_name = os.path.basename(outfile_path)
+        current_title = plt.gca().get_title()
+        plt.title(current_title + " " + outfile_name)
         plt.savefig(outfile_path + formato, dpi=300)
         plt.close()  # Close the figure to prevent it from being displayed
         print(f"Plot saved to {outfile_path}")
     else:
-        plt.show()
+        plt.show(plot)
+
 
 def uw_all_plot(data: np.ndarray, metadata: dict, step_wf_to_plot: int,
                 highlight_start: int, highlight_end: int, ylim_plot: float, xlim_plot: float,
@@ -208,10 +239,8 @@ def uw_all_plot(data: np.ndarray, metadata: dict, step_wf_to_plot: int,
 
     time_ticks_waveforms = np.arange(time_ax_waveform[0], time_ax_waveform[-1], ticks_steps_waveforms)
     
-    outfile_name = os.path.basename(outfile_path)
-    
+
     plt.figure(figsize = (13,4))
-    plt.title("Stacked Waveforms of " + outfile_name, fontsize = 12)
     plt.plot(time_ax_waveform, data[::step_wf_to_plot].T, 
              color = 'black', linewidth = 0.8, alpha = 0.5)
     plt.plot(time_ax_waveform[highlight_start:highlight_end], data[::step_wf_to_plot][highlight_start:highlight_end], color = 'red')
@@ -221,8 +250,10 @@ def uw_all_plot(data: np.ndarray, metadata: dict, step_wf_to_plot: int,
     plt.ylim(-ylim_plot,ylim_plot)
     plt.xlim(time_ax_waveform[0], xlim_plot)
     plt.grid(alpha = 0.1)
+    plt.title("Stacked Waveforms ", fontsize = 12)
 
-    output_path_choice(outfile_path=outfile_path, formato=formato)
+
+    output_path_choice(plot = plt, outfile_path=outfile_path, formato=formato)
     
 
 def amplitude_map(data: np.ndarray, metadata: dict, amp_scale: float,
@@ -240,7 +271,6 @@ def amplitude_map(data: np.ndarray, metadata: dict, amp_scale: float,
     Returns:
     - None
     '''    
-    outfile_name = os.path.basename(outfile_path)
 
     time_ax_waveform = metadata['time_ax_waveform']
     start_time, end_time = time_ax_waveform[0], time_ax_waveform[-1]
@@ -250,10 +280,9 @@ def amplitude_map(data: np.ndarray, metadata: dict, amp_scale: float,
 
     fig,ax1 = plt.subplots(ncols=1,figsize=(15,8))
     ax1 = plt.subplot()
-    ax1.set_title('Amplitude Map of ' + outfile_name, fontsize = 12)
+    ax1.set_title("Amplitude Map " , fontsize = 12)
     cmap = plt.get_cmap('seismic')
     
-    extent = [0,data.shape[0]*acquisition_frequency, 0 , number_of_samples*sampling_rate]
     im = ax1.imshow(data.T, aspect='auto',origin='lower',interpolation='none',
                     cmap = cmap, vmin = -amp_scale, vmax = amp_scale, 
                     extent = [0,data.shape[0]*acquisition_frequency, 0 , number_of_samples*sampling_rate])
@@ -267,7 +296,7 @@ def amplitude_map(data: np.ndarray, metadata: dict, amp_scale: float,
 
     fig.tight_layout()
     
-    output_path_choice(outfile_path=outfile_path, formato=formato)
+    output_path_choice(plot = plt, outfile_path=outfile_path, formato=formato)
 
     
 
@@ -311,8 +340,6 @@ def amplitude_spectrum_map(signal_freqs: np.ndarray, amp_spectrum: np.ndarray,
     Returns:
     - None
     '''
-    outfile_name = os.path.basename(outfile_path)
-
     wave_num, wave_len = amp_spectrum.shape
     
     spectrum_length = round(wave_len/2)
@@ -320,15 +347,14 @@ def amplitude_spectrum_map(signal_freqs: np.ndarray, amp_spectrum: np.ndarray,
     amp_spectrum = amp_spectrum[:, :spectrum_length]
 
     time_ax_acquisition = metadata['time_ax_acquisition']
-
-    plt.pcolormesh(time_ax_acquisition, signal_freqs, amp_spectrum.T, cmap="gist_gray", norm="log")   
-    plt.title('Amplitude Map of ' + outfile_name, fontsize=12)
+    plt.pcolormesh(time_ax_acquisition, signal_freqs, amp_spectrum.T, cmap="gist_gray", norm=mcolors.LogNorm())   
+    plt.title('Amplitude Map', fontsize=12)
     plt.xlabel("Time [s]")
     plt.ylabel("Frequency [$MHz $]")
     cbar = plt.colorbar(pad=0.04)
     cbar.set_label("Spectral Amplitude", fontsize=14)
 
-    output_path_choice(outfile_path=outfile_path, formato=formato)
+    output_path_choice(plot = plt, outfile_path=outfile_path, formato=formato)
 
 
 
@@ -384,7 +410,7 @@ def signal2noise_separation_lowpass(waveform_data: np.ndarray, metadata: dict, f
 def filtered_amp_and_phase_spectrum_plot(signal_freqs: np.ndarray, amp_spectrum: np.ndarray,
                                           phase_spectrum: np.ndarray, filtered_amp_spectrum: np.ndarray,
                                           lowpass_filter: np.ndarray, sampling_rate: float, 
-                                          formato : str = ".png", outfile_path: str = None) -> None:
+                                           outfile_path: str = None,  formato : str = ".png") -> None:
     '''
     Plots the filtered amplitude and phase spectrum.
 
@@ -400,7 +426,6 @@ def filtered_amp_and_phase_spectrum_plot(signal_freqs: np.ndarray, amp_spectrum:
     Returns:
     - None
     '''
-    outfile_name = os.path.basename(outfile_path)
 
     spectrum_length = round(len(amp_spectrum) / 2)
     amp_spectrum = amp_spectrum[:spectrum_length]
@@ -424,7 +449,7 @@ def filtered_amp_and_phase_spectrum_plot(signal_freqs: np.ndarray, amp_spectrum:
     ax[0].set_xlim([0, np.amax(signal_freqs)])
     ax[0].set_ylabel("Amplitude [.]")
     ax[0].set_xlabel("Frequency [MHz]")
-    ax[0].set_title("Amplitude Spectrum of a waveform in %s" % (outfile_name))
+    ax[0].set_title("Amplitude Spectrum of a waveform")
 
     ax[1].plot(signal_freqs, phase_spectrum)
 
@@ -432,11 +457,11 @@ def filtered_amp_and_phase_spectrum_plot(signal_freqs: np.ndarray, amp_spectrum:
     ax[1].set_yticklabels([r'$-\pi$', r'$-\frac{\pi}{2}$', r'$0$', r'$\frac{\pi}{2}$', r'$\pi$'])
     ax[1].set_ylabel("Phase [rad]")
     ax[1].set_xlabel("Frequency [MHz]")
-    ax[1].set_title("Phase Spectrum")
+    ax[1].set_title("Phase Spectrum of a waveform")
 
     plt.tight_layout()
 
-    output_path_choice(outfile_path=outfile_path, formato=formato)
+    output_path_choice(plot = plt, outfile_path=outfile_path, formato=formato)
 
 
 
@@ -466,7 +491,7 @@ def signal_vs_filtered_signal_plot(single_waveform: np.ndarray,
     plt.title("Effect of lowpass filtering at %2.2f MHz" % freq_cut)
     plt.legend()
 
-    output_path_choice(outfile_path=outfile_path, formato=formato)
+    output_path_choice(plot = plt, outfile_path=outfile_path, formato=formato)
 
 
     
