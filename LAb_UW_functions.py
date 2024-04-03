@@ -210,7 +210,8 @@ def output_path_choice(plot, outfile_path=None, formato="jpg"):
         plt.close()  # Close the figure to prevent it from being displayed
         print(f"Plot saved to {outfile_path}")
     else:
-        plt.show(plot)
+        pass
+        # plt.show(plot)
 
 
 def uw_all_plot(data: np.ndarray, metadata: dict, step_wf_to_plot: int,
