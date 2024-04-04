@@ -121,6 +121,17 @@ mech_data_path= find_mechanical_data(infile_path_list_mech, sync_file_pattern)
 mech_data, sync_data, sync_peaks = find_sync_values(mech_data_path)
 # plot_sync_peaks(sync_data, sync_peaks, experiment_name)
 
+########################################################################################################
+##### PICKED MANUALLY FOR PLOTTING POURPOSE: THEY ARE CATTED PRECISELY AROUND THE MECHANICAL DATA OF THE STEP
+if experiment_name == "s0108":
+    steps_carrara = [5582,8698,15050,17990,22000,23180,36229,39391,87940,89744,126306,128395,134000,135574,169100,172600,220980,223000,259432, 261425,266429,268647,279733,282787,331437,333778,369610,374824]
+    sync_peaks = steps_carrara 
+
+if experiment_name == "s0103":
+    steps_mont = [4833,8929,15166,18100,22188,23495,36297,39000,87352,89959,154601,156625,162000,165000,168705,170490,182000,184900,233364,235558,411811,462252]
+    sync_peaks = steps_carrara
+##############################################################################################################
+
 #MAKE UW PATH LIST
 infile_path_list_uw = sorted(make_infile_path_list(machine_name,experiment_name, data_type=data_type_uw))
 outdir_path_l2norm= make_data_analysis_folders(machine_name=machine_name, experiment_name=experiment_name,data_types=["global_optimization_velocity"])
@@ -153,7 +164,7 @@ for choosen_uw_file, infile_path in enumerate(infile_path_list_uw):
     # reduce computation time 
     # # assumtion: there is no point to simulate anything that do not show up in the data_OBS
     freq_cut = 2                  # [MHz]   maximum frequency of the data we want to reproduce  
-    data_OBS_filtered, _  = signal2noise_separation_lowpass(data_OBS[1000],metadata,freq_cut=freq_cut)
+    data_OBS_filtered, _  = signal2noise_separation_lowpass(data_OBS,metadata,freq_cut=freq_cut)
 
     ### INPUT DATA ###
     # These are constants through the entire experiment.
@@ -165,7 +176,7 @@ for choosen_uw_file, infile_path in enumerate(infile_path_list_uw):
     csteel = 3250 * (1e2/1e6)       # [cm/mus]   steel s-velocity
     cpzt = 2000* (1e2/1e6)         # [cm/mus] s-velocity in piezo ceramic, beetween 1600 (bad coupling) and 2500 (good one). It matters!!!
                                     # according to https://www.intechopen.com/chapters/40134   
-    cpmma =  0.2*0.1392              # [cm/mus]   plate supporting the pzt
+    cpmma =  0.*0.1392              # [cm/mus]   plate supporting the pzt
 
 
     # EXTRACT LAYER THICKNESS FROM MECHANICA DATA
@@ -185,7 +196,7 @@ for choosen_uw_file, infile_path in enumerate(infile_path_list_uw):
 
     # GUESSED VELOCITY MODEL OF THE SAMPLE
     # S- velocity of gouge to probe. Extract from the literature!
-    cmin = 1900 * (1e2/1e6)        
+    cmin = 1000 * (1e2/1e6)        
     cmax = 2000 * (1e2/1e6) 
     c_step = 5*1e2/1e6
     c_gouge_list = np.arange(cmin, cmax,c_step) # choose of velocity in a reasonable range: from pressure-v in air to s-steel velocity
@@ -269,4 +280,16 @@ for choosen_uw_file, infile_path in enumerate(infile_path_list_uw):
 
     print("--- %s seconds for processing %s---" % (tm.time() - start_time, outfile_name))
    
+
+# # Capture all local variables: just to ave track of al the various parameters used in the simulation
+# variables = {name: str(value) for name, value in locals().items()}
+# outfile_variables_path = outfile_path.replace(outfile_name,"global_optimization_variables.json")
+
+# # Remove system variables and other undesired variables if needed
+# del variables['__name__']  # Example: Remove the '__name__' variable
+
+# # Save variables to a file
+# with open(outfile_variables_path, 'w') as f:
+#     json.dump(variables, f)
+
 

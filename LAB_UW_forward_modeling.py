@@ -39,7 +39,10 @@ def DDS_UW_simulation(t_OBS: np.ndarray, waveform_OBS: np.ndarray, t_pulse: np.n
     global sp_field, x
     # DEFINE GRID:
     ppt_for_minimum_len = 10       #  implement as a possible parameter option?
-    x = make_grid_1D(grid_len = sum(sample_dimensions), cmin = c_gouge, fmax=freq_cut, ppt=ppt_for_minimum_len)
+    # minimum among the various velocity
+    cmin=  min([i for i in [cmax,c_gouge,cpzt,cpmma] if i!=0])
+
+    x = make_grid_1D(grid_len = sum(sample_dimensions), cmin = cmin, fmax=freq_cut, ppt=ppt_for_minimum_len)
     dx = x[1]-x[0]       # [cm/mus] spacing between the point of the x axis     
     nx = len(x)          # number of samples in the simulated x axes. Must be even for pseudo spectral computation. So the if above
 
@@ -90,11 +93,12 @@ def DDS_UW_simulation(t_OBS: np.ndarray, waveform_OBS: np.ndarray, t_pulse: np.n
         sp_recorded = sp_recorded * (np.amax(waveform_OBS)/np.amax(sp_recorded))
 
     if plotting:
-        plt.plot(t,sp_recorded)
+        plt.plot(t,sp_recorded, label="UW simulated")
         # plt.plot(t_OBS,waveform_SYNT*(norm/np.amax(waveform_SYNT)) - 15*(idx+1), label=f"pulse {idx}")
         
     waveform_SYNT = np.interp(t_OBS,t,sp_recorded)   # back to the same dt of the observed data
-
+    correction_3D = (sample_dimensions[0] / t_OBS) ** 2
+    waveform_SYNT = waveform_SYNT * correction_3D
 
     L2norm = LA.norm(waveform_OBS[interval]-waveform_SYNT[interval],2)
 
@@ -328,14 +332,14 @@ def make_movie(side_block_1: float, gouge_1: float, central_block: float, gouge_
     # Initialize figure and axes
     fig, ax = plt.subplots()
     ylim = 1.3*np.amax(sp_field)   # this is going to be around the higher value of pressure field
-    ax.set(xlim=[x[0],x[-1]], ylim=[-ylim, ylim], xlabel='DDS Sample length [cm]', ylabel='Shear Wave Amplitude [.]')
+    ax.set(xlim=[x[0],x[-1]], ylim=[-ylim, ylim],title="Utrasonic Wave In DDS Sample", xlabel='DDS Sample length [cm]', ylabel='Shear Wave Amplitude [.]')
 
     # this lines are just to shadow in different colours steel and gouge
-    # idx_gouge_1 =np.where((x>side_block_1) & (x<side_block_1 + gouge_1))[0]
-    # idx_gouge_2 =np.where((x>side_block_1+gouge_1+central_block) & (x<side_block_1 + gouge_1+central_block+gouge_2))[0]
-    # ax.axvspan(x[0],x[idx_gouge_1[0]], color="lightsteelblue", alpha=0.5)
-    # ax.axvspan(x[idx_gouge_1[-1]],x[idx_gouge_2[0]], color="lightsteelblue", alpha=0.5)
-    # ax.axvspan(x[idx_gouge_2[-1]],x[-1], color="lightsteelblue", alpha=0.5)
+    idx_gouge_1 =np.where((x>side_block_1) & (x<side_block_1 + gouge_1))[0]
+    idx_gouge_2 =np.where((x>side_block_1+gouge_1+central_block) & (x<side_block_1 + gouge_1+central_block+gouge_2))[0]
+    ax.axvspan(x[0],x[idx_gouge_1[0]], color="lightsteelblue", alpha=0.5)
+    ax.axvspan(x[idx_gouge_1[-1]],x[idx_gouge_2[0]], color="lightsteelblue", alpha=0.5)
+    ax.axvspan(x[idx_gouge_2[-1]],x[-1], color="lightsteelblue", alpha=0.5)
 
     # Function to initialize the plot for movie
     def init():
