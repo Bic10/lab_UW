@@ -40,8 +40,8 @@ def DDS_UW_simulation(t_OBS: np.ndarray, waveform_OBS: np.ndarray, t_pulse: np.n
     # DEFINE GRID:
     ppt_for_minimum_len = 10       #  implement as a possible parameter option?
     # minimum among the various velocity
-    cmin=  min([i for i in [cmax,c_gouge,cpzt,cpmma] if i!=0])
-
+    # cmin=  min([i for i in [cmax,c_gouge,cpzt,cpmma] if i!=0])
+    cmin = c_gouge
     x = make_grid_1D(grid_len = sum(sample_dimensions), cmin = cmin, fmax=freq_cut, ppt=ppt_for_minimum_len)
     dx = x[1]-x[0]       # [cm/mus] spacing between the point of the x axis     
     nx = len(x)          # number of samples in the simulated x axes. Must be even for pseudo spectral computation. So the if above

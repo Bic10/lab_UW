@@ -121,6 +121,8 @@ mech_data_path= find_mechanical_data(infile_path_list_mech, sync_file_pattern)
 mech_data, sync_data, sync_peaks = find_sync_values(mech_data_path)
 # plot_sync_peaks(sync_data, sync_peaks, experiment_name)
 
+
+
 ########################################################################################################
 ##### PICKED MANUALLY FOR PLOTTING POURPOSE: THEY ARE CATTED PRECISELY AROUND THE MECHANICAL DATA OF THE STEP
 if experiment_name == "s0108":
@@ -164,7 +166,7 @@ for choosen_uw_file, infile_path in enumerate(infile_path_list_uw):
     # reduce computation time 
     # # assumtion: there is no point to simulate anything that do not show up in the data_OBS
     freq_cut = 2                  # [MHz]   maximum frequency of the data we want to reproduce  
-    data_OBS_filtered, _  = signal2noise_separation_lowpass(data_OBS,metadata,freq_cut=freq_cut)
+    # data_OBS_filtered, _  = signal2noise_separation_lowpass(data_OBS,metadata,freq_cut=freq_cut)
 
     ### INPUT DATA ###
     # These are constants through the entire experiment.
@@ -176,7 +178,7 @@ for choosen_uw_file, infile_path in enumerate(infile_path_list_uw):
     csteel = 3250 * (1e2/1e6)       # [cm/mus]   steel s-velocity
     cpzt = 2000* (1e2/1e6)         # [cm/mus] s-velocity in piezo ceramic, beetween 1600 (bad coupling) and 2500 (good one). It matters!!!
                                     # according to https://www.intechopen.com/chapters/40134   
-    cpmma =  0.*0.1392              # [cm/mus]   plate supporting the pzt
+    cpmma =  0.4*0.1392              # [cm/mus]   plate supporting the pzt
 
 
     # EXTRACT LAYER THICKNESS FROM MECHANICA DATA
@@ -196,9 +198,9 @@ for choosen_uw_file, infile_path in enumerate(infile_path_list_uw):
 
     # GUESSED VELOCITY MODEL OF THE SAMPLE
     # S- velocity of gouge to probe. Extract from the literature!
-    cmin = 1000 * (1e2/1e6)        
+    cmin = 600 * (1e2/1e6)        
     cmax = 2000 * (1e2/1e6) 
-    c_step = 5*1e2/1e6
+    c_step = 100*1e2/1e6
     c_gouge_list = np.arange(cmin, cmax,c_step) # choose of velocity in a reasonable range: from pressure-v in air to s-steel velocity
     # c_gouge_list = [cmax]
 
@@ -214,47 +216,37 @@ for choosen_uw_file, infile_path in enumerate(infile_path_list_uw):
 
     # DOWNSAMPLING THE WAVEFORMS: FOR PLOTING PURPOSE, WE DO NOT NEED TO PROCESS ALL THE WAVEFORMS
     number_of_waveforms_wanted = 20
+    data_OBS = data_OBS[:sync_peaks[2*choosen_uw_file+1]-sync_peaks[2*choosen_uw_file]] # subsempling on around the step
+    metadata['number_of_waveforms'] = len(data_OBS)
     downsampling = round(metadata['number_of_waveforms']/number_of_waveforms_wanted)
-    print(f"Number of waveforms wanted: {number_of_waveforms_wanted}\nDownsampling waveforms by a factor: {downsampling}")
+    print(f"number of waveforms in the selected subset: {metadata['number_of_waveforms']}\nNumber of waveforms wanted: {number_of_waveforms_wanted}\nDownsampling waveforms by a factor: {downsampling}")
 
     # JUST USE ONE OF THE PULSE AS A SOURCE TIME FUNCTION
     choosen_pulse = 0
     pulse = pulse_list[choosen_pulse]
     t_pulse = t_pulse_list[choosen_pulse]
 
+    # CPU PARALLELIZED GLOBAL OPTIMIZATION ALGORITHM: 
     L2norm = np.zeros((len(data_OBS[::downsampling]), len(c_gouge_list)))
     # Define your parallel function
     def process_waveform(idx_waveform):
-        waveform_OBS = data_OBS[idx_waveform * downsampling] - np.mean(data_OBS[idx_waveform * downsampling])
+        idx = idx_waveform * downsampling
+        waveform_OBS = data_OBS[idx] - np.mean(data_OBS[idx])
 
         # there is a problem with synchronization: the number of waves are slightly different from the rec numbers
         # thy handling is a dute-tape, must be checked out the problem!
-        try:
-            sample_dimensions = [side_block_1, thickness_gouge_1_list[idx_waveform * downsampling], central_block, thickness_gouge_2_list[idx_waveform * downsampling], side_block_2]
-            x_receiver = sum(sample_dimensions) - 1
+        sample_dimensions = [side_block_1, thickness_gouge_1_list[idx], central_block, thickness_gouge_2_list[idx], side_block_2]
+        x_receiver = sum(sample_dimensions) - 1
 
-            result = np.zeros(len(c_gouge_list))
-            for idx_gouge, c_gouge in enumerate(c_gouge_list):
-                L2norm_new = DDS_UW_simulation(t_OBS, waveform_OBS, t_pulse_list[choosen_pulse], pulse_list[choosen_pulse], idx_travel_time_list[idx_waveform * downsampling], 
-                                sample_dimensions, freq_cut, 
-                                x_trasmitter, x_receiver, pzt_width, pmma_width, 
-                                csteel, c_gouge, cpzt, cpmma, normalize=True, plotting=False)
-                result[idx_gouge] = L2norm_new
+        result = np.zeros(len(c_gouge_list))
+        for idx_gouge, c_gouge in enumerate(c_gouge_list):
+            L2norm_new = DDS_UW_simulation(t_OBS, waveform_OBS, t_pulse_list[choosen_pulse], pulse_list[choosen_pulse], idx_travel_time_list[idx], 
+                            sample_dimensions, freq_cut, 
+                            x_trasmitter, x_receiver, pzt_width, pmma_width, 
+                            csteel, c_gouge, cpzt, cpmma, normalize=True, plotting=False)
+            result[idx_gouge] = L2norm_new
 
-        except:
-            # just get the last index of the various list instead of idx_waveform * downsampling
-            sample_dimensions = [side_block_1, thickness_gouge_1_list[-1], central_block, thickness_gouge_2_list[-1], side_block_2]
-            x_receiver = sum(sample_dimensions) - 1
 
-            result = np.zeros(len(c_gouge_list))
-            for idx_gouge, c_gouge in enumerate(c_gouge_list):
-                L2norm_new = DDS_UW_simulation(t_OBS, waveform_OBS, t_pulse_list[choosen_pulse], pulse_list[choosen_pulse], idx_travel_time_list[-1], 
-                                sample_dimensions, freq_cut, 
-                                x_trasmitter, x_receiver, pzt_width, pmma_width, 
-                                csteel, c_gouge, cpzt, cpmma, normalize=True, plotting=False)
-                result[idx_gouge] = L2norm_new
-
-            
         return idx_waveform, result
 
 
@@ -276,7 +268,12 @@ for choosen_uw_file, infile_path in enumerate(infile_path_list_uw):
     # Extract L2norm values
     L2norm = np.array([result[1] for result in results])
 
-    np.save(outfile_path, L2norm, allow_pickle=True)     
+    # np.save(outfile_path, L2norm, allow_pickle=True)    
+
+    plt.figure() 
+    right_v = c_gouge_list[np.argmin(L2norm, axis=1)]
+    plt.plot(right_v)
+    plt.savefig(outfile_path + "plot_velocity.jpg")
 
     print("--- %s seconds for processing %s---" % (tm.time() - start_time, outfile_name))
    
