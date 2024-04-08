@@ -4,7 +4,7 @@ import numpy as np
 from numpy import linalg as LA
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
-from LAb_UW_functions import *
+from LAB_UW_functions import *
 import json
 
 def DDS_UW_simulation(t_OBS: np.ndarray, waveform_OBS: np.ndarray, t_pulse: np.ndarray, pulse: np.ndarray, interval: slice,

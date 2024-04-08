@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import json
 from LAB_UW_forward_modeling import *
-from LAb_UW_functions import *
+from LAB_UW_functions import *
 import numpy as np
 from multiprocessing import Pool, cpu_count
 import cupy as cp
@@ -168,6 +168,10 @@ for choosen_uw_file, infile_path in enumerate(infile_path_list_uw):
     freq_cut = 2                  # [MHz]   maximum frequency of the data we want to reproduce  
     # data_OBS_filtered, _  = signal2noise_separation_lowpass(data_OBS,metadata,freq_cut=freq_cut)
 
+    for i in range(len(pulse_list)):
+        pulse_list[i], _  = signal2noise_separation_lowpass(pulse_list[i],pulse_metadata_list[i],freq_cut=freq_cut)
+        pulse_list[i] = pulse_list[i] - pulse_list[i][0] 
+
     ### INPUT DATA ###
     # These are constants through the entire experiment.
     side_block_1 = 2               # [cm] width of first side block
@@ -200,7 +204,7 @@ for choosen_uw_file, infile_path in enumerate(infile_path_list_uw):
     # S- velocity of gouge to probe. Extract from the literature!
     cmin = 600 * (1e2/1e6)        
     cmax = 2000 * (1e2/1e6) 
-    c_step = 100*1e2/1e6
+    c_step = 5*1e2/1e6
     c_gouge_list = np.arange(cmin, cmax,c_step) # choose of velocity in a reasonable range: from pressure-v in air to s-steel velocity
     # c_gouge_list = [cmax]
 
