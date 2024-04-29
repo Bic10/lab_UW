@@ -1,11 +1,22 @@
 #!/usr/bin/env python3
 
 import numpy as np
-from numpy import linalg as LA
 import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
 import matplotlib.animation as animation
+from matplotlib.patches import Rectangle
+import matplotlib.animation as animation
+
 from LAB_UW_functions import *
-import json
+
+# Define the color palette for the plots
+colors = {
+    'reseda_green': '#788054',
+    'dutch_white': '#E0D6B4',
+    'khaki': '#CABB9E',
+    'platinum': '#E7E5E2',
+    'black_olive': '#322D1E'}
+
 
 def DDS_UW_simulation(t_OBS: np.ndarray, waveform_OBS: np.ndarray, t_pulse: np.ndarray, pulse: np.ndarray, interval: slice,
                       sample_dimensions: tuple, freq_cut: float, x_trasmitter: float, x_receiver: float, pzt_width: float, pmma_width: float,
@@ -36,7 +47,7 @@ def DDS_UW_simulation(t_OBS: np.ndarray, waveform_OBS: np.ndarray, t_pulse: np.n
         float: L2 norm between observed and synthetic waveforms.
     '''
 
-    global sp_field, x
+    global sp_field, sp_recorded, x, t
     # DEFINE GRID:
     ppt_for_minimum_len = 10       #  implement as a possible parameter option?
     # minimum among the various velocity
@@ -93,7 +104,9 @@ def DDS_UW_simulation(t_OBS: np.ndarray, waveform_OBS: np.ndarray, t_pulse: np.n
         sp_recorded = sp_recorded * (np.amax(waveform_OBS)/np.amax(sp_recorded))
 
     if plotting:
-        plt.plot(t,sp_recorded, label="UW simulated")
+        ax = plt.gca()
+        # ax.set_facecolor(colors['khaki'])  # You can choose any color you like
+        ax.plot(t,sp_recorded, label="UW simulated", color=colors['platinum'], linewidth=4.0)
         # plt.plot(t_OBS,waveform_SYNT*(norm/np.amax(waveform_SYNT)) - 15*(idx+1), label=f"pulse {idx}")
         
     waveform_SYNT = np.interp(t_OBS,t,sp_recorded)   # back to the same dt of the observed data
@@ -155,7 +168,7 @@ def make_grid_1D(cmin: float, fmax: float, grid_len: float, ppt: int) -> np.ndar
 
 def build_velocity_model(x: np.ndarray, sample_dimensions: tuple, x_trasmitter: float, x_receiver: float, pzt_width: float, pmma_width: float,
                          cmax: float, cgouge: float, cpzt: float, cpmma: float, plotting: bool = True) -> np.ndarray:
-    global idx_gouge_1,idx_gouge_1,idx_grooves_side1,idx_grooves_side2, idx_grooves_central1, idx_grooves_central2
+    global idx_gouge_1,idx_gouge_1,idx_grooves_side1,idx_grooves_side2, idx_grooves_central1, idx_grooves_central2, idx_pzt_1, idx_pzt_2
     # unpack sample dimensions
     side_block_1 = sample_dimensions[0]
     gouge_1 = sample_dimensions[1]
@@ -325,38 +338,91 @@ def pseudospectral_1D_forward(nx: int, dx: float, nt: int, dt: float, src_x: np.
     return sp_field
 
 
-def make_movie(side_block_1: float, gouge_1: float, central_block: float, gouge_2: float, side_block_2: float) -> None:
+
+def make_movie(outfile_path, side_block_1: float, gouge_1: float, central_block: float, gouge_2: float, side_block_2: float) -> None:
     # MAKE A MOVIE FROM THE RECORDED FIELD
-    movie_sampling = 10             # downsampling of the snapshot to speed up movie
+    movie_sampling = 10  # downsampling of the snapshot to speed up movie
 
     # Initialize figure and axes
-    fig, ax = plt.subplots()
-    ylim = 1.3*np.amax(sp_field)   # this is going to be around the higher value of pressure field
-    ax.set(xlim=[x[0],x[-1]], ylim=[-ylim, ylim],title="Utrasonic Wave In DDS Sample", xlabel='DDS Sample length [cm]', ylabel='Shear Wave Amplitude [.]')
+    fig, (ax, ax2) = plt.subplots(1, 2, figsize=(12, 6), gridspec_kw={'width_ratios': [10, 1]})    
+ 
+    ylim = 1.3 * np.amax(sp_field)  # this is going to be around the higher value of pressure field
+
+    # Central plot
+    ax.set(xlim=[x[0], x[-1]], ylim=[-ylim, ylim])
+
+    # set labels and font size
+    ax.set_title("Utrasonic Wavefield In DDS Experiment", fontsize=20, color='darkslategray')
+    ax.set_xlabel("Sample length [cm]", fontsize=15, color='darkslategray')
+    ax.set_ylabel('Relative Shear Wave Amplitude', fontsize=15, color='darkslategray')
 
     # this lines are just to shadow in different colours steel and gouge
-    idx_gouge_1 =np.where((x>side_block_1) & (x<side_block_1 + gouge_1))[0]
-    idx_gouge_2 =np.where((x>side_block_1+gouge_1+central_block) & (x<side_block_1 + gouge_1+central_block+gouge_2))[0]
-    ax.axvspan(x[0],x[idx_gouge_1[0]], color="lightsteelblue", alpha=0.5)
-    ax.axvspan(x[idx_gouge_1[-1]],x[idx_gouge_2[0]], color="lightsteelblue", alpha=0.5)
-    ax.axvspan(x[idx_gouge_2[-1]],x[-1], color="lightsteelblue", alpha=0.5)
+    idx_gouge_1 = np.where((x > side_block_1) & (x < side_block_1 + gouge_1))[0]
+    idx_gouge_2 = np.where((x > side_block_1 + gouge_1 + central_block) & (x < side_block_1 + gouge_1 + central_block + gouge_2))[0]
+    ax.axvspan(x[0], x[idx_gouge_1[0]], color='lightsteelblue', alpha=0.5)
+    ax.axvspan(x[idx_gouge_1[-1]], x[idx_gouge_2[0]], color='lightsteelblue', alpha=0.5)
+    ax.axvspan(x[idx_gouge_2[-1]], x[-1], color='lightsteelblue', alpha=0.5)
+    ax.axvspan(x[idx_gouge_1[0]], x[idx_gouge_1[-1]], color='aliceblue', alpha=0.5)
+    ax.axvspan(x[idx_gouge_2[0]], x[idx_gouge_2[-1]], color='aliceblue', alpha=0.5)
 
-    # Function to initialize the plot for movie
-    def init():
-        line.set_data([], [])
-        return line,
 
+    # # Add text in the middle of the first axvspan
+    # ax.text((x[idx_gouge_1[0]] + x[idx_gouge_2[-1]]) / 2, -ylim / 2, 'Steel', ha='center', fontsize=15)
+
+    # # Add text close to the end of the last axvspan
+    # ax.text(x[idx_gouge_2[0]], -ylim / 2, 'Gouge', ha='center', fontsize=15, rotation='vertical')
+
+    # Add the "transmitter"
+    xtr = x[idx_pzt_1[0]]
+    ytr = 0
+    pzt_width= x[idx_pzt_1[-1]]-x[idx_pzt_1[0]] # Adjust the size of the square as needed
+    pzt_hight = 4*pzt_width
+    ax.add_patch(Rectangle((xtr - 1.5*pzt_width, ytr - pzt_hight/ 2), pzt_width, pzt_hight, color='teal'))
+    ax.text(xtr - pzt_width/2, ytr - pzt_hight, 'Transmitter', ha='center', fontsize=15, color='darkslategray' )
+
+    # Add the "receiver"
+    xrc = x[idx_pzt_2[-1]]
+    yrc = 0
+    pzt_width= x[idx_pzt_1[-1]]-x[idx_pzt_1[0]] # Adjust the size of the square as needed
+    pzt_hight = 4*pzt_width
+    ax.add_patch(Rectangle((xrc + 0.5*pzt_width , yrc - pzt_hight/ 2), pzt_width, pzt_hight, color='teal'))
+    ax.text(xrc, yrc - pzt_hight, 'Receiver', ha='center', fontsize=15, color='darkslategray')
+
+    # Lateral plot
+    ax2.set(ylim=[t[0], t[-1]], xlim=[-0.7*ylim, 0.7*ylim])
+
+
+    ax2.set_title("Rec", fontsize=20, color='darkslategray')
+    # ylabel = ax2.set_ylabel("Waveform Recorded", fontsize=10)
+    ax2.set_axis_off()
+    ax2.invert_yaxis()
+
+    fig.tight_layout()
 
     def movie_uw(frame):
         # Plot x against sp__movie
-        line.set_xdata(x)
-        line.set_ydata(sp_movie[frame])
+        line.set_xdata(x[idx_pzt_1[0]-30:idx_pzt_2[-1]+30])
+        line.set_ydata(sp_movie[frame][idx_pzt_1[0]-30:idx_pzt_2[-1]+30])
+        line1.set_xdata(sp_recorded_movie[:frame])
+        line1.set_ydata(t_recorded_movie[:frame])
         return line,
-    # Initialize empty line object
-    line, = ax.plot([], [], 'k', lw=1.5)
 
+    # Initialize empty line object
+    line, = ax.plot([], [], color='darkslategray', lw=1.5)
+    line.set_linewidth(3.0)
+    line1, = ax2.plot([], [],color='darkslategray', lw=1.5)
+    line.set_linewidth(3.0)
+
+    # data for central plot: the spatial field evolution
+    sp_movie = sp_field[::movie_sampling]
+
+    # the side plot
 
     sp_movie = sp_field[::movie_sampling]
+
+    # the side plot: waveform recording
+    sp_recorded_movie = sp_recorded[::movie_sampling]/np.amax(sp_recorded)
+    t_recorded_movie = t[::movie_sampling]
     # Define the number of frames
     num_frames = len(sp_movie)
 
@@ -364,7 +430,8 @@ def make_movie(side_block_1: float, gouge_1: float, central_block: float, gouge_
     ani = animation.FuncAnimation(fig, movie_uw, frames=num_frames, blit=True, interval=20)
 
     # Save the animation as an MP4 file
-    ani.save('simulation.mp4', fps=30, extra_args=['-vcodec', 'libx264'])
+    ani.save(outfile_path, fps=30, extra_args=['-vcodec', 'libx264'])
+
 
 
 def compute_max_and_min_travel_time(side_block_1, x_transmitter, c_steel, gouge_1, c_min, c_max, central_block):

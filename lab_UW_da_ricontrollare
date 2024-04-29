@@ -1,0 +1,11 @@
+PROBLEMI ED INCONGRUENZE
+
+1) calibrazione per trovare velocita' acciaio: al momento e' in "cross_correlation_and_steel_velocity.ipynb". Da separare
+
+2) Le varie impostazioni per i plot sono sparpagliate in giro, compresa la palette colori. Andrebbero mantenute ma raccolte e razionalizzate. In particolare, font, palette e fontsize relativa si possono codificare tutte in maniera da avere dei plot rapidi per poster, presentazioni, articoli.
+
+3) Estrazione dati meccanici: tutto il codice che utilizza congiuntamente dati meccanici ed ultrasonici dovrebbe stare nello stesso posto.
+
+4) PARALLELIZZAZIONE non nel singolo file ma anche nella lista delle velocita' da provare: per ogni file, il computo per le velocita' e' indipendente, quindi si puo parallelizzare invece che file per file anche velocita' per velocita' a prescindere dal file.
+
+5) SINCRONIZZAZIONE: non si puo' ignorare il fatto che non abbiamo uno sfasamento tra le onde registrate ed i record number piccati. Che fare? La soluzione attuale e' scentificamente inaccettabile, visto che a bassi campionamenti possiamo avere uno sfasamento tra dato meccanico ed ultrasonico di decimi di secondo
