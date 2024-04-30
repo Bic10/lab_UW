@@ -8,4 +8,4 @@ PROBLEMI ED INCONGRUENZE
 
 4) PARALLELIZZAZIONE non nel singolo file ma anche nella lista delle velocita' da provare: per ogni file, il computo per le velocita' e' indipendente, quindi si puo parallelizzare invece che file per file anche velocita' per velocita' a prescindere dal file.
 
-5) SINCRONIZZAZIONE: non si puo' ignorare il fatto che non abbiamo uno sfasamento tra le onde registrate ed i record number piccati. Che fare? La soluzione attuale e' scentificamente inaccettabile, visto che a bassi campionamenti possiamo avere uno sfasamento tra dato meccanico ed ultrasonico di decimi di secondo
+5) SINCRONIZZAZIONE: non si puo' ignorare il fatto che abbiamo uno sfasamento tra le onde registrate ed i record number piccati. Che fare? La soluzione attuale e' scentificamente inaccettabile, visto che a bassi campionamenti possiamo avere uno sfasamento tra dato meccanico ed ultrasonico di decimi di secondo

@@ -243,22 +243,23 @@ def uw_all_plot(data: np.ndarray, metadata: dict, step_wf_to_plot: int,
     ymax = 1.3*np.amax(data)
     ymin = 1.3*np.amin(data)
 
-    for idx,waveform in  enumerate(data):
-        plt.figure(figsize = (13,4))
+    plt.figure(figsize = (13,4))
+
+    # for idx,waveform in  enumerate(data):
         # plt.plot(time_ax_waveform, data.T, 
         #         color = 'black', linewidth = 0.8, alpha = 0.5)
-        plt.plot(time_ax_waveform, waveform, 
-                color = 'black', linewidth = 0.8, alpha = 0.5)
-        plt.plot(time_ax_waveform[highlight_start:highlight_end], waveform[highlight_start:highlight_end], color = 'red')
-        plt.xlabel('Time [$\mu s$]', fontsize = 12)
-        plt.ylabel('Amplitude [.]', fontsize = 12)
-        plt.xticks(time_ticks_waveforms)
-        plt.ylim([ymin,ymax])
-        plt.xlim(time_ax_waveform[0], xlim_plot)
-        plt.grid(alpha = 0.1)
-        plt.title("Stacked Waveforms ", fontsize = 20)
+    plt.plot(time_ax_waveform, data.T, 
+            color = 'black', linewidth = 0.8, alpha = 0.5)
+    plt.plot(time_ax_waveform[highlight_start:highlight_end], data[highlight_start:highlight_end], color = 'red')
+    plt.xlabel('Time [$\mu s$]', fontsize = 12)
+    plt.ylabel('Amplitude [.]', fontsize = 12)
+    plt.xticks(time_ticks_waveforms)
+    plt.ylim([ymin,ymax])
+    plt.xlim(time_ax_waveform[0], xlim_plot)
+    plt.grid(alpha = 0.1)
+    plt.title("Stacked Waveforms ", fontsize = 20)
 
-        output_path_choice(plot = plt, outfile_path=outfile_path+str(idx), formato=formato)
+    output_path_choice(plot = plt, outfile_path=outfile_path, formato=formato)
     
 
 def amplitude_map(data: np.ndarray, metadata: dict, amp_scale: float,
