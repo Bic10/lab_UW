@@ -440,7 +440,7 @@ import numpy as np
 import matplotlib.colors as mcolors
 
 # Define global variables for font type, fontsize, and figure size
-FONT_TYPE = "Oswald"
+FONT_TYPE = "Ubuntu"
 FONT_SIZE = 30
 FIGURE_SIZE = (16, 8)
 FORMAT = ".eps"
