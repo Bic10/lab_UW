@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-
 import numpy as np
+from numpy import linalg as LA
+
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 import matplotlib.animation as animation

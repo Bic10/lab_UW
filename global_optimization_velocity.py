@@ -11,7 +11,6 @@ from LAB_UW_forward_modeling import *
 from LAB_UW_functions import *
 import numpy as np
 from multiprocessing import Pool, cpu_count
-import cupy as cp
 
 ################################################################################################################################
 def find_mechanical_data(file_path_list, pattern):
@@ -88,7 +87,7 @@ def plot_sync_peaks(sync_data, sync_peaks, experiment_name):
 # Load the pulse waveform: it is going to be our time source function
 machine_name = "on_bench"
 experiment_name = "glued_pzt"
-data_type = "data_analysis/pulses_from_glued_pzt"
+data_type = "data_analysis/wavelets_from_glued_pzt"
 infile_path_list_pulse  = make_infile_path_list(machine_name=machine_name,experiment_name=experiment_name,data_type=data_type)
 
 pulse_list = []
@@ -131,13 +130,13 @@ if experiment_name == "s0108":
 
 if experiment_name == "s0103":
     steps_mont = [4833,8929,15166,18100,22188,23495,36297,39000,87352,89959,154601,156625,162000,165000,168705,170490,182000,184900,233364,235558,411811,462252]
-    sync_peaks = steps_carrara
+    sync_peaks = steps_mont
 ##############################################################################################################
 
 #MAKE UW PATH LIST
 infile_path_list_uw = sorted(make_infile_path_list(machine_name,experiment_name, data_type=data_type_uw))
 outdir_path_l2norm= make_data_analysis_folders(machine_name=machine_name, experiment_name=experiment_name,data_types=["global_optimization_velocity"])
-outdir_path_images = make_images_folders(machine_name, experiment_name, "global_optimization_velocity_plots")       
+outdir_path_images = make_images_folders(machine_name, experiment_name, "global_optimization_velocity_plots_testing")       
 
 for choosen_uw_file, infile_path in enumerate(infile_path_list_uw):
 
@@ -178,11 +177,11 @@ for choosen_uw_file, infile_path in enumerate(infile_path_list_uw):
     side_block_2 =2               # [cm] width of first gouge layer
     central_block = 4.8
     pzt_width = 0.1                                 # [cm] its important!
-    pmma_width = 0.1                                 # [cm] plate supporting the pzt
-    csteel = 3250 * (1e2/1e6)       # [cm/mus]   steel s-velocity
+    pla_width = 0.1                                 # [cm] plate supporting the pzt
+    csteel = 3374 * (1e2/1e6)       # [cm/mus]   steel s-velocity
     cpzt = 2000* (1e2/1e6)         # [cm/mus] s-velocity in piezo ceramic, beetween 1600 (bad coupling) and 2500 (good one). It matters!!!
                                     # according to https://www.intechopen.com/chapters/40134   
-    cpmma =  0.4*0.1392              # [cm/mus]   plate supporting the pzt
+    cpla =  0.4*0.1392              # [cm/mus]   plate supporting the pzt
 
 
     # EXTRACT LAYER THICKNESS FROM MECHANICA DATA
@@ -204,7 +203,7 @@ for choosen_uw_file, infile_path in enumerate(infile_path_list_uw):
     # S- velocity of gouge to probe. Extract from the literature!
     cmin = 600 * (1e2/1e6)        
     cmax = 2000 * (1e2/1e6) 
-    c_step = 5*1e2/1e6
+    c_step = 50*1e2/1e6
     c_gouge_list = np.arange(cmin, cmax,c_step) # choose of velocity in a reasonable range: from pressure-v in air to s-steel velocity
     # c_gouge_list = [cmax]
 
@@ -240,14 +239,14 @@ for choosen_uw_file, infile_path in enumerate(infile_path_list_uw):
         # there is a problem with synchronization: the number of waves are slightly different from the rec numbers
         # thy handling is a dute-tape, must be checked out the problem!
         sample_dimensions = [side_block_1, thickness_gouge_1_list[idx], central_block, thickness_gouge_2_list[idx], side_block_2]
-        x_receiver = sum(sample_dimensions) - 1
+        x_receiver = sum(sample_dimensions) - 1      # TO BE MODIFIED THE -1 IS THERE BECAUSE THE RECEVIER IS ONE CENTIMETER
 
         result = np.zeros(len(c_gouge_list))
         for idx_gouge, c_gouge in enumerate(c_gouge_list):
             L2norm_new = DDS_UW_simulation(t_OBS, waveform_OBS, t_pulse_list[choosen_pulse], pulse_list[choosen_pulse], idx_travel_time_list[idx], 
                             sample_dimensions, freq_cut, 
-                            x_trasmitter, x_receiver, pzt_width, pmma_width, 
-                            csteel, c_gouge, cpzt, cpmma, normalize=True, plotting=False)
+                            x_trasmitter, x_receiver, pzt_width, pla_width, 
+                            csteel, c_gouge, cpzt, cpla, normalize=True, plotting=False)
             result[idx_gouge] = L2norm_new
 
 
@@ -272,12 +271,12 @@ for choosen_uw_file, infile_path in enumerate(infile_path_list_uw):
     # Extract L2norm values
     L2norm = np.array([result[1] for result in results])
 
-    # np.save(outfile_path, L2norm, allow_pickle=True)    
+    np.save(outfile_path, L2norm, allow_pickle=True)    
 
-    plt.figure() 
-    right_v = c_gouge_list[np.argmin(L2norm, axis=1)]
-    plt.plot(right_v)
-    plt.savefig(outfile_path + "plot_velocity.jpg")
+    # plt.figure() 
+    # right_v = c_gouge_list[np.argmin(L2norm, axis=1)]
+    # plt.plot(right_v)
+    # plt.savefig(outfile_path + "plot_velocity.jpg")
 
     print("--- %s seconds for processing %s---" % (tm.time() - start_time, outfile_name))
    
