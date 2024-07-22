@@ -1,0 +1,34 @@
+rock_mechanics_project/
+├── data/
+│   ├── input/                   # Input data files
+│   └── output/                  # Output data files
+├── notebooks/                   # Jupyter notebooks
+│   ├── analisi_tensione_trasmettitore.ipynb
+│   ├── analize_l2_norm_velocity.ipynb
+│   ├── cross_correlation_and_steel_velocity.ipynb
+│   ├── Identify_wavelet.ipynb
+│   ├── mechanical_and_uw_analysis.ipynb
+│   ├── plot_mech_on_uw.ipynb
+│   ├── study_global_optimization_velocity.ipynb
+│   └── visual_inspection_standard.ipynb
+├── src/                         # Source code
+│   ├── __init__.py
+│   ├── main.py                  # Main script to run the analysis
+│   ├── forward_modeling.py      # Forward modeling functions
+│   ├── inversion.py             # Inversion procedure functions
+│   ├── io_functions.py          # Input/Output functions
+│   ├── preprocessing.py         # Preprocessing functions
+│   ├── plotting.py              # Plotting functions
+│   └── utils.py                 # Utility functions
+├── tests/                       # Unit tests
+│   ├── __init__.py
+│   ├── test_forward_modeling.py
+│   ├── test_inversion.py
+│   ├── test_io_functions.py
+│   ├── test_preprocessing.py
+│   ├── test_plotting.py
+│   └── test_utils.py
+├── __pycache__/
+├── LICENSE
+├── README.md
+└── requirements.txt             # Python dependencies
