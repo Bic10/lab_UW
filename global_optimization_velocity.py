@@ -3,15 +3,13 @@ import time as tm
 from scipy.signal import find_peaks
 import numpy as np
 import pandas as pd
-from numpy import linalg as LA
 import matplotlib.pyplot as plt
-import matplotlib.animation as animation
-import json
-from LAB_UW_forward_modeling import *
-from LAB_UW_functions import *
 import numpy as np
 from multiprocessing import Pool, cpu_count
 
+from src.file_io import *
+from src.signal_processing import *
+from src.LAB_UW_forward_modeling import *
 ################################################################################################################################
 def find_mechanical_data(file_path_list, pattern):
     """

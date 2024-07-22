@@ -1,6 +1,7 @@
-#!/usr/bin/env python3
+# src.LAB_UW_forward_modeling.py
 import numpy as np
 from numpy import linalg as LA
+import json
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
@@ -8,8 +9,7 @@ import matplotlib.animation as animation
 from matplotlib.patches import Rectangle
 import matplotlib.animation as animation
 
-from LAB_UW_functions import *
-
+from src.plotting import *
 # Define the color palette for the plots
 colors = {
     'reseda_green': '#788054',
