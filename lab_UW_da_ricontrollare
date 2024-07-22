@@ -9,3 +9,11 @@ PROBLEMI ED INCONGRUENZE
 4) PARALLELIZZAZIONE non nel singolo file ma anche nella lista delle velocita' da provare: per ogni file, il computo per le velocita' e' indipendente, quindi si puo parallelizzare invece che file per file anche velocita' per velocita' a prescindere dal file.
 
 5) SINCRONIZZAZIONE: non si puo' ignorare il fatto che abbiamo uno sfasamento tra le onde registrate ed i record number piccati. Che fare? La soluzione attuale e' scentificamente inaccettabile, visto che a bassi campionamenti possiamo avere uno sfasamento tra dato meccanico ed ultrasonico di decimi di secondo
+
+6) DATI SORGENTE: abbiamo solo quelli per le pzt S a 13 mm. In generale la scelta della source time function corretta 
+va sincronizzato ai sensori effettivamente usati nell'esperimento. Al momento e' artigianale
+
+
+IMPLEMENTARE DAO
+1) Come forzare le persone ad inserire l'esperimento nel database? Si puo aggirare l'ostacolo, scegliendo un nome del file rappresentativo ed univoco. Praticamente come si fa ora, ma vincolato e standardizzato.
+2) Si puo vincolare l'accesso ai dati utilizzando gli operatori della macchina al momento dell'esperimento!s

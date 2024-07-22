@@ -12,41 +12,6 @@ from math import ceil
 # signal_processing.py
 
 # WAVEFORMS PREPROCESSING
-def make_UW_data(infile_path: str) -> tuple[np.ndarray, dict]:
-    '''
-    Reads data from a binary file and extracts data and metadata.
-
-    Args:
-    - infile_path: Path to the input binary file.
-
-    Returns:
-    - Tuple containing data array and metadata dictionary.
-    '''
-    with open(infile_path, "rb") as infile:
-        acquisition_info, time_info = extract_metadata_from_tsv(infile, encoding='iso8859')
-
-        number_of_samples = time_info[2]
-        sampling_rate = time_info[3]
-        time_ax_waveform = np.arange(time_info[0], time_info[1], sampling_rate)
-
-        acquisition_frequency = acquisition_info[2]
-        time_ax_acquisition = np.arange(acquisition_info[0], acquisition_info[1], acquisition_frequency)
-
-        waveform_list = remove_empty_lines(infile, number_of_samples, encoding='iso8859')
-        corrected_number_of_waveforms = len(waveform_list)
-        time_ax_acquisition = time_ax_acquisition[:corrected_number_of_waveforms]
-
-        metadata = {"number_of_samples": number_of_samples,
-                    'sampling_rate': sampling_rate,
-                    "time_ax_waveform": time_ax_waveform,
-                    'number_of_waveforms': corrected_number_of_waveforms,
-                    "acquition_frequency": acquisition_frequency,
-                    'time_ax_acquisition': time_ax_acquisition}
-
-        data = np.array(waveform_list).astype(float)
-
-    return data, metadata
-
 def remove_starting_noise(data: np.ndarray, metadata: dict, remove_initial_samples: int = 0) -> tuple[np.ndarray, dict]:
     '''
     Removes initial samples from the data and updates metadata accordingly.
@@ -235,6 +200,42 @@ def select_wavelets_given_known_numbers_of_them(waveform, chunk_n=5, offset=0, t
 # file_io.py
 
 # HANDLE TSV FILES FROM EUROSCAN
+def make_UW_data(infile_path: str) -> tuple[np.ndarray, dict]:
+    '''
+    Reads data from a binary file and extracts data and metadata.
+
+    Args:
+    - infile_path: Path to the input binary file.
+
+    Returns:
+    - Tuple containing data array and metadata dictionary.
+    '''
+    with open(infile_path, "rb") as infile:
+        acquisition_info, time_info = extract_metadata_from_tsv(infile, encoding='iso8859')
+
+        number_of_samples = time_info[2]
+        sampling_rate = time_info[3]
+        time_ax_waveform = np.arange(time_info[0], time_info[1], sampling_rate)
+
+        acquisition_frequency = acquisition_info[2]
+        time_ax_acquisition = np.arange(acquisition_info[0], acquisition_info[1], acquisition_frequency)
+
+        waveform_list = remove_empty_lines(infile, number_of_samples, encoding='iso8859')
+        corrected_number_of_waveforms = len(waveform_list)
+        time_ax_acquisition = time_ax_acquisition[:corrected_number_of_waveforms]
+
+        metadata = {"number_of_samples": number_of_samples,
+                    'sampling_rate': sampling_rate,
+                    "time_ax_waveform": time_ax_waveform,
+                    'number_of_waveforms': corrected_number_of_waveforms,
+                    "acquition_frequency": acquisition_frequency,
+                    'time_ax_acquisition': time_ax_acquisition}
+
+        data = np.array(waveform_list).astype(float)
+
+    return data, metadata
+
+
 def remove_empty_lines(infile: iter, number_of_samples: int, encoding: str = 'iso8859') -> list[list[str]]:
     '''
     Removes empty lines from input file.
@@ -268,8 +269,6 @@ def extract_metadata_from_tsv(infile: iter, encoding: str = 'iso8859') -> tuple[
 
     Returns:
     - Tuple containing acquisition information and time information extracted from the TSV file.
-
-
     '''
     # encoding = 'iso8859' #just to read greek letters: there is a "mu" in the euroscan file  
 
