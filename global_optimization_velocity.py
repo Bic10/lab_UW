@@ -7,9 +7,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 from multiprocessing import Pool, cpu_count
 
-from src.file_io import *
-from src.signal_processing import *
-from src.LAB_UW_forward_modeling import *
+from file_io import *
+from signal_processing import *
+from synthetic_data import *
+from LAB_UW_forward_modeling import *
 ################################################################################################################################
 def find_mechanical_data(file_path_list, pattern):
     """
@@ -122,13 +123,13 @@ mech_data, sync_data, sync_peaks = find_sync_values(mech_data_path)
 
 ########################################################################################################
 ##### PICKED MANUALLY FOR PLOTTING POURPOSE: THEY ARE CATTED PRECISELY AROUND THE MECHANICAL DATA OF THE STEP
-if experiment_name == "s0108":
-    steps_carrara = [5582,8698,15050,17990,22000,23180,36229,39391,87940,89744,126306,128395,134000,135574,169100,172600,220980,223000,259432, 261425,266429,268647,279733,282787,331437,333778,369610,374824]
-    sync_peaks = steps_carrara 
+# if experiment_name == "s0108":
+#     steps_carrara = [5582,8698,15050,17990,22000,23180,36229,39391,87940,89744,126306,128395,134000,135574,169100,172600,220980,223000,259432, 261425,266429,268647,279733,282787,331437,333778,369610,374824]
+#     sync_peaks = steps_carrara 
 
-if experiment_name == "s0103":
-    steps_mont = [4833,8929,15166,18100,22188,23495,36297,39000,87352,89959,154601,156625,162000,165000,168705,170490,182000,184900,233364,235558,411811,462252]
-    sync_peaks = steps_mont
+# if experiment_name == "s0103":
+#     steps_mont = [4833,8929,15166,18100,22188,23495,36297,39000,87352,89959,154601,156625,162000,165000,168705,170490,182000,184900,233364,235558,411811,462252]
+#     sync_peaks = steps_mont
 ##############################################################################################################
 
 #MAKE UW PATH LIST
@@ -201,7 +202,7 @@ for choosen_uw_file, infile_path in enumerate(infile_path_list_uw):
     # S- velocity of gouge to probe. Extract from the literature!
     cmin = 600 * (1e2/1e6)        
     cmax = 2000 * (1e2/1e6) 
-    c_step = 50*1e2/1e6
+    c_step = 200*1e2/1e6
     c_gouge_list = np.arange(cmin, cmax,c_step) # choose of velocity in a reasonable range: from pressure-v in air to s-steel velocity
     # c_gouge_list = [cmax]
 
@@ -279,15 +280,6 @@ for choosen_uw_file, infile_path in enumerate(infile_path_list_uw):
     print("--- %s seconds for processing %s---" % (tm.time() - start_time, outfile_name))
    
 
-# # Capture all local variables: just to ave track of al the various parameters used in the simulation
-# variables = {name: str(value) for name, value in locals().items()}
-# outfile_variables_path = outfile_path.replace(outfile_name,"global_optimization_variables.json")
 
-# # Remove system variables and other undesired variables if needed
-# del variables['__name__']  # Example: Remove the '__name__' variable
-
-# # Save variables to a file
-# with open(outfile_variables_path, 'w') as f:
-#     json.dump(variables, f)
 
 

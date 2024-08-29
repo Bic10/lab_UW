@@ -23,45 +23,59 @@ def make_grid_1D(cmin: float, fmax: float, grid_len: float, ppt: int) -> np.ndar
 
     return x
 
-def build_velocity_model(x, sample_dimensions, x_trasmitter, x_receiver, pzt_width, pmma_width, cmax, cgouge, cpzt, cpmma, plotting=True):
-    # Unpack sample dimensions
-    side_block_1, gouge_1, central_block, gouge_2, side_block_2 = sample_dimensions
+def build_velocity_model(x: np.ndarray, sample_dimensions: tuple, x_trasmitter: float, x_receiver: float, pzt_width: float, pmma_width: float,
+                         cmax: float, cgouge: float, cpzt: float, cpmma: float, plotting: bool = True) -> np.ndarray:
+    global idx_gouge_1,idx_gouge_1,idx_grooves_side1,idx_grooves_side2, idx_grooves_central1, idx_grooves_central2, idx_pzt_1, idx_pzt_2
+    # unpack sample dimensions
+    side_block_1 = sample_dimensions[0]
+    gouge_1 = sample_dimensions[1]
+    central_block = sample_dimensions[2]
+    gouge_2 = sample_dimensions[3]
+    side_block_2 = sample_dimensions[4]
 
-    h_grove = 0.1  # [cm] grooves height
+    h_grove = 0.1                           # [cm] grooves hight
 
-    # Find the indices inside
-    idx_gouge_1 = np.where((x > side_block_1) & (x < side_block_1 + gouge_1))[0]
-    idx_gouge_2 = np.where((x > side_block_1 + gouge_1 + central_block) & (x < side_block_1 + gouge_1 + central_block + gouge_2))[0]
-    idx_grooves_side1 = np.where((x > side_block_1) & (x < side_block_1 + h_grove))[0]
-    idx_grooves_central1 = np.where((x > side_block_1 + gouge_1 - h_grove) & (x < side_block_1 + gouge_1))[0]
-    idx_grooves_central2 = np.where((x > side_block_1 + gouge_1 + central_block) & (x < side_block_1 + gouge_1 + central_block + h_grove))[0]
-    idx_grooves_side2 = np.where((x > side_block_1 + gouge_1 + central_block + gouge_2 - h_grove) & (x < side_block_1 + gouge_1 + central_block + gouge_2))[0]
-    idx_pzt_1 = np.where((x > x_trasmitter - pzt_width) & (x < x_trasmitter))[0]
-    idx_pzt_2 = np.where((x > x_receiver) & (x < x_receiver + pzt_width))[0]
-    idx_pmma_1 = np.where((x > x_trasmitter - pzt_width - pmma_width) & (x < x_trasmitter - pzt_width))[0]
-    idx_pmma_2 = np.where((x > x_receiver + pzt_width) & (x < x_receiver + pzt_width + pmma_width))[0]
-    idx_air_1 = np.where((x < x_trasmitter - pzt_width - pmma_width))[0]
-    idx_air_2 = np.where((x > x_receiver + pzt_width + pmma_width))[0]
+    # find the indeces inside
+    idx_gouge_1 =np.where((x>side_block_1) & (x<side_block_1 + gouge_1))[0]
+    idx_gouge_2 =np.where((x>side_block_1+gouge_1+central_block) & (x<side_block_1 + gouge_1+central_block+gouge_2))[0]
 
-    c = cmax * np.ones(x.shape)
+    idx_grooves_side1 = np.where((x>side_block_1) & (x<side_block_1 + h_grove))[0]
+    idx_grooves_central1 = np.where((x>side_block_1 + gouge_1 - h_grove) & (x<side_block_1 + gouge_1))[0]
+    idx_grooves_central2 = np.where((x>side_block_1 + gouge_1 + central_block) & (x<side_block_1 + gouge_1 + central_block + h_grove))[0]    
+    idx_grooves_side2 = np.where((x>side_block_1 + gouge_1 + central_block + gouge_2-h_grove) & (x<side_block_1 + gouge_1 + central_block + gouge_2))[0]
+
+    idx_pzt_1 = np.where((x>x_trasmitter-pzt_width) & (x<x_trasmitter))[0]
+    idx_pzt_2 = np.where((x>x_receiver) & (x<x_receiver + pzt_width))[0]
+
+    idx_pmma_1 = np.where((x>x_trasmitter-pzt_width-pmma_width) & (x<x_trasmitter-pzt_width))[0]
+    idx_pmma_2 = np.where((x>x_receiver+pzt_width) & (x<x_receiver + pzt_width + pmma_width))[0]
+
+    idx_air_1 = np.where((x<x_trasmitter-pzt_width-pmma_width))[0]
+    idx_air_2 = np.where((x>x_receiver+pzt_width+pmma_width))[0]
+
+    c = cmax * np.ones(x.shape)   
     c[idx_gouge_1] = cgouge
     c[idx_gouge_2] = cgouge
-    c[idx_grooves_side1] = 0.5 * (cgouge + cmax)  # grooves are triangles...
-    c[idx_grooves_central1] = 0.5 * (cgouge + cmax)
-    c[idx_grooves_central2] = 0.5 * (cgouge + cmax)
-    c[idx_grooves_side2] = 0.5 * (cgouge + cmax)
+
+    c[idx_grooves_side1] = 0.5*(cgouge + cmax)    # grooves are trinagles...
+    c[idx_grooves_central1] = 0.5*(cgouge + cmax)
+    c[idx_grooves_central2] = 0.5*(cgouge + cmax)
+    c[idx_grooves_side2] = 0.5*(cgouge + cmax)
+
     c[idx_pmma_1] = cpmma
     c[idx_pmma_2] = cpmma
+
     c[idx_pzt_1] = cpzt
     c[idx_pzt_2] = cpzt
+
     c[idx_air_1] = 0
     c[idx_air_2] = 0
 
     if plotting:
         plt.figure()
-        plt.plot(x, c)
+        plt.plot(x,c)
         plt.close()
-    return c, idx_gouge_1, idx_gouge_2, idx_pzt_1, idx_pzt_2
+    return c
 
 def synthetic_source_time_function(t: np.ndarray) -> np.ndarray:
     '''

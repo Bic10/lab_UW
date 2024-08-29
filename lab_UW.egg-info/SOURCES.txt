@@ -1,0 +1,7 @@
+LICENSE
+README.md
+setup.py
+lab_UW.egg-info/PKG-INFO
+lab_UW.egg-info/SOURCES.txt
+lab_UW.egg-info/dependency_links.txt
+lab_UW.egg-info/top_level.txt

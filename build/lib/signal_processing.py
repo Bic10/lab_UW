@@ -2,7 +2,7 @@
 
 import numpy as np
 from math import ceil
-from plotting import *
+from src.plotting import *
 
 # WAVEFORMS PREPROCESSING
 def remove_starting_noise(data: np.ndarray, metadata: dict, remove_initial_samples: int = 0) -> tuple[np.ndarray, dict]:
@@ -86,9 +86,10 @@ def signal2noise_separation_lowpass(waveform_data: np.ndarray, metadata: dict, f
     if wave_num == 1:
         filtered_amp_and_phase_spectrum_plot(signal_freqs, amp_spectrum, phase_spectrum,
                                                filtered_amp_spectrum, lowpass_filter, sampling_rate, 
-                                               outfile_path=outfile_path)
+                                               outfile_path=outfile_path, format=format)
     else:
-        amplitude_spectrum_map(signal_freqs, filtered_amp_spectrum[:, :winlen], metadata, outfile_path=outfile_path)
+        amplitude_spectrum_map(signal_freqs, filtered_amp_spectrum[:, :winlen], metadata, outfile_path=outfile_path,
+                                format=format)
 
     return filtered_signal, noise_reconstructed
 
