@@ -1,6 +1,7 @@
 # src/synthetic_data.py
 import numpy as np
 import matplotlib.pyplot as plt
+from typing import Union, Tuple
 
 def make_grid_1D(cmin: float, fmax: float, grid_len: float, ppt: int) -> np.ndarray:
     '''
@@ -23,11 +24,67 @@ def make_grid_1D(cmin: float, fmax: float, grid_len: float, ppt: int) -> np.ndar
 
     return x
 
-def build_velocity_model(x, sample_dimensions, x_trasmitter, x_receiver, pzt_width, pmma_width, cmax, cgouge, cpzt, cpmma, plotting=True):
+def build_velocity_model(
+    x: np.ndarray,
+    sample_dimensions: Tuple[float, float, float, float, float],
+    x_trasmitter: float,
+    x_receiver: float,
+    pzt_width: float,
+    pmma_width: float,
+    csteel: float,
+    c_gouge: float,
+    c_pzt: float,
+    c_pmma: float,
+    plotting: bool = True
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Build a 1D velocity model for a given sample configuration.
+
+    This function constructs a 1D velocity profile based on the given sample dimensions,
+    transmitter and receiver positions, and material properties. It assigns different
+    velocities to different regions of the sample based on the materials present.
+
+    Parameters:
+    ----------
+    x : np.ndarray
+        The array representing the spatial coordinates (in cm) along the length of the sample.
+    sample_dimensions : Tuple[float, float, float, float, float]
+        A tuple containing the dimensions of different regions of the sample in cm:
+        (side_block_1, gouge_1, central_block, gouge_2, side_block_2).
+    x_trasmitter : float
+        The position of the transmitter (in cm).
+    x_receiver : float
+        The position of the receiver (in cm).
+    pzt_width : float
+        The width of the piezoelectric transducers (in cm).
+    pmma_width : float
+        The width of the PMMA (polymethyl methacrylate) layers (in cm).
+    csteel : float
+        The velocity (in cm/s) of the steel blocks, assumed as the same for each block.
+    c_gouge : Union[float, np.ndarray]
+        The velocity (in cm/s) in the gouge regions. Can be a single float or a numpy array.
+    c_pzt : float
+        The velocity (in cm/s) in the piezoelectric transducer (PZT) regions.
+    c_pmma : float
+        The velocity (in cm/s) in the PMMA regions.
+    plotting : bool, optional
+        Whether to plot the velocity model (default is True).
+
+    Returns:
+    -------
+    Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+        A tuple containing:
+        - c: np.ndarray - The velocity model array with assigned velocities.
+        - idx_gouge_1: np.ndarray - Indices corresponding to the first gouge region.
+        - idx_gouge_2: np.ndarray - Indices corresponding to the second gouge region.
+        - idx_pzt_1: np.ndarray - Indices corresponding to the first PZT region.
+        - idx_pzt_2: np.ndarray - Indices corresponding to the second PZT region.
+    """
+    
     # Unpack sample dimensions
     side_block_1, gouge_1, central_block, gouge_2, side_block_2 = sample_dimensions
 
-    h_grove = 0.1  # [cm] grooves height
+    h_grove = 0.1  # [cm] grooves height. THIS TOO MUST BECOME AN INPUT, AS SOON AS WE HAVE A DATABASE THAT DESCRIBE THE GEOMETRY OF THE BLOCKS TOO
 
     # Find the indices inside
     idx_gouge_1 = np.where((x > side_block_1) & (x < side_block_1 + gouge_1))[0]
@@ -43,17 +100,21 @@ def build_velocity_model(x, sample_dimensions, x_trasmitter, x_receiver, pzt_wid
     idx_air_1 = np.where((x < x_trasmitter - pzt_width - pmma_width))[0]
     idx_air_2 = np.where((x > x_receiver + pzt_width + pmma_width))[0]
 
-    c = cmax * np.ones(x.shape)
-    c[idx_gouge_1] = cgouge
-    c[idx_gouge_2] = cgouge
-    c[idx_grooves_side1] = 0.5 * (cgouge + cmax)  # grooves are triangles...
-    c[idx_grooves_central1] = 0.5 * (cgouge + cmax)
-    c[idx_grooves_central2] = 0.5 * (cgouge + cmax)
-    c[idx_grooves_side2] = 0.5 * (cgouge + cmax)
-    c[idx_pmma_1] = cpmma
-    c[idx_pmma_2] = cpmma
-    c[idx_pzt_1] = cpzt
-    c[idx_pzt_2] = cpzt
+    c = csteel * np.ones(x.shape)
+
+#   Build homogeneus model
+    c[idx_gouge_1] = c_gouge
+    c[idx_gouge_2] = c_gouge
+    c[idx_grooves_side1] = 0.5 * (c_gouge + csteel)  # grooves are approximately rectangular triangles...
+    c[idx_grooves_central1] = 0.5 * (c_gouge + csteel)
+    c[idx_grooves_central2] = 0.5 * (c_gouge + csteel)
+    c[idx_grooves_side2] = 0.5 * (c_gouge + csteel)
+
+#   This part regard the piezoelectric sensors
+    c[idx_pmma_1] = c_pmma
+    c[idx_pmma_2] = c_pmma
+    c[idx_pzt_1] = c_pzt
+    c[idx_pzt_2] = c_pzt
     c[idx_air_1] = 0
     c[idx_air_2] = 0
 

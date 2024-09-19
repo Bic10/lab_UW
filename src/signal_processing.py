@@ -83,12 +83,12 @@ def signal2noise_separation_lowpass(waveform_data: np.ndarray, metadata: dict, f
     noise_fourier = noise_spectrum * np.exp(1j * phase_spectrum)
     noise_reconstructed = np.fft.ifft(noise_fourier).real
 
-    if wave_num == 1:
-        filtered_amp_and_phase_spectrum_plot(signal_freqs, amp_spectrum, phase_spectrum,
-                                               filtered_amp_spectrum, lowpass_filter, sampling_rate, 
-                                               outfile_path=outfile_path)
-    else:
-        amplitude_spectrum_map(signal_freqs, filtered_amp_spectrum[:, :winlen], metadata, outfile_path=outfile_path)
+    # if wave_num == 1:
+    #     filtered_amp_and_phase_spectrum_plot(signal_freqs, amp_spectrum, phase_spectrum,
+    #                                            filtered_amp_spectrum, lowpass_filter, sampling_rate, 
+    #                                            outfile_path=outfile_path)
+    # else:
+    #     amplitude_spectrum_map(signal_freqs, filtered_amp_spectrum[:, :winlen], metadata, outfile_path=outfile_path)
 
     return filtered_signal, noise_reconstructed
 
@@ -186,5 +186,4 @@ def select_wavelets_given_known_numbers_of_them(waveform, chunk_n=5, offset=0, t
         index_min_after_list.append(index_min_after)
 
     return index_max_list, index_min_before_list, index_min_after_list
-
 
