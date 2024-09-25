@@ -171,39 +171,6 @@ def synthetic_source_spatial_function(x: np.ndarray, isx: int, sigma: float, plo
         plt.plot(x,src_x)
     return src_x
 
-def compute_max_and_min_travel_time(side_block_1, x_transmitter, c_steel, gouge_1, c_min, c_max, central_block):
-    """
-    # TO MODIFY INCLUDING X_RECEIVER COORDINATES and DIFFERENCE IN LAYER THICKNESS BETWEEN BLOCKS
-    Compute the maximum and minimum travel times for a signal transmitted through the sample assembly (DDS).
-
-    Parameters:
-        side_block_1 (float): Thickness of the side blocks used in the DDS configuration in [cm]
-        x_transmitter (float): thickness of the trasnmitter PZT [cm]
-        c_steel (float): Speed of wave propagation in steel (units: distance per time).
-        gouge_1 (float): The thickness of the gouge layer.
-        c_min (float): Minimum speed of signal propagation in the gouge layer.
-        c_max (float): Maximum speed of signal propagation in the gouge layer.
-        central_block (float): The thickness of the central block.
-
-    Returns:
-        tuple: A tuple containing the maximum and minimum travel times.
-
-    The function computes the maximum and minimum travel times for a signal transmitted through
-    a DDS configurations (2 side blocks, 1 central block, 2 gouge layers), where the signal
-    travels from a transmitter located within the side block to a receiver located in the other.
-    The travel times are calculated based on the given parameters such as
-    distances, material properties, and signal propagation speeds.
-
-    The maximum travel time is calculated considering the minimum speed of propagation in the gouge layer,
-    while the minimum travel time is calculated considering the maximum speed of propagation in the gouge layer.
-    """
-
-    # Compute the maximum travel time
-    max_travel_time = 2 * (side_block_1 - x_transmitter) / c_steel + 2 * gouge_1 / c_min + central_block / c_steel
-    # Compute the minimum travel time
-    min_travel_time = 2 * (side_block_1 - x_transmitter) / c_steel + 2 * gouge_1 / c_max + central_block / c_steel
-
-    return max_travel_time, min_travel_time
 
 # functions for testing
 
