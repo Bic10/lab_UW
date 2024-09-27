@@ -3,7 +3,6 @@ import time as tm
 from scipy.signal import find_peaks
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 from multiprocessing import Pool, cpu_count
 import pickle
 
@@ -95,19 +94,19 @@ infile_path_list_mech = make_infile_path_list(machine_name, experiment_name, dat
 mech_data_path = find_mechanical_data(infile_path_list_mech, sync_file_pattern)
 mech_data, sync_data, sync_peaks = find_sync_values(mech_data_path)
 
-# Manually picked sync peaks for plotting purposes
-if experiment_name == "s0108":
-    steps_carrara = [5582, 8698, 15050, 17990, 22000, 23180, 36229, 39391, 87940, 89744,
-                     126306, 128395, 134000, 135574, 169100, 172600, 220980, 223000,
-                     259432, 261425, 266429, 268647, 279733, 282787, 331437, 333778,
-                     369610, 374824]
-    sync_peaks = steps_carrara
+# # Manually picked sync peaks for plotting purposes
+# if experiment_name == "s0108":
+#     steps_carrara = [5582, 8698, 15050, 17990, 22000, 23180, 36229, 39391, 87940, 89744,
+#                      126306, 128395, 134000, 135574, 169100, 172600, 220980, 223000,
+#                      259432, 261425, 266429, 268647, 279733, 282787, 331437, 333778,
+#                      369610, 374824]
+#     sync_peaks = steps_carrara
 
-elif experiment_name == "s0103":
-    steps_mont = [4833, 8929, 15166, 18100, 22188, 23495, 36297, 39000, 87352, 89959,
-                  154601, 156625, 162000, 165000, 168705, 170490, 182000, 184900,
-                  233364, 235558, 411811, 462252]
-    sync_peaks = steps_mont
+# elif experiment_name == "s0103":
+#     steps_mont = [4833, 8929, 15166, 18100, 22188, 23495, 36297, 39000, 87352, 89959,
+#                   154601, 156625, 162000, 165000, 168705, 170490, 182000, 184900,
+#                   233364, 235558, 411811, 462252]
+#     sync_peaks = steps_mont
 
 # MAKE UW PATH LIST (Only once)
 infile_path_list_uw = sorted(make_infile_path_list(machine_name, experiment_name, data_type=data_type_uw))
@@ -144,7 +143,7 @@ for choosen_uw_file, infile_path in enumerate(infile_path_list_uw):
     data_OBS, _ = signal2noise_separation_lowpass(data_OBS, metadata, freq_cut=freq_cut)
 
     # DOWNSAMPLING THE WAVEFORMS
-    number_of_waveforms_wanted = 20
+    number_of_waveforms_wanted = 100
     data_OBS = data_OBS[:sync_peaks[2 * choosen_uw_file + 1] - sync_peaks[2 * choosen_uw_file]]  # Subsampling around the step
     metadata['number_of_waveforms'] = len(data_OBS)
     downsampling = max(1, round(metadata['number_of_waveforms'] / number_of_waveforms_wanted))

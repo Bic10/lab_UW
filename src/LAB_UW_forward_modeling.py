@@ -87,39 +87,116 @@ def DDS_UW_simulation(t_OBS: np.ndarray, waveform_OBS: np.ndarray, t_pulse: np.n
         plt.show()
     return waveform_SYNT
 
-def pseudospectral_1D_forward(nx: int, dx: float, nt: int, dt: float, src_x: np.ndarray, src_t: np.ndarray, c_model: np.ndarray) -> np.ndarray:
+def pseudospectral_1D_forward(
+                            num_x: int,
+                            delta_x: float,
+                            num_t: int,
+                            delta_t: float,
+                            source_spatial: np.ndarray,
+                            source_time: np.ndarray,
+                            velocity_model: np.ndarray
+                        ) -> np.ndarray:
     '''
     Perform pseudospectral forward modeling for 1D wave propagation.
 
     Args:
-        nx (int): Number of spatial grid points.
-        dx (float): Grid spacing.
-        nt (int): Number of time steps.
-        dt (float): Time step.
-        src_x (np.ndarray): Spatial source function.
-        src_t (np.ndarray): Time source function.
-        c_model (np.ndarray): Velocity model.
+        num_x (int): Number of spatial grid points.
+        delta_x (float): Grid spacing.
+        num_t (int): Number of time steps.
+        delta_t (float): Time step.
+        source_spatial (np.ndarray): Spatial source function.
+        source_time (np.ndarray): Time source function.
+        velocity_model (np.ndarray): Velocity model.
 
     Returns:
-        np.ndarray: Synthetic wavefield.
+        np.ndarray: Synthetic wavefield of shape (num_t, num_x).
     '''
-    sp = np.zeros(nx)
-    spnew = sp
-    spold = sp
-    sp_field = np.zeros((nt, nx))
-    scaling_factor = 1
+    # Initialize wavefield arrays
+    wavefield_current = np.zeros(num_x)
+    wavefield_past = np.zeros(num_x)
+    wavefield_future = np.zeros(num_x)
+    wavefield = np.zeros((num_t, num_x))
 
-    for it in range(nt):
-        sd2p = fourier_derivative_2nd(sp, dx)
-        spnew = 2 * sp - spold + c_model ** 2 * dt ** 2 * sd2p
-        spnew = spnew + src_x * src_t[it] * dt ** 2
-        spnew = scaling_factor * spnew
-        spold, sp = scaling_factor * sp, spnew
-        sp[1] = 0
-        sp[nx - 1] = 0
-        sp_field[it, :] = sp
+    # Time-stepping loop
+    for it in range(num_t):
+        # Second spatial derivative using Fourier method
+        second_derivative = fourier_derivative_2nd(wavefield_current, delta_x)
 
-    return sp_field
+        # Update wavefield using the finite difference time stepping
+        wavefield_future = (
+            2 * wavefield_current - wavefield_past
+            + (velocity_model ** 2) * (delta_t ** 2) * second_derivative
+            + source_spatial * source_time[it] * (delta_t ** 2)
+        )
+
+        # Update past and current wavefields for next iteration
+        wavefield_past = wavefield_current.copy()
+        wavefield_current = wavefield_future.copy()
+
+        # Apply boundary conditions (e.g., absorbing boundaries)
+        wavefield_current[0] = 0
+        wavefield_current[-1] = 0
+
+        # Store wavefield at current time step
+        wavefield[it, :] = wavefield_current
+
+    return wavefield
+
+def pseudospectral_1D_adjoint(
+                            num_x: int,
+                            delta_x: float,
+                            num_t: int,
+                            delta_t: float,
+                            adjoint_source_spatial: np.ndarray,
+                            adjoint_source_time: np.ndarray,
+                            velocity_model: np.ndarray
+                        ) -> np.ndarray:
+    '''
+    Perform pseudospectral adjoint modeling for 1D wave propagation.
+
+    Args:
+        num_x (int): Number of spatial grid points.
+        delta_x (float): Grid spacing.
+        num_t (int): Number of time steps.
+        delta_t (float): Time step.
+        adjoint_source_spatial (np.ndarray): Spatial adjoint source function.
+        adjoint_source_time (np.ndarray): Time adjoint source function (reversed residuals).
+        velocity_model (np.ndarray): Velocity model.
+
+    Returns:
+        np.ndarray: Adjoint wavefield of shape (num_t, num_x).
+    '''
+    # Initialize wavefield arrays
+    wavefield_current = np.zeros(num_x)
+    wavefield_future = np.zeros(num_x)
+    wavefield_past = np.zeros(num_x)
+    adjoint_wavefield = np.zeros((num_t, num_x))
+
+    # Time-stepping loop (backward in time)
+    for it in range(num_t):
+        # Second spatial derivative using Fourier method
+        second_derivative = fourier_derivative_2nd(wavefield_current, delta_x)
+
+        # Update wavefield using the finite difference time stepping
+        wavefield_future = (
+            2 * wavefield_current - wavefield_past
+            + (velocity_model ** 2) * (delta_t ** 2) * second_derivative
+            + adjoint_source_spatial * adjoint_source_time[it] * (delta_t ** 2)
+        )
+
+        # Update past and current wavefields for next iteration
+        wavefield_past = wavefield_current.copy()
+        wavefield_current = wavefield_future.copy()
+
+        # Apply boundary conditions (e.g., absorbing boundaries)
+        wavefield_current[0] = 0
+        wavefield_current[-1] = 0
+
+        # Store adjoint wavefield at current time step
+        adjoint_wavefield[it, :] = wavefield_current
+
+    return adjoint_wavefield[::-1, :]  # Reverse time axis to match forward modeling
+
 
 def compute_grid(sample_dimensions, c_gouge, freq_cut, ppt_for_minimum_len=10):
     """
@@ -141,23 +218,37 @@ def compute_grid(sample_dimensions, c_gouge, freq_cut, ppt_for_minimum_len=10):
     nx = len(x)
     return x, dx, nx
 
-def prepare_time_variables(t_OBS, dx, c_max, eps = 0.5):
+def prepare_time_variables(t_OBS, dx, c_max, eps=0.6):
     """
     Prepare the time variables for the simulation based on the grid and maximum velocity.
-    This implementation try to roughly respect CFL stability criterium for 1D simulation
+    The time step is the highest possible submultiple of the data sampling rate, 
+    respecting the CFL stability criterion for 1D simulation.
 
     Args:
         t_OBS (np.ndarray): Time axis of observed waveform.
         dx (float): Grid spacing.
         c_max (float): Maximum velocity.
+        eps (float, optional): CFL safety factor. Defaults to 0.5.
 
     Returns:
-        tuple: A tuple containing the time axis (t), time step (dt), and number of time steps (nt).
+        tuple: A tuple containing the time axis for the simulation (t), 
+               the time step (dt), and the number of time steps (nt).
     """
-    dt = eps * dx / c_max
+    # Calculate the raw time step based on CFL condition
+    dt_raw = eps * dx / c_max
+
+    # Extract the data sampling rate from t_OBS
+    dt_obs = t_OBS[1] - t_OBS[0]
+
+    # Find the highest submultiple of dt_obs that is smaller than dt_raw
+    dt = dt_obs / np.ceil(dt_obs / dt_raw)
+
+    # Create the time axis for the simulation
     t = np.arange(0, t_OBS[-1], dt)
     nt = len(t)
+
     return t, dt, nt
+
 
 def interpolate_source(t_pulse, pulse, dt):
     """
