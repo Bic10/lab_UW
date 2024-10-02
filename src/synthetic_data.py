@@ -1,4 +1,5 @@
 # src/synthetic_data.py
+
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import Union, Tuple
@@ -11,30 +12,30 @@ def make_grid_1D(cmin: float, fmax: float, grid_len: float, ppt: int) -> np.ndar
         cmin (float): Minimum velocity.
         fmax (float): Maximum frequency.
         grid_len (float): Length of the grid.
-        ppt (int): Points for the shortest wavelength.
+        ppt (int): Points per the shortest wavelength.
 
     Returns:
         np.ndarray: 1D grid.
     '''
-    lambda_min =  cmin/(fmax)               # [cm] minimum wavelength of the simulation
-    dx = (lambda_min/ppt)                   # dx spacing x axes
-    x  = np.arange(0,grid_len,dx)           # [cm] space coordinates
-    if len(x)%2:                                    
-        x = np.append(x,grid_len+dx)
+    lambda_min = cmin / fmax               # [cm] minimum wavelength of the simulation
+    dx = lambda_min / ppt                  # dx spacing x axes
+    x = np.arange(0, grid_len, dx)         # [cm] space coordinates
+    if len(x) % 2:
+        x = np.append(x, grid_len + dx)
 
     return x
 
 def build_velocity_model(
     x: np.ndarray,
     sample_dimensions: Tuple[float, float, float, float, float],
-    x_trasmitter: float,
+    x_transmitter: float,
     x_receiver: float,
-    pzt_width: float,
-    pmma_width: float,
-    csteel: float,
-    c_gouge: float,
-    c_pzt: float,
-    c_pmma: float,
+    pzt_layer_width: float,
+    pmma_layer_width: float,
+    steel_velocity: float,
+    gouge_velocity: Union[float, np.ndarray],
+    pzt_velocity: float,
+    pmma_velocity: float,
     plotting: bool = True
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
@@ -51,22 +52,22 @@ def build_velocity_model(
     sample_dimensions : Tuple[float, float, float, float, float]
         A tuple containing the dimensions of different regions of the sample in cm:
         (side_block_1, gouge_1, central_block, gouge_2, side_block_2).
-    x_trasmitter : float
+    x_transmitter : float
         The position of the transmitter (in cm).
     x_receiver : float
         The position of the receiver (in cm).
-    pzt_width : float
+    pzt_layer_width : float
         The width of the piezoelectric transducers (in cm).
-    pmma_width : float
-        The width of the PMMA (polymethyl methacrylate) layers (in cm).
-    csteel : float
-        The velocity (in cm/s) of the steel blocks, assumed as the same for each block.
-    c_gouge : Union[float, np.ndarray]
-        The velocity (in cm/s) in the gouge regions. Can be a single float or a numpy array.
-    c_pzt : float
-        The velocity (in cm/s) in the piezoelectric transducer (PZT) regions.
-    c_pmma : float
-        The velocity (in cm/s) in the PMMA regions.
+    pmma_layer_width : float
+        The width of the PMMA layers (in cm).
+    steel_velocity : float
+        The velocity (in cm/μs) of the steel blocks, assumed to be the same for each block.
+    gouge_velocity : Union[float, np.ndarray]
+        The velocity (in cm/μs) in the gouge regions. Can be a single float or a numpy array.
+    pzt_velocity : float
+        The velocity (in cm/μs) in the piezoelectric transducer (PZT) regions.
+    pmma_velocity : float
+        The velocity (in cm/μs) in the PMMA regions.
     plotting : bool, optional
         Whether to plot the velocity model (default is True).
 
@@ -80,48 +81,63 @@ def build_velocity_model(
         - idx_pzt_1: np.ndarray - Indices corresponding to the first PZT region.
         - idx_pzt_2: np.ndarray - Indices corresponding to the second PZT region.
     """
-    
+
     # Unpack sample dimensions
     side_block_1, gouge_1, central_block, gouge_2, side_block_2 = sample_dimensions
 
-    h_grove = 0.1  # [cm] grooves height. THIS TOO MUST BECOME AN INPUT, AS SOON AS WE HAVE A DATABASE THAT DESCRIBE THE GEOMETRY OF THE BLOCKS TOO
+    h_groove = 0.1  # [cm] Groove height (should be parameterized when data is available)
 
-    # Find the indices inside
+    # Identify indices for different regions
     idx_gouge_1 = np.where((x > side_block_1) & (x < side_block_1 + gouge_1))[0]
-    idx_gouge_2 = np.where((x > side_block_1 + gouge_1 + central_block) & (x < side_block_1 + gouge_1 + central_block + gouge_2))[0]
-    idx_grooves_side1 = np.where((x > side_block_1) & (x < side_block_1 + h_grove))[0]
-    idx_grooves_central1 = np.where((x > side_block_1 + gouge_1 - h_grove) & (x < side_block_1 + gouge_1))[0]
-    idx_grooves_central2 = np.where((x > side_block_1 + gouge_1 + central_block) & (x < side_block_1 + gouge_1 + central_block + h_grove))[0]
-    idx_grooves_side2 = np.where((x > side_block_1 + gouge_1 + central_block + gouge_2 - h_grove) & (x < side_block_1 + gouge_1 + central_block + gouge_2))[0]
-    idx_pzt_1 = np.where((x > x_trasmitter - pzt_width) & (x < x_trasmitter))[0]
-    idx_pzt_2 = np.where((x > x_receiver) & (x < x_receiver + pzt_width))[0]
-    idx_pmma_1 = np.where((x > x_trasmitter - pzt_width - pmma_width) & (x < x_trasmitter - pzt_width))[0]
-    idx_pmma_2 = np.where((x > x_receiver + pzt_width) & (x < x_receiver + pzt_width + pmma_width))[0]
-    idx_air_1 = np.where((x < x_trasmitter - pzt_width - pmma_width))[0]
-    idx_air_2 = np.where((x > x_receiver + pzt_width + pmma_width))[0]
+    idx_gouge_2 = np.where(
+        (x > side_block_1 + gouge_1 + central_block) & (x < side_block_1 + gouge_1 + central_block + gouge_2)
+    )[0]
+    idx_grooves_side1 = np.where((x > side_block_1) & (x < side_block_1 + h_groove))[0]
+    idx_grooves_central1 = np.where((x > side_block_1 + gouge_1 - h_groove) & (x < side_block_1 + gouge_1))[0]
+    idx_grooves_central2 = np.where(
+        (x > side_block_1 + gouge_1 + central_block) & (x < side_block_1 + gouge_1 + central_block + h_groove)
+    )[0]
+    idx_grooves_side2 = np.where(
+        (x > side_block_1 + gouge_1 + central_block + gouge_2 - h_groove) & (x < side_block_1 + gouge_1 + central_block + gouge_2)
+    )[0]
+    idx_pzt_1 = np.where((x > x_transmitter - pzt_layer_width) & (x < x_transmitter))[0]
+    idx_pzt_2 = np.where((x > x_receiver) & (x < x_receiver + pzt_layer_width))[0]
+    idx_pmma_1 = np.where(
+        (x > x_transmitter - pzt_layer_width - pmma_layer_width) & (x < x_transmitter - pzt_layer_width)
+    )[0]
+    idx_pmma_2 = np.where(
+        (x > x_receiver + pzt_layer_width) & (x < x_receiver + pzt_layer_width + pmma_layer_width)
+    )[0]
+    idx_air_1 = np.where((x < x_transmitter - pzt_layer_width - pmma_layer_width))[0]
+    idx_air_2 = np.where((x > x_receiver + pzt_layer_width + pmma_layer_width))[0]
 
-    c = csteel * np.ones(x.shape)
+    # Initialize velocity model
+    c = steel_velocity * np.ones(x.shape)
 
-#   Build homogeneus model
-    c[idx_gouge_1] = c_gouge
-    c[idx_gouge_2] = c_gouge
-    c[idx_grooves_side1] = 0.5 * (c_gouge + csteel)  # grooves are approximately rectangular triangles...
-    c[idx_grooves_central1] = 0.5 * (c_gouge + csteel)
-    c[idx_grooves_central2] = 0.5 * (c_gouge + csteel)
-    c[idx_grooves_side2] = 0.5 * (c_gouge + csteel)
+    # Assign velocities to different regions
+    c[idx_gouge_1] = gouge_velocity
+    c[idx_gouge_2] = gouge_velocity
+    c[idx_grooves_side1] = 0.5 * (gouge_velocity + steel_velocity)
+    c[idx_grooves_central1] = 0.5 * (gouge_velocity + steel_velocity)
+    c[idx_grooves_central2] = 0.5 * (gouge_velocity + steel_velocity)
+    c[idx_grooves_side2] = 0.5 * (gouge_velocity + steel_velocity)
 
-#   This part regard the piezoelectric sensors
-    c[idx_pmma_1] = c_pmma
-    c[idx_pmma_2] = c_pmma
-    c[idx_pzt_1] = c_pzt
-    c[idx_pzt_2] = c_pzt
+    # Assign velocities to PZT and PMMA layers
+    c[idx_pmma_1] = pmma_velocity
+    c[idx_pmma_2] = pmma_velocity
+    c[idx_pzt_1] = pzt_velocity
+    c[idx_pzt_2] = pzt_velocity
     c[idx_air_1] = 0
     c[idx_air_2] = 0
 
     if plotting:
         plt.figure()
         plt.plot(x, c)
-        plt.close()
+        plt.title("Velocity Model")
+        plt.xlabel("Position (cm)")
+        plt.ylabel("Velocity (cm/μs)")
+        plt.show()
+
     return c, idx_gouge_1, idx_gouge_2, idx_pzt_1, idx_pzt_2
 
 def synthetic_source_time_function(t: np.ndarray) -> np.ndarray:
@@ -140,43 +156,58 @@ def synthetic_source_time_function(t: np.ndarray) -> np.ndarray:
 
     frequency = 12
     amplitude = 2
-    sin_signal = amplitude*np.sin(2 * np.pi * frequency * t[:winlen])
+    sin_signal = amplitude * np.sin(2 * np.pi * frequency * t[:winlen])
 
-    mask =  mask * sin_signal
+    mask = mask * sin_signal
     mask = np.diff(mask)
 
-    src = np.zeros(len(t)) 
+    src = np.zeros(len(t))
     src[0:np.size(mask)] = mask
 
-    return (src)
+    return src
 
-def synthetic_source_spatial_function(x: np.ndarray, isx: int, sigma: float, plotting: bool = True) -> np.ndarray:
+def synthetic_source_spatial_function(
+    x: np.ndarray,
+    source_index: int,
+    sigma: float,
+    plotting: bool = True
+) -> np.ndarray:
     '''
     Generate a synthetic spatial function.
 
     Args:
         x (np.ndarray): Spatial axis.
-        isx (int): Index of the source.
+        source_index (int): Index of the source.
         sigma (float): Sigma parameter for Gaussian.
         plotting (bool, optional): Whether to plot the spatial function. Defaults to True.
 
     Returns:
         np.ndarray: Synthetic spatial function.
     '''
-    dx = x[1]-x[0]
-    x0 = x[isx-1]
-    src_x = np.exp(-1/sigma**2 *(x - x0)**2); src_x = src_x/np.amax(src_x)
+    dx = x[1] - x[0]
+    x0 = x[source_index - 1]
+    src_x = np.exp(-1 / sigma ** 2 * (x - x0) ** 2)
+    src_x = src_x / np.amax(src_x)
     if plotting:
-        fig = plt.figure()
-        plt.plot(x,src_x)
+        plt.figure()
+        plt.plot(x, src_x)
+        plt.title("Synthetic Spatial Function")
+        plt.xlabel("Position (cm)")
+        plt.ylabel("Amplitude")
+        plt.show()
     return src_x
 
+# Functions for testing
 
-# functions for testing
-
-def synthetic_wavelets_in_noise(nsamples: int = 1000, noise_amplitude: float = 0.5, winlen: int = 100,
-                                 square_start: int = 400, amp_square: float = 5, frequency: int = 4,
-                                 amplitude: int = 1) -> np.ndarray:
+def synthetic_wavelets_in_noise(
+    nsamples: int = 1000,
+    noise_amplitude: float = 0.5,
+    winlen: int = 100,
+    square_start: int = 400,
+    amp_square: float = 5,
+    frequency: int = 4,
+    amplitude: int = 1
+) -> np.ndarray:
     """
     Generate synthetic wavelets in noise.
 

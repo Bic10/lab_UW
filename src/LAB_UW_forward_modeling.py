@@ -3,101 +3,156 @@
 import numpy as np
 from numpy import linalg as LA
 from plotting import plot_simulation_waveform
+from typing import Union
+from scipy.signal.windows import kaiser
+
 from helpers import *
 from synthetic_data import *
 
-from typing import Union
 
-def DDS_UW_simulation(t_OBS: np.ndarray, waveform_OBS: np.ndarray, t_pulse: np.ndarray, pulse: np.ndarray, interval: slice,
-                      sample_dimensions: tuple, freq_cut: float, x_transmitter: float, x_receiver: float, pzt_width: float, pmma_width: float,
-                      c_max: float, c_gouge: Union[float, np.ndarray], c_pzt: float, c_pmma: float, normalize: bool = True, plotting: bool = False) -> float:
-    '''
-    Simulate ultrasonic wave propagation through a sample and compute the L2 norm between observed and synthetic waveforms.
+def DDS_UW_simulation(
+    observed_time: np.ndarray,
+    observed_waveform: np.ndarray,
+    pulse_time: np.ndarray,
+    pulse_waveform: np.ndarray,
+    misfit_interval: slice,
+    sample_dimensions: tuple,
+    frequency_cutoff: float,
+    transmitter_position: float,
+    receiver_position: float,
+    pzt_layer_width: float,
+    pmma_layer_width: float,
+    steel_velocity: float,
+    gouge_velocity: Union[float, np.ndarray],
+    pzt_velocity: float,
+    pmma_velocity: float,
+    normalize_waveform: bool = True,
+    enable_plotting: bool = False
+) -> np.ndarray:
+    """
+    Simulate ultrasonic wave propagation through a sample and compute the synthetic waveform.
 
     Args:
-        t_OBS (np.ndarray): Time axis of observed waveform.
-        waveform_OBS (np.ndarray): Observed waveform.
-        t_pulse (np.ndarray): Time axis of the pulse.
-        pulse (np.ndarray): Pulse waveform.
-        interval (slice): Interval for L2 norm computation.
-        sample_dimensions (tuple): Dimensions of the sample (side_block_1, gouge_1, central_block, gouge_2, side_block_2).
-        freq_cut (float): Maximum frequency cut-off.
-        x_trasmitter (float): Transmitter location.
-        x_receiver (float): Receiver location.
-        pzt_width (float): Width of the piezoelectric transducer.
-        pmma_width (float): Width of the PMMA layer.
-        c_max (float): Maximum velocity.
-        c_gouge (float): Velocity in the gouge layer.
-        c_pzt (float): Velocity in the piezoelectric transducer.
-        c_pmma (float): Velocity in the PMMA layer.
-        normalize (bool, optional): Whether to normalize the synthetic waveform. Defaults to True.
-        plotting (bool, optional): Whether to plot the synthetic waveform. Defaults to False.
+        observed_time (np.ndarray): Time axis of the observed waveform.
+        observed_waveform (np.ndarray): Observed waveform.
+        pulse_time (np.ndarray): Time axis of the pulse.
+        pulse_waveform (np.ndarray): Pulse waveform.
+        misfit_interval (slice): Interval for L2 norm computation.
+        sample_dimensions (tuple): Dimensions of the sample layers.
+        frequency_cutoff (float): Maximum frequency cut-off.
+        transmitter_position (float): Transmitter location.
+        receiver_position (float): Receiver location.
+        pzt_layer_width (float): Width of the piezoelectric transducer layer.
+        pmma_layer_width (float): Width of the PMMA layer.
+        steel_velocity (float): Velocity of the blocks holding the gouge.
+        gouge_velocity (Union[float, np.ndarray]): Velocity in the gouge layer.
+        pzt_velocity (float): Velocity in the piezoelectric transducer.
+        pmma_velocity (float): Velocity in the PMMA layer.
+        normalize_waveform (bool, optional): Normalize the synthetic waveform to match the observed amplitude. Defaults to True.
+        enable_plotting (bool, optional): Enable plotting of the synthetic and observed waveforms. Defaults to False.
 
     Returns:
-        float: L2 norm between observed and synthetic waveforms.
-    '''
+        np.ndarray: Synthetic waveform interpolated on the observed time axis.
+    """
 
-    global sp_field, sp_recorded, x, t
+    # Compute the spatial grid
+    spatial_axis, dx, num_x = compute_grid(
+        sample_dimensions=sample_dimensions,
+        min_velocity=gouge_velocity,
+        frequency_cutoff=frequency_cutoff
+    )
 
-    # Compute the space grid and the time steps according to numerical dispersion and stability
-    x, dx, nx = compute_grid(sample_dimensions, c_gouge, freq_cut)   
-    c_model,_,_,_,_ = build_velocity_model(x=x, 
-                                            sample_dimensions=sample_dimensions, 
-                                            x_trasmitter=x_transmitter, 
-                                            x_receiver=x_receiver, 
-                                            pzt_width=pzt_width, 
-                                            pmma_width=pmma_width, 
-                                            csteel=c_max, 
-                                            c_gouge=c_gouge, 
-                                            c_pzt=c_pzt, 
-                                            c_pmma=c_pmma,
-                                            plotting=False)
+    # Build the velocity model
+    velocity_model, _, _, _, _ = build_velocity_model(
+        x=spatial_axis,
+        sample_dimensions=sample_dimensions,
+        x_transmitter=transmitter_position,
+        x_receiver=receiver_position,
+        pzt_layer_width=pzt_layer_width,
+        pmma_layer_width=pmma_layer_width,
+        steel_velocity=steel_velocity,
+        gouge_velocity=gouge_velocity,
+        pzt_velocity=pzt_velocity,
+        pmma_velocity=pmma_velocity,
+        plotting=False
+    )
 
-    t, dt, nt = prepare_time_variables(t_OBS, dx, c_max)
+    # Prepare time variables
+    simulation_time, dt, num_t = prepare_time_variables(
+        observed_time=observed_time,
+        dx=dx,
+        max_velocity=steel_velocity
+    )
 
-    # Interpolate source time function on the simulation time steps
-    interpolated_pulse = interpolate_source(t_pulse, pulse, dt)
-    src_t = np.zeros(len(t))
-    src_t[:np.size(interpolated_pulse)] = interpolated_pulse
+    # Interpolate source time function
+    interpolated_pulse = interpolate_source(
+        pulse_time=pulse_time,
+        pulse_waveform=pulse_waveform,
+        dt=dt
+    )
+    src_time_function = np.zeros(len(simulation_time))
+    src_time_function[:len(interpolated_pulse)] = interpolated_pulse
 
-    # generate soruce and receiver spatial funciton: synthetic for now, since we do not have it yet
-    isx = np.argmin(np.abs(x - x_transmitter))
-    irx = np.argmin(np.abs(x - x_receiver))
-    sigma = pzt_width / 100
-    src_x = synthetic_source_spatial_function(x, isx, sigma=sigma, plotting=False)
-    rec_x = synthetic_source_spatial_function(x, irx, sigma=sigma, plotting=False)
+    # Create source and receiver spatial functions
+    src_spatial_function = arbitrary_position_filter(
+        spatial_axis=spatial_axis,
+        dx=dx,
+        position=transmitter_position,
+        radius=10
+    )
+    rec_spatial_function = arbitrary_position_filter(
+        spatial_axis=spatial_axis,
+        dx=dx,
+        position=receiver_position,
+        radius=10
+    )
 
-    # actual computation of synthetic wavefield
-    sp_field = pseudospectral_1D_forward(nx, dx, nt, dt, src_x, src_t, c_model)
+    # Compute synthetic wavefield
+    synthetic_field = pseudospectral_1D(
+        num_x=num_x,
+        delta_x=dx,
+        num_t=num_t,
+        delta_t=dt,
+        source_spatial=src_spatial_function,
+        source_time=src_time_function,
+        velocity_model=velocity_model
+    )
 
-    # The simulated wavefield recorded
-    sp_simulated = np.sum(sp_field * rec_x, axis=-1)
+    # Record the simulated wavefield at the receiver position
+    simulated_waveform = np.sum(synthetic_field * rec_spatial_function, axis=-1)
 
-    if normalize:
-        sp_simulated = sp_simulated * (np.amax(waveform_OBS) / np.amax(sp_simulated))
+    if normalize_waveform:
+        amplitude_scale = np.amax(observed_waveform) / np.amax(simulated_waveform)
+        simulated_waveform *= amplitude_scale
 
-    waveform_SYNT = np.interp(t_OBS, t, sp_simulated)
-#    correction_3D = (sample_dimensions[0] / t_OBS) ** 2
-#    waveform_SYNT_corrected = waveform_SYNT * correction_3D
- #   print(f"waveform_SYNT_corrected: {waveform_SYNT_corrected}")
-    if plotting:
-        plot_simulation_waveform(t_OBS, waveform_SYNT, waveform_OBS)
+    # Interpolate the synthetic waveform onto the observed time axis
+    synthetic_waveform = np.interp(observed_time, simulation_time, simulated_waveform)
+
+    if enable_plotting:
+        plot_simulation_waveform(observed_time, synthetic_waveform, observed_waveform)
         plt.figure()
-        plt.plot(src_t)
+        plt.plot(src_time_function)
+        plt.title("Source Time Function")
+        plt.xlabel("Time [s]")
+        plt.ylabel("Amplitude")
         plt.show()
-    return waveform_SYNT
 
-def pseudospectral_1D_forward(
-                            num_x: int,
-                            delta_x: float,
-                            num_t: int,
-                            delta_t: float,
-                            source_spatial: np.ndarray,
-                            source_time: np.ndarray,
-                            velocity_model: np.ndarray
-                        ) -> np.ndarray:
-    '''
-    Perform pseudospectral forward modeling for 1D wave propagation.
+    return synthetic_waveform
+
+
+def pseudospectral_1D(
+    num_x: int,
+    delta_x: float,
+    num_t: int,
+    delta_t: float,
+    source_spatial: np.ndarray,
+    source_time: np.ndarray,
+    velocity_model: np.ndarray,
+    compute_derivative: bool = False,
+    reverse_time: bool = False
+) -> Union[np.ndarray, tuple]:
+    """
+    Perform pseudospectral modeling for 1D wave propagation (forward or adjoint).
 
     Args:
         num_x (int): Number of spatial grid points.
@@ -107,18 +162,24 @@ def pseudospectral_1D_forward(
         source_spatial (np.ndarray): Spatial source function.
         source_time (np.ndarray): Time source function.
         velocity_model (np.ndarray): Velocity model.
+        compute_derivative (bool, optional): Compute derivative wavefield (for gradient calculation). Defaults to False.
+        reverse_time (bool, optional): Reverse time axis (for adjoint modeling). Defaults to False.
 
     Returns:
-        np.ndarray: Synthetic wavefield of shape (num_t, num_x).
-    '''
+        np.ndarray: Wavefield of shape (num_t, num_x).
+        (Optional) np.ndarray: Derivative wavefield if `compute_derivative` is True.
+    """
     # Initialize wavefield arrays
     wavefield_current = np.zeros(num_x)
-    wavefield_past = np.zeros(num_x)
     wavefield_future = np.zeros(num_x)
+    wavefield_past = np.zeros(num_x)
     wavefield = np.zeros((num_t, num_x))
+    
+    if compute_derivative:
+        derivative_wavefield = np.zeros((num_x, num_t))  # Derivative wavefield
 
     # Time-stepping loop
-    for it in range(num_t):
+    for time_step in range(num_t):
         # Second spatial derivative using Fourier method
         second_derivative = fourier_derivative_2nd(wavefield_current, delta_x)
 
@@ -126,160 +187,187 @@ def pseudospectral_1D_forward(
         wavefield_future = (
             2 * wavefield_current - wavefield_past
             + (velocity_model ** 2) * (delta_t ** 2) * second_derivative
-            + source_spatial * source_time[it] * (delta_t ** 2)
         )
 
-        # Update past and current wavefields for next iteration
+        # Add source contribution
+        wavefield_future += source_spatial * source_time[time_step] * (delta_t ** 2)
+
+        # Compute derivative wavefield if required
+        if compute_derivative:
+            derivative_wavefield[:, time_step] = (
+                (wavefield_future - 2 * wavefield_current + wavefield_past) / delta_t ** 2
+            )
+
+        # Update wavefield states for next iteration
         wavefield_past = wavefield_current.copy()
         wavefield_current = wavefield_future.copy()
 
-        # Apply boundary conditions (e.g., absorbing boundaries)
+        # Apply boundary conditions (e.g., Dirichlet boundaries)
         wavefield_current[0] = 0
         wavefield_current[-1] = 0
 
         # Store wavefield at current time step
-        wavefield[it, :] = wavefield_current
+        wavefield[time_step, :] = wavefield_current
 
-    return wavefield
+    # Reverse time axis for adjoint modeling
+    if reverse_time:
+        wavefield = wavefield[::-1, :]
 
-def pseudospectral_1D_adjoint(
-                            num_x: int,
-                            delta_x: float,
-                            num_t: int,
-                            delta_t: float,
-                            adjoint_source_spatial: np.ndarray,
-                            adjoint_source_time: np.ndarray,
-                            velocity_model: np.ndarray
-                        ) -> np.ndarray:
-    '''
-    Perform pseudospectral adjoint modeling for 1D wave propagation.
-
-    Args:
-        num_x (int): Number of spatial grid points.
-        delta_x (float): Grid spacing.
-        num_t (int): Number of time steps.
-        delta_t (float): Time step.
-        adjoint_source_spatial (np.ndarray): Spatial adjoint source function.
-        adjoint_source_time (np.ndarray): Time adjoint source function (reversed residuals).
-        velocity_model (np.ndarray): Velocity model.
-
-    Returns:
-        np.ndarray: Adjoint wavefield of shape (num_t, num_x).
-    '''
-    # Initialize wavefield arrays
-    wavefield_current = np.zeros(num_x)
-    wavefield_future = np.zeros(num_x)
-    wavefield_past = np.zeros(num_x)
-    adjoint_wavefield = np.zeros((num_t, num_x))
-
-    # Time-stepping loop (backward in time)
-    for it in range(num_t):
-        # Second spatial derivative using Fourier method
-        second_derivative = fourier_derivative_2nd(wavefield_current, delta_x)
-
-        # Update wavefield using the finite difference time stepping
-        wavefield_future = (
-            2 * wavefield_current - wavefield_past
-            + (velocity_model ** 2) * (delta_t ** 2) * second_derivative
-            + adjoint_source_spatial * adjoint_source_time[it] * (delta_t ** 2)
-        )
-
-        # Update past and current wavefields for next iteration
-        wavefield_past = wavefield_current.copy()
-        wavefield_current = wavefield_future.copy()
-
-        # Apply boundary conditions (e.g., absorbing boundaries)
-        wavefield_current[0] = 0
-        wavefield_current[-1] = 0
-
-        # Store adjoint wavefield at current time step
-        adjoint_wavefield[it, :] = wavefield_current
-
-    return adjoint_wavefield[::-1, :]  # Reverse time axis to match forward modeling
+    if compute_derivative:
+        return wavefield, derivative_wavefield  # Return both wavefield and its derivative
+    
+    return wavefield  # Return wavefield only
 
 
-def compute_grid(sample_dimensions, c_gouge, freq_cut, ppt_for_minimum_len=10):
+def compute_grid(
+    sample_dimensions: tuple,
+    min_velocity: Union[float, np.ndarray],
+    frequency_cutoff: float,
+    points_per_min_wavelength: int = 10
+) -> tuple:
     """
     Compute the 1D spatial grid for the simulation based on the minimum velocity and frequency.
 
     Args:
-        sample_dimensions (tuple): Dimensions of the sample.
-        c_gouge (Union[float, np.ndarray]): Velocity in the gouge layer.
-        freq_cut (float): Maximum frequency cut-off.
-        ppt_for_minimum_len (int, optional): Points per minimum wavelength. Defaults to 10.
+        sample_dimensions (tuple): Dimensions of the sample layers.
+        min_velocity (Union[float, np.ndarray]): Minimum velocity in the model.
+        frequency_cutoff (float): Maximum frequency cut-off.
+        points_per_min_wavelength (int, optional): Points per minimum wavelength. Defaults to 10.
 
     Returns:
-        tuple: A tuple containing the grid (x), grid spacing (dx), and number of grid points (nx).
+        tuple: (spatial_axis, dx, num_x) where spatial_axis is the grid, dx is grid spacing, num_x is number of grid points.
     """
-    cmin = c_gouge  # Minimum velocity
     grid_length = sum(sample_dimensions)
-    x = make_grid_1D(grid_len=grid_length, cmin=cmin, fmax=freq_cut, ppt=ppt_for_minimum_len)
-    dx = x[1] - x[0]
-    nx = len(x)
-    return x, dx, nx
+    spatial_axis = make_grid_1D(
+        grid_len=grid_length,
+        cmin=min_velocity,
+        fmax=frequency_cutoff,
+        ppt=points_per_min_wavelength
+    )
+    dx = spatial_axis[1] - spatial_axis[0]
+    num_x = len(spatial_axis)
+    return spatial_axis, dx, num_x
 
-def prepare_time_variables(t_OBS, dx, c_max, eps=0.6):
+
+def prepare_time_variables(
+    observed_time: np.ndarray,
+    dx: float,
+    max_velocity: float,
+    cfl_factor: float = 0.6
+) -> tuple:
     """
-    Prepare the time variables for the simulation based on the grid and maximum velocity.
-    The time step is the highest possible submultiple of the data sampling rate, 
-    respecting the CFL stability criterion for 1D simulation.
+    Prepare the time variables for the simulation based on the spatial grid and maximum velocity.
+    The time step is calculated to satisfy the CFL stability criterion.
 
     Args:
-        t_OBS (np.ndarray): Time axis of observed waveform.
+        observed_time (np.ndarray): Time axis of the observed waveform.
         dx (float): Grid spacing.
-        c_max (float): Maximum velocity.
-        eps (float, optional): CFL safety factor. Defaults to 0.5.
+        max_velocity (float): Maximum velocity in the model.
+        cfl_factor (float, optional): CFL safety factor. Defaults to 0.6.
 
     Returns:
-        tuple: A tuple containing the time axis for the simulation (t), 
-               the time step (dt), and the number of time steps (nt).
+        tuple: (simulation_time, dt, num_t) where simulation_time is the time axis for simulation, dt is time step, num_t is number of time steps.
     """
     # Calculate the raw time step based on CFL condition
-    dt_raw = eps * dx / c_max
+    dt_raw = cfl_factor * dx / max_velocity
 
-    # Extract the data sampling rate from t_OBS
-    dt_obs = t_OBS[1] - t_OBS[0]
+    # Extract the data sampling rate from observed_time
+    dt_obs = observed_time[1] - observed_time[0]
 
-    # Find the highest submultiple of dt_obs that is smaller than dt_raw
+    # Find the largest submultiple of dt_obs smaller than dt_raw
     dt = dt_obs / np.ceil(dt_obs / dt_raw)
 
     # Create the time axis for the simulation
-    t = np.arange(0, t_OBS[-1], dt)
-    nt = len(t)
+    simulation_time = np.arange(0, observed_time[-1], dt)
+    num_t = len(simulation_time)
 
-    return t, dt, nt
+    return simulation_time, dt, num_t
 
 
-def interpolate_source(t_pulse, pulse, dt):
+def interpolate_source(
+    pulse_time: np.ndarray,
+    pulse_waveform: np.ndarray,
+    dt: float
+) -> np.ndarray:
     """
-    Interpolate the source time function to match the time discretization.
+    Interpolate the source time function to match the simulation time discretization.
 
     Args:
-        t_pulse (np.ndarray): Time axis of the pulse.
-        pulse (np.ndarray): Pulse waveform.
-        dt (float): Time step for interpolation.
+        pulse_time (np.ndarray): Time axis of the pulse.
+        pulse_waveform (np.ndarray): Pulse waveform.
+        dt (float): Time step for the simulation.
 
     Returns:
         np.ndarray: Interpolated source time function.
     """
-    interpolated_t_pulse = np.arange(t_pulse[0], t_pulse[-1], dt)
-    interpolated_pulse = np.interp(interpolated_t_pulse, t_pulse, pulse)
+    interpolated_pulse_time = np.arange(pulse_time[0], pulse_time[-1], dt)
+    interpolated_pulse = np.interp(interpolated_pulse_time, pulse_time, pulse_waveform)
     return interpolated_pulse
 
-def compute_misfit(waveform_OBS, waveform_SYNT, interval):
+
+def compute_misfit(
+    observed_waveform: np.ndarray,
+    synthetic_waveform: np.ndarray,
+    misfit_interval: slice
+) -> float:
     """
-    Compute misfit between observed and synthetic waveforms.
-    At the moment is an l2 norm evalutated on the interval of simulated waveform 
-    that can be compared with the observed waveform, 
-    given the fact that the forward modeling is 1D
+    Compute the L2 norm misfit between observed and synthetic waveforms over a specified interval.
 
     Args:
-        waveform_OBS (np.ndarray): Observed waveform.
-        waveform_SYNT (np.ndarray): Synthetic waveform.
-        interval (slice): Interval for L2 norm computation.
+        observed_waveform (np.ndarray): Observed waveform.
+        synthetic_waveform (np.ndarray): Synthetic waveform.
+        misfit_interval (slice): Interval over which to compute the misfit.
 
     Returns:
-        float: The misfit.
+        float: The computed L2 norm misfit.
     """
+    return LA.norm(observed_waveform[misfit_interval] - synthetic_waveform[misfit_interval], 2)
 
-    return LA.norm(waveform_OBS[interval] - waveform_SYNT[interval], 2)
+
+def arbitrary_position_filter(
+    spatial_axis: np.ndarray,
+    dx: float,
+    position: float,
+    radius: int
+) -> np.ndarray:
+    """
+    Create a Kaiser-windowed sinc filter for arbitrary source/receiver positioning on a 1D grid.
+
+    Args:
+        spatial_axis (np.ndarray): Spatial axis (grid points).
+        dx (float): Grid spacing.
+        position (float): Source or receiver position.
+        radius (int): Radius for the Kaiser window (in grid points).
+
+    Returns:
+        np.ndarray: Filter approximating a Dirac delta function at the arbitrary position.
+    """
+    # Normalize positions to grid indices
+    grid_indices = spatial_axis / dx
+    num_points = len(grid_indices)
+    position_index = position / dx
+
+    # Find the grid node closest to the desired position
+    closest_node_index = np.argmin(np.abs(grid_indices - position_index))
+
+    if grid_indices[closest_node_index] == position_index:
+        # If the position coincides with a grid node
+        filter_array = np.zeros(num_points)
+        filter_array[closest_node_index] = 1
+        return filter_array
+
+    # Create sinc function centered at the arbitrary position
+    sinc_function = np.sinc(grid_indices - position_index)
+
+    # Apply Kaiser window to the sinc function
+    beta = 6.0  # Kaiser window parameter
+    kaiser_window = kaiser(2 * radius + 1, beta)
+
+    # Apply windowed sinc filter centered on the position_index
+    start_idx = max(0, closest_node_index - radius)
+    end_idx = min(num_points, closest_node_index + radius + 1)
+    
+    windowed_sinc = np.zeros_like(sinc_function)
+    windowed_sinc[start_idx:end_idx] = sinc_function[start_idx:end_idx] * kaiser_window[:end_idx-start_idx]
+
+    return windowed_sinc

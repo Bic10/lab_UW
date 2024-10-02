@@ -4,6 +4,8 @@ from scipy.signal import find_peaks
 import numpy as np
 import pandas as pd
 import pickle
+import os
+import matplotlib.pyplot as plt
 
 from file_io import *
 from signal_processing import *
@@ -37,24 +39,23 @@ def find_sync_values(mech_data_path):
 ##########################################################################################################################################
 
 # General Parameters and Constants
-freq_cut = 2  # [MHz] maximum frequency of the data we want to reproduce
+frequency_cutoff = 2  # [MHz] maximum frequency of the data we want to reproduce
 
 # Constants throughout the entire experiment
 side_block_1 = 2           # [cm] width of first side block
 side_block_2 = 2           # [cm] width of second side block
 central_block = 4.8        # [cm] width of central block
-pzt_width = 0.1            # [cm] piezoelectric transducer width
-pla_width = 0.1            # [cm] plate supporting the PZT
-csteel = 3374 * (1e2 / 1e6)  # [cm/μs] steel shear wave velocity
-cpzt = 2000 * (1e2 / 1e6)    # [cm/μs] PZT shear wave velocity
-cpla = 0.4 * 0.1392         # [cm/μs] plate supporting the PZT
-
+pzt_layer_width = 0.1      # [cm] piezoelectric transducer width
+pmma_layer_width = 0.1     # [cm] PMMA layer width
+steel_velocity = 3374 * (1e2 / 1e6)  # [cm/μs] steel shear wave velocity
+pzt_velocity = 2000 * (1e2 / 1e6)    # [cm/μs] PZT shear wave velocity
+pmma_velocity = 0.4 * 0.1392         # [cm/μs] PMMA layer velocity
 
 # Fixed travel time through constant sample dimensions
 pzt_depth = 1        # [cm] Position of the PZT with respect to the external side of the block
-x_transmitter = pzt_depth    # [cm] Position of the transmitter from the beginning of the sample
+transmitter_position = pzt_depth    # [cm] Position of the transmitter from the beginning of the sample
 
-fixed_travel_time = 2 * (side_block_1 - x_transmitter + central_block) / csteel  # travel time of direct wave into the blocks
+fixed_travel_time = 2 * (side_block_1 - transmitter_position + central_block) / steel_velocity  # travel time of direct wave into the blocks
 
 ## GET OBSERVED DATA
 
@@ -66,13 +67,13 @@ infile_path_list_pulse = make_infile_path_list(machine_name=machine_name_pulse, 
 
 # Assuming only one pulse is used, we can load it outside the loop
 pulse_path = sorted(infile_path_list_pulse)[0]
-pulse, pulse_metadata = load_waveform_json(pulse_path)
-t_pulse = pulse_metadata['time_ax_waveform']
-pulse, _ = signal2noise_separation_lowpass(pulse, pulse_metadata, freq_cut=freq_cut)
-pulse = pulse - pulse[0]  # Make the pulse start from zero
+pulse_waveform, pulse_metadata = load_waveform_json(pulse_path)
+pulse_time = pulse_metadata['time_ax_waveform']
+pulse_waveform, _ = signal2noise_separation_lowpass(pulse_waveform, pulse_metadata, freq_cut=frequency_cutoff)
+pulse_waveform = pulse_waveform - pulse_waveform[0]  # Make the pulse start from zero
 
-dt_pulse = t_pulse[1] - t_pulse[0]
-pulse_duration = t_pulse[-1] - t_pulse[0]
+dt_pulse = pulse_time[1] - pulse_time[0]
+pulse_duration = pulse_time[-1] - pulse_time[0]
 
 #########################################################################################
 
@@ -107,13 +108,13 @@ infile_path_list_uw = sorted(make_infile_path_list(machine_name, experiment_name
 
 # Create output directories
 outdir_path_l2norm = make_data_analysis_folders(machine_name=machine_name, experiment_name=experiment_name, data_types=["FWI_results"])
-print(f"The inversion results will be saved at path:\n\t {outdir_path_l2norm}")
+print(f"The inversion results will be saved at path:\n\t {outdir_path_l2norm[0]}")
 
 # Initialize variables to store results
 estimated_models = []     # To store the estimated velocity models for each waveform
 
 # Main Loop Over UW Files
-for choosen_uw_file, infile_path in enumerate(infile_path_list_uw):
+for chosen_uw_file, infile_path in enumerate(infile_path_list_uw):
 
     # CHOOSE OUTFILE_PATH
     outfile_name = os.path.basename(infile_path).split('.')[0]
@@ -123,34 +124,34 @@ for choosen_uw_file, infile_path in enumerate(infile_path_list_uw):
     start_time = tm.time()
 
     # LOAD UW DATA
-    data_OBS, metadata = make_UW_data(infile_path)
-    t_OBS = metadata['time_ax_waveform']
+    observed_waveform_data, metadata = make_UW_data(infile_path)
+    observed_time = metadata['time_ax_waveform']
 
-    # homogeneous velocity model stored using global_optimization_velocity_homogeneus.py
+    # Homogeneous velocity model stored using global_optimization_velocity_homogeneous.py
     initial_velocity_guess = 800 * (1e2 / 1e6)  # [cm/μs], initial guess for gouge velocity
-    c_range = 50 * (1e2 / 1e6)  # [cm/μs], adjust as needed
+    c_range = 100 * (1e2 / 1e6)  # [cm/μs], adjust as needed
     cmin_waveform = initial_velocity_guess - c_range
     cmax_waveform = initial_velocity_guess + c_range
 
     # REMOVE EVERYTHING BEFORE initial_time_removed
     initial_time_removed = 0  # [μs]
-    t_OBS = t_OBS[t_OBS >= initial_time_removed]
-    data_OBS = data_OBS[:, t_OBS >= initial_time_removed]
+    observed_time = observed_time[observed_time >= initial_time_removed]
+    observed_waveform_data = observed_waveform_data[:, observed_time >= initial_time_removed]
 
     # FREQUENCY LOW PASS (Frequency cutoff is constant)
-    data_OBS, _ = signal2noise_separation_lowpass(data_OBS, metadata, freq_cut=freq_cut)
+    observed_waveform_data, _ = signal2noise_separation_lowpass(observed_waveform_data, metadata, freq_cut=frequency_cutoff)
 
     # DOWNSAMPLING THE WAVEFORMS
     number_of_waveforms_wanted = 20
-    data_OBS = data_OBS[:sync_peaks[2 * choosen_uw_file + 1] - sync_peaks[2 * choosen_uw_file]]  # Subsampling around the step
-    metadata['number_of_waveforms'] = len(data_OBS)
+    observed_waveform_data = observed_waveform_data[:sync_peaks[2 * chosen_uw_file + 1] - sync_peaks[2 * chosen_uw_file]]  # Subsampling around the step
+    metadata['number_of_waveforms'] = len(observed_waveform_data)
     downsampling = max(1, round(metadata['number_of_waveforms'] / number_of_waveforms_wanted))
     print(f"Number of waveforms in the selected subset: {metadata['number_of_waveforms']}")
     print(f"Number of waveforms wanted: {number_of_waveforms_wanted}")
     print(f"Downsampling waveforms by a factor: {downsampling}")
 
     # EXTRACT LAYER THICKNESS FROM MECHANICAL DATA
-    thickness_gouge_1_list = mech_data.rgt_lt_mm[sync_peaks[2 * choosen_uw_file]: sync_peaks[2 * choosen_uw_file + 1]].values / 10  # Convert mm to cm
+    thickness_gouge_1_list = mech_data.rgt_lt_mm[sync_peaks[2 * chosen_uw_file]: sync_peaks[2 * chosen_uw_file + 1]].values / 10  # Convert mm to cm
     thickness_gouge_2_list = thickness_gouge_1_list  # Assuming both layers have the same thickness
 
     # Initialize previous velocity model
@@ -159,75 +160,116 @@ for choosen_uw_file, infile_path in enumerate(infile_path_list_uw):
     # Process each waveform sequentially
     for idx_waveform, (thickness_gouge_1, thickness_gouge_2) in enumerate(zip(thickness_gouge_1_list[::downsampling], thickness_gouge_2_list[::downsampling])):
         idx = idx_waveform * downsampling
-        waveform_OBS = data_OBS[idx] - np.mean(data_OBS[idx])
+        observed_waveform = observed_waveform_data[idx] - np.mean(observed_waveform_data[idx])
 
         # Adjust receiver position based on current sample dimensions
         sample_dimensions = [side_block_1, thickness_gouge_1, central_block, thickness_gouge_2, side_block_2]
-        x_receiver = sum(sample_dimensions) - pzt_depth
+        receiver_position = sum(sample_dimensions) - pzt_depth
 
         # DEFINE EVALUATION INTERVAL FOR L2 NORM OF THE RESIDUALS
         max_travel_time = fixed_travel_time + thickness_gouge_1 / cmin_waveform + thickness_gouge_2 / cmin_waveform
         min_travel_time = fixed_travel_time + thickness_gouge_1 / cmax_waveform + thickness_gouge_2 / cmax_waveform
-        idx_travel_time = np.where((t_OBS > min_travel_time) & (t_OBS < max_travel_time + pulse_duration))
+        misfit_interval = np.where((observed_time > min_travel_time) & (observed_time < max_travel_time + pulse_duration))
 
         # Initialize the velocity model
         if idx_waveform == 0:
-            # First waveform: use homogeneous velocity model stored using global_optimization_velocity_homogeneus.py
-            c_gouge_initial = initial_velocity_guess
+            # First waveform: use homogeneous velocity model stored using global_optimization_velocity_homogeneous.py
+            gouge_velocity_initial = initial_velocity_guess
             # Build initial velocity model
-            x, delta_x, num_x = compute_grid(sample_dimensions, c_gouge_initial, freq_cut)
-            velocity_model, idx_gouge_1, idx_gouge_2, idx_pzt_1, idx_pzt_2 = build_velocity_model(x, sample_dimensions, x_transmitter, x_receiver, pzt_width, pla_width, csteel, c_gouge_initial, cpzt, cpla, plotting=False)
+            spatial_axis, delta_x, num_x = compute_grid(sample_dimensions, gouge_velocity_initial, frequency_cutoff)
+            velocity_model, idx_gouge_1, idx_gouge_2, idx_pzt_1, idx_pzt_2 = build_velocity_model(
+                spatial_axis,
+                sample_dimensions,
+                transmitter_position,
+                receiver_position,
+                pzt_layer_width,
+                pmma_layer_width,
+                steel_velocity,
+                gouge_velocity_initial,
+                pzt_velocity,
+                pmma_velocity,
+                plotting=False)
         else:
             # Subsequent waveforms: use updated velocity model from previous waveform
             # Adjust sample_dimensions if thicknesses have changed
-            x, delta_x, num_x = compute_grid(sample_dimensions, c_gouge_initial, freq_cut)
+            spatial_axis, delta_x, num_x = compute_grid(sample_dimensions, gouge_velocity_initial, frequency_cutoff)
             # Rebuild indices for gouge layers
-            velocity_model, idx_gouge_1, idx_gouge_2, idx_pzt_1, idx_pzt_2 = build_velocity_model(x, sample_dimensions, x_transmitter, x_receiver, pzt_width, pla_width, csteel, c_gouge_initial, cpzt, cpla, plotting=False)
+            velocity_model, idx_gouge_1, idx_gouge_2, idx_pzt_1, idx_pzt_2 = build_velocity_model(
+                spatial_axis,
+                sample_dimensions,
+                transmitter_position,
+                receiver_position,
+                pzt_layer_width,
+                pmma_layer_width,
+                steel_velocity,
+                gouge_velocity_initial,
+                pzt_velocity,
+                pmma_velocity,
+                plotting=False)
             # Copy over the updated velocities in gouge layers
             velocity_model[idx_gouge_1] = velocity_model_previous[idx_gouge_1]
             velocity_model[idx_gouge_2] = velocity_model_previous[idx_gouge_2]
 
         # Initialize time variables
-        time_axes_simulation, delta_t, num_t = prepare_time_variables(t_OBS, delta_x, csteel)
+        simulation_time, delta_t, num_t = prepare_time_variables(observed_time, delta_x, steel_velocity)
         # Interpolate source time function
-        interpolated_pulse = interpolate_source(t_pulse, pulse, delta_t)
-        src_t = np.zeros(len(time_axes_simulation))
-        src_t[:np.size(interpolated_pulse)] = interpolated_pulse
+        interpolated_pulse = interpolate_source(pulse_time, pulse_waveform, delta_t)
+        src_time_function = np.zeros(len(simulation_time))
+        src_time_function[:np.size(interpolated_pulse)] = interpolated_pulse
 
         # Generate source and receiver spatial functions
-        isx = np.argmin(np.abs(x - x_transmitter))
-        irx = np.argmin(np.abs(x - x_receiver))
-        sigma = pzt_width / 100                 # must be studied the spatial distribution!!!!!
-        src_x = synthetic_source_spatial_function(x, isx, sigma=sigma, plotting=False)
-        rec_x = synthetic_source_spatial_function(x, irx, sigma=sigma, plotting=False)
+        isx = np.argmin(np.abs(spatial_axis - transmitter_position))
+        irx = np.argmin(np.abs(spatial_axis - receiver_position))
+        sigma = pzt_layer_width / 100  # Must study the spatial distribution
+        src_spatial_function = synthetic_source_spatial_function(spatial_axis, isx, sigma=sigma, plotting=False)
+        rec_spatial_function = synthetic_source_spatial_function(spatial_axis, irx, sigma=sigma, plotting=False)
 
-        # Number of FWI iterations: NEEDED A BETTER STOP
+        # Number of FWI iterations: NEED A BETTER STOPPING CRITERION
         n_iterations = 10
 
         for iteration in range(n_iterations):
             print(f"Waveform {idx_waveform}, Iteration {iteration+1}/{n_iterations}")
 
             # Forward modeling
-            wavefield_forward = pseudospectral_1D_forward(num_x, delta_x, num_t, delta_t, src_x, src_t, velocity_model)
+            wavefield_forward = pseudospectral_1D(
+                num_x=num_x,
+                delta_x=delta_x,
+                num_t=num_t,
+                delta_t=delta_t,
+                source_spatial=src_spatial_function,
+                source_time=src_time_function,
+                velocity_model=velocity_model,
+                compute_derivative=False,
+                reverse_time=False
+            )
 
             # Synthetic data at receiver
-            waveform_recorded = np.sum(wavefield_forward * rec_x, axis=1)
+            waveform_recorded = np.sum(wavefield_forward * rec_spatial_function, axis=1)
 
             # Interpolate synthetic data to observed data time axis
-            waveform_SYNT = np.interp(t_OBS, time_axes_simulation, waveform_recorded)
+            synthetic_waveform = np.interp(observed_time, simulation_time, waveform_recorded)
 
             # Compute residuals
-            residual = np.zeros(waveform_OBS.shape)
-            residual[idx_travel_time] = waveform_OBS[idx_travel_time] - waveform_SYNT[idx_travel_time]
+            residual = np.zeros(observed_waveform.shape)
+            residual[misfit_interval] = observed_waveform[misfit_interval] - synthetic_waveform[misfit_interval]
 
             # Prepare adjoint source: residuals at receiver location, reverse time
-            adj_src_t = np.zeros(num_t)
-            residual_interp = np.interp(time_axes_simulation, t_OBS, residual)
-            adj_src_t = residual_interp[::-1]  # Reverse time
-            adj_src_x = rec_x
+            residual_interp = np.interp(simulation_time, observed_time, residual)
+            adj_src_time_function = residual_interp[::-1]  # Reverse time
+            adj_src_spatial_function = rec_spatial_function
 
             # Adjoint modeling
-            wavefield_adjoint = pseudospectral_1D_adjoint(num_x, delta_x, num_t, delta_t, adj_src_x, adj_src_t, velocity_model)
+            wavefield_adjoint = pseudospectral_1D(
+                num_x=num_x,
+                delta_x=delta_x,
+                num_t=num_t,
+                delta_t=delta_t,
+                source_spatial=adj_src_spatial_function,
+                source_time=adj_src_time_function,
+                velocity_model=velocity_model,
+                compute_derivative=False,
+                reverse_time=True
+            )
 
             # Compute spatial derivatives of forward and adjoint wavefields
             du_dx = np.gradient(wavefield_forward, axis=1) / delta_x
@@ -238,23 +280,27 @@ for choosen_uw_file, infile_path in enumerate(infile_path_list_uw):
             for ix in range(num_x):
                 gradient[ix] = -2 * velocity_model[ix] * np.sum(du_dx[:, ix] * dlam_dx[:, ix]) * delta_t
 
-
             # Apply gradient only to gouge layers
             gradient_update = np.zeros(num_x)
             gradient_update[idx_gouge_1] = gradient[idx_gouge_1]
             gradient_update[idx_gouge_2] = gradient[idx_gouge_2]
 
             # Update velocity model
-            step_length = 10 * (1e2/1e6)  # Adjust as needed
+            step_length = 10 * (1e2 / 1e6)  # Adjust as needed
             velocity_model -= step_length * gradient_update
 
-            # Ensure velocities in steel blocks remain constant
-            velocity_model[idx_pzt_1] = cpzt
-            velocity_model[idx_pzt_2] = cpzt
-            velocity_model[~np.isin(np.arange(num_x), np.concatenate((idx_gouge_1, idx_gouge_2, idx_pzt_1, idx_pzt_2)))] = csteel
-            
+            # Ensure velocities in steel blocks and PZT layers remain constant
+            velocity_model[idx_pzt_1] = pzt_velocity
+            velocity_model[idx_pzt_2] = pzt_velocity
+            non_gouge_indices = ~np.isin(np.arange(num_x), np.concatenate((idx_gouge_1, idx_gouge_2, idx_pzt_1, idx_pzt_2)))
+            velocity_model[non_gouge_indices] = steel_velocity
+
+            # Optionally, plot the velocity model
             plt.figure()
-            plt.plot(velocity_model)
+            plt.plot(spatial_axis, velocity_model)
+            plt.title(f"Velocity Model at Iteration {iteration+1}")
+            plt.xlabel("Position (cm)")
+            plt.ylabel("Velocity (cm/μs)")
             plt.show()
 
             # Optionally, compute and print misfit
