@@ -105,6 +105,9 @@ def amplitude_map(data: np.ndarray, metadata: dict, amp_scale: float, outfile_pa
     - None
     '''
 
+    for key in metadata:
+        print(key)
+
     time_ax_waveform = metadata['time_ax_waveform']
     start_time, end_time = time_ax_waveform[0], time_ax_waveform[-1]
     sampling_rate = metadata['sampling_rate']

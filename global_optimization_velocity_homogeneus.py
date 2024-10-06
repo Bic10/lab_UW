@@ -24,35 +24,40 @@ def find_mechanical_data(file_path_list, pattern):
             return file_path
     return None  # No file found in the list
 
-def find_sync_values(mech_data_path):
+def find_sync_values(mech_data):
     """
     Find synchronization peak values within a mechanical data file.
     """
-    mech_data = pd.read_csv(mech_data_path, sep=',', skiprows=[1])
-    sync_data = mech_data.sync
+    try:
+        sync_data = mech_data.sync
+        # Find synchronization peaks in the synchronization data
+        sync_peaks, _ = find_peaks(sync_data, prominence=4.2, height=4)
+        return sync_data, sync_peaks
 
-    # Find synchronization peaks in the synchronization data
-    sync_peaks, _ = find_peaks(sync_data, prominence=4.2, height=4)
-    return mech_data, sync_data, sync_peaks
-
+    except:
+        print("There is not syncronization data in the reduced file. Please insert it manually!")
+        return None, None
 ##########################################################################################################################################
+## HERE IT IS CLEAR WHY WE NEED A DATABASE FOR THE VARIOUS DDS BLOCKS !!!
 
+# commented the Mauro and De Solda blocks features 
 # General Parameters and Constants
 frequency_cutoff = 2  # [MHz] maximum frequency of the data we want to reproduce
 
 # Constants throughout the entire experiment
-side_block_1 = 2           # [cm] width of first side block
-side_block_2 = 2           # [cm] width of second side block
-central_block = 4.8        # [cm] width of central block
-pzt_layer_width = 0.1      # [cm] piezoelectric transducer width
-pmma_layer_width = 0.1      # [cm] pmmate supporting the PZT
-steel_velocity = 3374 * (1e2 / 1e6)  # [cm/μs] steel shear wave velocity
-pzt_velocity = 2000 * (1e2 / 1e6)    # [cm/μs] PZT shear wave velocity
-pmma_velocity = 0.4 * 0.1392          # [cm/μs] pmmate supporting the PZT
+h_groove = 0.1                      # [cm] hight of blocks grooves. Must be allowed to be different for central and sid blocks
+side_block_1 = 2                    # [cm] width of first side block, with grooves
+side_block_2 = 2                    # [cm] width of second side block with grooves
+central_block = 4.8                 # [cm] width of central block, with grooves
+pzt_layer_width = 0.1               # [cm] piezoelectric transducer width
+pmma_layer_width = 0.1              # [cm] pmmate supporting the PZT
+steel_velocity = 3374 * (1e2 / 1e6) # [cm/μs] steel shear wave velocity
+pzt_velocity = 2000 * (1e2 / 1e6)   # [cm/μs] PZT shear wave velocity
+pmma_velocity = 0.4 * 0.1392        # [cm/μs] pmmate supporting the PZT
 
 # Initial guessed velocity model of the sample
-cmin = 600 * (1e2 / 1e6)        
-cmax = 1000 * (1e2 / 1e6) 
+cmin = 800 * (1e2 / 1e6)        
+cmax = 1500 * (1e2 / 1e6) 
 c_step = 10 * (1e2 / 1e6)
 initial_gouge_velocity_list = np.arange(cmin, cmax, c_step)  # Initial velocity range to test
 
@@ -60,7 +65,32 @@ initial_gouge_velocity_list = np.arange(cmin, cmax, c_step)  # Initial velocity 
 pzt_depth = 1        # [cm] Position of the PZT with respect to the external side of the block
 transmitter_position = pzt_depth    # [cm] Position of the transmitter from the beginning of the sample
 
-fixed_travel_time = 2 * (side_block_1 - transmitter_position + central_block) / steel_velocity  # travel time of direct wave into the blocks
+# General Parameters and Constants
+frequency_cutoff = 2  # [MHz] maximum frequency of the data we want to reproduce
+minimum_SNR = 4       # the minimum signal to noise ratio acceted to start computation
+
+# # Constants throughout the entire experiment
+# h_groove = 0.1                      # [cm] hight of blocks grooves. Must be allowed to be different for central and sid blocks
+# side_block_1 = 2.93                    # [cm] width of first side block, with grooves
+# side_block_2 = 2.93                    # [cm] width of second side block with grooves
+# central_block = 4.88                 # [cm] width of central block, with grooves
+# pzt_layer_width = 0.1               # [cm] piezoelectric transducer width
+# pmma_layer_width = 0.              # [cm] pmma supporting the PZT: in this blocks there are not
+# steel_velocity = 3374 * (1e2 / 1e6) # [cm/μs] steel shear wave velocity
+# pzt_velocity = 2000 * (1e2 / 1e6)   # [cm/μs] PZT shear wave velocity
+# pmma_velocity = 0.4 * 0.1392        # [cm/μs] pmmate supporting the PZT
+
+# # Initial guessed velocity model of the sample: literature range for gouge at atmospheric preassure
+# cmin = 200 * (1e2 / 1e6)        
+# cmax = 600 * (1e2 / 1e6) 
+# c_step = 10 * (1e2 / 1e6)
+# initial_gouge_velocity_list = np.arange(cmin, cmax, c_step)  # Initial velocity range to test
+
+# # Fixed travel time through constant sample dimensions
+# pzt_depth = 1        # [cm] Position of the PZT with respect to the external side of the block
+# transmitter_position = pzt_depth    # [cm] Position of the transmitter from the beginning of the sample
+
+fixed_travel_time = (2 * (side_block_1 - transmitter_position) + central_block - 4*h_groove) / steel_velocity  # travel time of direct wave into the blocks
 
 ## GET OBSERVED DATA
 
@@ -92,21 +122,15 @@ sync_file_pattern = '*s*_data_rp'  # Pattern to find specific experiment in mech
 # LOAD MECHANICAL DATA (Only once)
 infile_path_list_mech = make_infile_path_list(machine_name, experiment_name, data_type=data_type_mech)
 mech_data_path = find_mechanical_data(infile_path_list_mech, sync_file_pattern)
-mech_data, sync_data, sync_peaks = find_sync_values(mech_data_path)
+mech_data = pd.read_csv(mech_data_path, sep=',', skiprows=[1])
+sync_data, sync_peaks = find_sync_values(mech_data)
 
-# Manually picked sync peaks for plotting purposes (uncomment if needed)
-# if experiment_name == "s0108":
-#     steps_carrara = [5582, 8698, 15050, 17990, 22000, 23180, 36229, 39391, 87940, 89744,
-#                      126306, 128395, 134000, 135574, 169100, 172600, 220980, 223000,
-#                      259432, 261425, 266429, 268647, 279733, 282787, 331437, 333778,
-#                      369610, 374824]
-#     sync_peaks = steps_carrara
-
-# elif experiment_name == "s0103":
-#     steps_mont = [4833, 8929, 15166, 18100, 22188, 23495, 36297, 39000, 87352, 89959,
-#                   154601, 156625, 162000, 165000, 168705, 170490, 182000, 184900,
-#                   233364, 235558, 411811, 462252]
-#     sync_peaks = steps_mont
+if sync_peaks is None:
+    # add synchronization manually!
+    # Il sistema di Biche segna inizio e fine della sincronizzazione. Io qua ho segnato solo l'iniizo della registrazione
+    # Per far funzionare il codice seguente, lascio "None" agli indici corrispondenti alla fine delle registrazioni e li
+    # contero' utilizzando il numero di onde totali registrate
+    sync_peaks = [2389,None,5273,None, 523455,None,801825,None, 1056935,None,127865,None,1396245]
 
 # MAKE UW PATH LIST (Only once)
 infile_path_list_uw = sorted(make_infile_path_list(machine_name, experiment_name, data_type=data_type_uw))
@@ -122,6 +146,8 @@ estimated_velocities = []     # To store the estimated velocity for each wavefor
 
 # Main Loop Over UW Files
 for chosen_uw_file, infile_path in enumerate(infile_path_list_uw):
+    # if chosen_uw_file == 0:
+    #     continue
 
     # CHOOSE OUTFILE_PATH
     outfile_name = os.path.basename(infile_path).split('.')[0]
@@ -134,42 +160,61 @@ for chosen_uw_file, infile_path in enumerate(infile_path_list_uw):
     observed_waveform_data, metadata = make_UW_data(infile_path)
     observed_time = metadata['time_ax_waveform']
 
-    # REMOVE EVERYTHING BEFORE initial_time_removed
-    initial_time_removed = 0  # [μs]
-    observed_time = observed_time[observed_time >= initial_time_removed]
-    observed_waveform_data = observed_waveform_data[:, observed_time >= initial_time_removed]
-
+    # Few preprocessing step:
+    observed_waveform_data = observed_waveform_data - np.mean(observed_waveform_data)
+    initial_time_removed = 300  # number of samples
+    observed_waveform_data[:,:initial_time_removed] = 0
     # FREQUENCY LOW PASS (Frequency cutoff is constant)
     observed_waveform_data, _ = signal2noise_separation_lowpass(observed_waveform_data, metadata, freq_cut=frequency_cutoff)
 
     # DOWNSAMPLING THE WAVEFORMS
     number_of_waveforms_wanted = 100
-    # Subsampling around the step
-    data_OBS = observed_waveform_data[:sync_peaks[2 * chosen_uw_file + 1] - sync_peaks[2 * chosen_uw_file]]
-    metadata['number_of_waveforms'] = len(data_OBS)
+    # # Subsampling around the step
+    # data_OBS = observed_waveform_data[:sync_peaks[2 * chosen_uw_file + 1] - sync_peaks[2 * chosen_uw_file]]
+    
     downsampling = max(1, round(metadata['number_of_waveforms'] / number_of_waveforms_wanted))
     print(f"Number of waveforms in the selected subset: {metadata['number_of_waveforms']}")
     print(f"Number of waveforms wanted: {number_of_waveforms_wanted}")
     print(f"Downsampling waveforms by a factor: {downsampling}")
 
     # EXTRACT LAYER THICKNESS FROM MECHANICAL DATA
-    thickness_gouge_1_list = mech_data.rgt_lt_mm[sync_peaks[2 * chosen_uw_file]: sync_peaks[2 * chosen_uw_file + 1]].values / 10  # Convert mm to cm
-    thickness_gouge_2_list = thickness_gouge_1_list  # Assuming both layers have the same thickness
+    try: 
+        thickness_gouge_1_list = mech_data.rgt_lt_mm[sync_peaks[2 * chosen_uw_file]: sync_peaks[2 * chosen_uw_file + 1]].values / 10  # Convert mm to cm
+        thickness_gouge_2_list = thickness_gouge_1_list  # Assuming both layers have the same thickness
+        normal_stress_list = mech_data.normal_stress_MPa[sync_peaks[2 * chosen_uw_file]: sync_peaks[2 * chosen_uw_file + 1]].values 
 
+    except TypeError:
+        thickness_gouge_1_list = mech_data.rgt_lt_mm[sync_peaks[2 * chosen_uw_file]: metadata['number_of_waveforms']].values / 10  # Convert mm to cm
+        thickness_gouge_2_list = thickness_gouge_1_list  # Assuming both layers have the same thickness
+        normal_stress_list = mech_data.normal_stress_MPa[sync_peaks[2 * chosen_uw_file]: metadata['number_of_waveforms']].values
+        
     # Initialize previous_min_velocity for the first waveform
     previous_min_velocity = None
 
     # Process each waveform sequentially
-    for idx_waveform, (thickness_gouge_1, thickness_gouge_2) in enumerate(zip(thickness_gouge_1_list[::downsampling], thickness_gouge_2_list[::downsampling])):
+    for idx_waveform, (thickness_gouge_1, thickness_gouge_2, normal_stress) in enumerate(zip(thickness_gouge_1_list[::downsampling], thickness_gouge_2_list[::downsampling], normal_stress_list[::downsampling])):
+        print(f"Layer thickness: {thickness_gouge_1}")
+        print(f"Normal_stress: {normal_stress}")
         idx = idx_waveform * downsampling
-        observed_waveform = data_OBS[idx] - np.mean(data_OBS[idx])
+        observed_waveform = observed_waveform_data[idx] 
 
         # Define the velocity range for this waveform
         if previous_min_velocity is None:
-            # First waveform, use initial velocity range
-            cmin_waveform = cmin
-            cmax_waveform = cmax
+            sure_noise_interval =  np.where(observed_time < fixed_travel_time)
+            good_data_interval = np.where(observed_time > fixed_travel_time)     
+            max_signal = np.amax(observed_waveform[good_data_interval])       
+            max_noise = np.amax(observed_waveform[sure_noise_interval])
+            if max_signal/max_noise < minimum_SNR:
+                print(f"Signal to Noise ratio for waveform {idx_waveform} = {max_signal/max_noise}. Skipped computation")
+                continue
+
+            # First waveform, use initial velocity range, corrected for an empirical depdendence from normal stress
+
+            correction_normal_stress = (1/normal_stress**0.25)*normal_stress**0.25
+            cmin_waveform = cmin * correction_normal_stress
+            cmax_waveform = cmax * correction_normal_stress
             c_step_waveform = c_step
+            print(f"Evaluating shear wave velocity in the interval: {cmin_waveform:4f}-{cmax_waveform:4f}")
         else:
             # For subsequent waveforms, center around previous min velocity
             c_range = 50 * (1e2 / 1e6)  # [cm/μs], adjust as needed
@@ -177,12 +222,8 @@ for chosen_uw_file, infile_path in enumerate(infile_path_list_uw):
             cmax_waveform = previous_min_velocity + c_range
             c_step_waveform = c_step / 2  # Use a smaller step size for better resolution
 
-            # Ensure cmin_waveform and cmax_waveform are within physical limits
-            cmin_waveform = max(cmin_waveform, cmin)
-            cmax_waveform = min(cmax_waveform, cmax)
-
         # DEFINE EVALUATION INTERVAL FOR L2 NORM OF THE RESIDUALS
-        max_travel_time = fixed_travel_time + thickness_gouge_1 / cmin_waveform + thickness_gouge_2 / cmin_waveform
+        max_travel_time = fixed_travel_time + thickness_gouge_1 / cmin_waveform + thickness_gouge_2 / cmin_waveform 
         min_travel_time = fixed_travel_time + thickness_gouge_1 / cmax_waveform + thickness_gouge_2 / cmax_waveform
         misfit_interval = np.where((observed_time > min_travel_time) & (observed_time < max_travel_time + pulse_duration))
 
@@ -221,15 +262,15 @@ for chosen_uw_file, infile_path in enumerate(infile_path_list_uw):
             ) = args
 
             sample_dimensions = [side_block_1, thickness_gouge_1, central_block, thickness_gouge_2, side_block_2]
-            receiver_position = sum(sample_dimensions) - pzt_depth  # [cm] Receiver is in the side_block_2
+            receiver_position = pzt_depth  # [cm] Receiver is in the side_block_2
 
             synthetic_waveform = DDS_UW_simulation(
                 observed_time=observed_time,
                 observed_waveform=observed_waveform,
                 pulse_time=pulse_time,
                 pulse_waveform=pulse_waveform,
-                misfit_interval=misfit_interval,
                 sample_dimensions=sample_dimensions,
+                h_groove=h_groove,
                 frequency_cutoff=frequency_cutoff,
                 transmitter_position=transmitter_position,
                 receiver_position=receiver_position,
@@ -258,6 +299,7 @@ for chosen_uw_file, infile_path in enumerate(infile_path_list_uw):
         results.sort(key=lambda x: x[0])  # Sort by gouge_velocity
         gouge_velocity_list_waveform = np.array([result[0] for result in results])
         L2norm_waveform = np.array([result[1] for result in results])
+        plt.plot(gouge_velocity_list_waveform,L2norm_waveform)
         L2norm_all_waveforms.append(L2norm_waveform)
 
         # Find the gouge_velocity with minimum misfit
@@ -265,6 +307,37 @@ for chosen_uw_file, infile_path in enumerate(infile_path_list_uw):
         previous_min_velocity = gouge_velocity_list_waveform[min_idx]
         estimated_velocities.append(previous_min_velocity)
         print(f"Waveform {idx_waveform}: Minimum misfit at gouge_velocity = {previous_min_velocity:.4f} cm/μs")
+
+        # After finding the best-fit velocity, generate and plot the synthetic waveform
+        best_gouge_velocity = previous_min_velocity
+
+        # Use the same sample_dimensions and positions as before
+        sample_dimensions = [side_block_1, thickness_gouge_1, central_block, thickness_gouge_2, side_block_2]
+        receiver_position = pzt_depth  # [cm] Receiver is in the side_block_2
+
+        # Call DDS_UW_simulation with enable_plotting=True
+        movie_output_path = f"waveform_{idx_waveform}_velocity_{best_gouge_velocity:4f}.mp4"
+        synthetic_waveform = DDS_UW_simulation(
+            observed_time=observed_time,
+            observed_waveform=observed_waveform,
+            pulse_time=pulse_time,
+            pulse_waveform=pulse_waveform,
+            sample_dimensions=sample_dimensions,
+            h_groove=h_groove,
+            frequency_cutoff=frequency_cutoff,
+            transmitter_position=transmitter_position,
+            receiver_position=receiver_position,
+            pzt_layer_width=pzt_layer_width,
+            pmma_layer_width=pmma_layer_width,
+            steel_velocity=steel_velocity,
+            gouge_velocity=best_gouge_velocity,
+            pzt_velocity=pzt_velocity,
+            pmma_velocity=pmma_velocity,
+            normalize_waveform=True,
+            enable_plotting=True,
+            make_movie=False,
+            movie_output_path=movie_output_path)
+
 
     # After processing all waveforms in the current UW file, save the results
     # Save the data using pickle

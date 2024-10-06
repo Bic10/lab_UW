@@ -32,7 +32,7 @@ def make_UW_data(infile_path: str) -> tuple[np.ndarray, dict]:
                     'sampling_rate': sampling_rate,
                     "time_ax_waveform": time_ax_waveform,
                     'number_of_waveforms': corrected_number_of_waveforms,
-                    "acquition_frequency": acquisition_frequency,
+                    "acquisition_frequency": acquisition_frequency,
                     'time_ax_acquisition': time_ax_acquisition}
 
         data = np.array(waveform_list).astype(float)
@@ -106,6 +106,10 @@ def make_infile_path_list(machine_name: str, experiment_name: str, data_type:str
     '''
     code_path = os.getcwd()
     parent_folder = os.path.abspath(os.path.join(code_path, os.pardir))
+    # obrobriosa soluzione tampone per "pareggiare" la profondita del path: questa davvero non posso lasciarla cosi
+    while os.path.basename(parent_folder) != "active_source_implementation":
+        parent_folder = os.path.abspath(os.path.join(parent_folder, os.pardir))
+
     indir_path = os.path.join(parent_folder,"experiments_"+ machine_name, experiment_name, data_type)
 
     infile_path_list = []   
@@ -131,6 +135,8 @@ def make_data_analysis_folders(machine_name: str, experiment_name: str, data_typ
 
     code_path = os.getcwd()
     parent_folder = os.path.abspath(os.path.join(code_path, os.pardir))
+    parent_folder = os.path.abspath(os.path.join(parent_folder, os.pardir))
+
     folder_path = os.path.join(parent_folder,"experiments_"+ machine_name, experiment_name, folder_name)
 
     outdir_path_datas = []
@@ -159,6 +165,8 @@ def make_images_folders(machine_name: str, experiment_name: str, image_types: li
 
     code_path = os.getcwd()
     parent_folder = os.path.abspath(os.path.join(code_path, os.pardir))
+    parent_folder = os.path.abspath(os.path.join(parent_folder, os.pardir))
+
     folder_path = os.path.join(parent_folder,"experiments_"+ machine_name, experiment_name, folder_name)
 
     outdir_path_images = []
@@ -222,13 +230,13 @@ def serialize_value(value):
     elif isinstance(value, (np.int_, np.intc, np.intp, np.int8, np.int16, np.int32, np.int64,
                              np.uint8, np.uint16, np.uint32, np.uint64)):
         return int(value)
-    elif isinstance(value, (np.float_, np.float16, np.float32, np.float64)):
+    elif isinstance(value, (np.float16, np.float32, np.float64)):
         return float(value)
-    elif isinstance(value, (np.complex_, np.complex64, np.complex128)):
+    elif isinstance(value, (np.complex64, np.complex128)):
         return {"real": value.real, "imag": value.imag}
     elif isinstance(value, np.bool_):
         return bool(value)
-    elif isinstance(value, (np.str_, np.string_)):
+    elif isinstance(value, (np.str_, np.bytes_)):
         return str(value)
     elif isinstance(value, (np.void)):
         return None

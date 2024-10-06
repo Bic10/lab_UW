@@ -42,20 +42,41 @@ def find_sync_values(mech_data_path):
 frequency_cutoff = 2  # [MHz] maximum frequency of the data we want to reproduce
 
 # Constants throughout the entire experiment
-side_block_1 = 2           # [cm] width of first side block
-side_block_2 = 2           # [cm] width of second side block
-central_block = 4.8        # [cm] width of central block
-pzt_layer_width = 0.1      # [cm] piezoelectric transducer width
-pmma_layer_width = 0.1     # [cm] PMMA layer width
-steel_velocity = 3374 * (1e2 / 1e6)  # [cm/μs] steel shear wave velocity
-pzt_velocity = 2000 * (1e2 / 1e6)    # [cm/μs] PZT shear wave velocity
-pmma_velocity = 0.4 * 0.1392         # [cm/μs] PMMA layer velocity
+h_groove = 0.1                      # [cm] height of blocks grooves
+side_block_1_total = 2.1            # [cm] width of first side block, including groove
+side_block_2_total = 2.1            # [cm] width of second side block, including groove
+central_block_total = 5.0           # [cm] width of central block, including grooves on both sides
+pzt_layer_width = 0.1               # [cm] piezoelectric transducer width
+pmma_layer_width = 0.1              # [cm] PMMA supporting the PZT
+steel_velocity = 3374 * (1e2 / 1e6) # [cm/μs] steel shear wave velocity
+pzt_velocity = 2000 * (1e2 / 1e6)   # [cm/μs] PZT shear wave velocity
+pmma_velocity = 0.4 * 0.1392        # [cm/μs] PMMA supporting the PZT
 
 # Fixed travel time through constant sample dimensions
-pzt_depth = 1        # [cm] Position of the PZT with respect to the external side of the block
-transmitter_position = pzt_depth    # [cm] Position of the transmitter from the beginning of the sample
+pzt_depth = 1.0  # [cm] Depth from the external edge of the side block to the PZT layer
 
-fixed_travel_time = 2 * (side_block_1 - transmitter_position + central_block) / steel_velocity  # travel time of direct wave into the blocks
+# Positions of transmitter and receiver (measured from the external edge of Side Block 1)
+x_transmitter = pzt_depth
+
+# Note: The receiver position will be updated in the loop as sample dimensions change
+# For the initial fixed travel time calculation, we'll use initial gouge thicknesses
+initial_thickness_gouge = 0.5  # [cm], example initial thickness
+
+# Compute initial receiver position (will be updated in the loop)
+x_receiver_initial = (
+    side_block_1_total
+    + initial_thickness_gouge
+    + central_block_total
+    + initial_thickness_gouge
+    + side_block_2_total
+    - pzt_depth
+)
+
+# Fixed travel time through constant sample dimensions (excluding variable gouge thicknesses)
+fixed_travel_time = (
+    (2 * (side_block_1_total - h_groove - pzt_depth))
+    + (central_block_total - 2 * h_groove)
+) / steel_velocity
 
 ## GET OBSERVED DATA
 
@@ -89,20 +110,6 @@ infile_path_list_mech = make_infile_path_list(machine_name, experiment_name, dat
 mech_data_path = find_mechanical_data(infile_path_list_mech, sync_file_pattern)
 mech_data, sync_data, sync_peaks = find_sync_values(mech_data_path)
 
-# Manually picked sync peaks for plotting purposes
-if experiment_name == "s0108":
-    steps_carrara = [5582, 8698, 15050, 17990, 22000, 23180, 36229, 39391, 87940, 89744,
-                     126306, 128395, 134000, 135574, 169100, 172600, 220980, 223000,
-                     259432, 261425, 266429, 268647, 279733, 282787, 331437, 333778,
-                     369610, 374824]
-    sync_peaks = steps_carrara
-
-elif experiment_name == "s0103":
-    steps_mont = [4833, 8929, 15166, 18100, 22188, 23495, 36297, 39000, 87352, 89959,
-                  154601, 156625, 162000, 165000, 168705, 170490, 182000, 184900,
-                  233364, 235558, 411811, 462252]
-    sync_peaks = steps_mont
-
 # MAKE UW PATH LIST (Only once)
 infile_path_list_uw = sorted(make_infile_path_list(machine_name, experiment_name, data_type=data_type_uw))
 
@@ -112,6 +119,9 @@ print(f"The inversion results will be saved at path:\n\t {outdir_path_l2norm[0]}
 
 # Initialize variables to store results
 estimated_models = []     # To store the estimated velocity models for each waveform
+idx_dict_previous = None  # To store indices from the previous waveform
+spatial_axis_previous = None  # To store spatial axis from the previous waveform
+velocity_model_previous = None  # To store velocity model from the previous waveform
 
 # Main Loop Over UW Files
 for chosen_uw_file, infile_path in enumerate(infile_path_list_uw):
@@ -128,7 +138,7 @@ for chosen_uw_file, infile_path in enumerate(infile_path_list_uw):
     observed_time = metadata['time_ax_waveform']
 
     # Homogeneous velocity model stored using global_optimization_velocity_homogeneous.py
-    initial_velocity_guess = 800 * (1e2 / 1e6)  # [cm/μs], initial guess for gouge velocity
+    initial_velocity_guess = 750 * (1e2 / 1e6)  # [cm/μs], initial guess for gouge velocity
     c_range = 100 * (1e2 / 1e6)  # [cm/μs], adjust as needed
     cmin_waveform = initial_velocity_guess - c_range
     cmax_waveform = initial_velocity_guess + c_range
@@ -162,53 +172,93 @@ for chosen_uw_file, infile_path in enumerate(infile_path_list_uw):
         idx = idx_waveform * downsampling
         observed_waveform = observed_waveform_data[idx] - np.mean(observed_waveform_data[idx])
 
-        # Adjust receiver position based on current sample dimensions
-        sample_dimensions = [side_block_1, thickness_gouge_1, central_block, thickness_gouge_2, side_block_2]
-        receiver_position = sum(sample_dimensions) - pzt_depth
+        # Adjust sample dimensions based on current gouge thicknesses
+        sample_dimensions = [side_block_1_total, thickness_gouge_1, central_block_total, thickness_gouge_2, side_block_2_total]
+
+        # Compute receiver position based on current sample dimensions
+        x_receiver = (
+            side_block_1_total
+            + thickness_gouge_1
+            + central_block_total
+            + thickness_gouge_2
+            + side_block_2_total
+            - pzt_depth
+        )
 
         # DEFINE EVALUATION INTERVAL FOR L2 NORM OF THE RESIDUALS
-        max_travel_time = fixed_travel_time + thickness_gouge_1 / cmin_waveform + thickness_gouge_2 / cmin_waveform
-        min_travel_time = fixed_travel_time + thickness_gouge_1 / cmax_waveform + thickness_gouge_2 / cmax_waveform
+        max_travel_time = fixed_travel_time + (thickness_gouge_1 + thickness_gouge_2) / cmin_waveform
+        min_travel_time = fixed_travel_time + (thickness_gouge_1 + thickness_gouge_2) / cmax_waveform
         misfit_interval = np.where((observed_time > min_travel_time) & (observed_time < max_travel_time + pulse_duration))
+
+        # Compute the start and end positions for the grid to exclude air regions
+        # Start at the beginning of PMMA layer on Side Block 1
+        x_start = x_transmitter - pmma_layer_width - pzt_layer_width
+        # End at the end of PMMA layer on Side Block 2
+        x_end = x_receiver + pzt_layer_width + pmma_layer_width
 
         # Initialize the velocity model
         if idx_waveform == 0:
-            # First waveform: use homogeneous velocity model stored using global_optimization_velocity_homogeneous.py
+            # First waveform: use homogeneous velocity model
             gouge_velocity_initial = initial_velocity_guess
             # Build initial velocity model
-            spatial_axis, delta_x, num_x = compute_grid(sample_dimensions, gouge_velocity_initial, frequency_cutoff)
-            velocity_model, idx_gouge_1, idx_gouge_2, idx_pzt_1, idx_pzt_2 = build_velocity_model(
-                spatial_axis,
-                sample_dimensions,
-                transmitter_position,
-                receiver_position,
-                pzt_layer_width,
-                pmma_layer_width,
-                steel_velocity,
-                gouge_velocity_initial,
-                pzt_velocity,
-                pmma_velocity,
+            spatial_axis, delta_x, num_x = compute_grid(sample_dimensions, gouge_velocity_initial, frequency_cutoff, x_start, x_end)
+            velocity_model, idx_dict = build_velocity_model(
+                x=spatial_axis,
+                sample_dimensions=sample_dimensions,
+                h_groove=h_groove,
+                x_start=x_start,
+                x_transmitter=x_transmitter,
+                x_receiver=x_receiver,
+                pzt_layer_width=pzt_layer_width,
+                pmma_layer_width=pmma_layer_width,
+                steel_velocity=steel_velocity,
+                gouge_velocity=gouge_velocity_initial,
+                pzt_velocity=pzt_velocity,
+                pmma_velocity=pmma_velocity,
                 plotting=False)
+            # Save indices and spatial axis for future use
+            idx_dict_previous = idx_dict.copy()
+            spatial_axis_previous = spatial_axis.copy()
         else:
             # Subsequent waveforms: use updated velocity model from previous waveform
             # Adjust sample_dimensions if thicknesses have changed
-            spatial_axis, delta_x, num_x = compute_grid(sample_dimensions, gouge_velocity_initial, frequency_cutoff)
-            # Rebuild indices for gouge layers
-            velocity_model, idx_gouge_1, idx_gouge_2, idx_pzt_1, idx_pzt_2 = build_velocity_model(
-                spatial_axis,
-                sample_dimensions,
-                transmitter_position,
-                receiver_position,
-                pzt_layer_width,
-                pmma_layer_width,
-                steel_velocity,
-                gouge_velocity_initial,
-                pzt_velocity,
-                pmma_velocity,
+            spatial_axis, delta_x, num_x = compute_grid(sample_dimensions, gouge_velocity_initial, frequency_cutoff, x_start, x_end)
+
+            # Build initial velocity model with initial guess in gouge regions
+            velocity_model, idx_dict = build_velocity_model(
+                x=spatial_axis,
+                sample_dimensions=sample_dimensions,
+                h_groove=h_groove,
+                x_start=x_start,
+                x_transmitter=x_transmitter,
+                x_receiver=x_receiver,
+                pzt_layer_width=pzt_layer_width,
+                pmma_layer_width=pmma_layer_width,
+                steel_velocity=steel_velocity,
+                gouge_velocity=gouge_velocity_initial,  # Initial guess
+                pzt_velocity=pzt_velocity,
+                pmma_velocity=pmma_velocity,
                 plotting=False)
-            # Copy over the updated velocities in gouge layers
-            velocity_model[idx_gouge_1] = velocity_model_previous[idx_gouge_1]
-            velocity_model[idx_gouge_2] = velocity_model_previous[idx_gouge_2]
+
+            # Interpolate previous velocities onto current gouge regions
+            # Gouge Layer 1
+            x_prev_gouge_1 = spatial_axis_previous[idx_dict_previous['gouge_1']]
+            v_prev_gouge_1 = velocity_model_previous[idx_dict_previous['gouge_1']]
+            x_current_gouge_1 = spatial_axis[idx_dict['gouge_1']]
+            v_current_gouge_1 = np.interp(x_current_gouge_1, x_prev_gouge_1, v_prev_gouge_1)
+            # Gouge Layer 2
+            x_prev_gouge_2 = spatial_axis_previous[idx_dict_previous['gouge_2']]
+            v_prev_gouge_2 = velocity_model_previous[idx_dict_previous['gouge_2']]
+            x_current_gouge_2 = spatial_axis[idx_dict['gouge_2']]
+            v_current_gouge_2 = np.interp(x_current_gouge_2, x_prev_gouge_2, v_prev_gouge_2)
+
+            # Update the velocity model with the interpolated velocities
+            velocity_model[idx_dict['gouge_1']] = v_current_gouge_1
+            velocity_model[idx_dict['gouge_2']] = v_current_gouge_2
+
+            # Save indices and spatial axis for future use
+            idx_dict_previous = idx_dict.copy()
+            spatial_axis_previous = spatial_axis.copy()
 
         # Initialize time variables
         simulation_time, delta_t, num_t = prepare_time_variables(observed_time, delta_x, steel_velocity)
@@ -217,12 +267,23 @@ for chosen_uw_file, infile_path in enumerate(infile_path_list_uw):
         src_time_function = np.zeros(len(simulation_time))
         src_time_function[:np.size(interpolated_pulse)] = interpolated_pulse
 
-        # Generate source and receiver spatial functions
-        isx = np.argmin(np.abs(spatial_axis - transmitter_position))
-        irx = np.argmin(np.abs(spatial_axis - receiver_position))
-        sigma = pzt_layer_width / 100  # Must study the spatial distribution
-        src_spatial_function = synthetic_source_spatial_function(spatial_axis, isx, sigma=sigma, plotting=False)
-        rec_spatial_function = synthetic_source_spatial_function(spatial_axis, irx, sigma=sigma, plotting=False)
+        # Create source and receiver spatial functions
+        # Adjust positions for the grid starting at x_start
+        transmitter_position_in_grid = x_transmitter - x_start
+        receiver_position_in_grid = x_receiver - x_start
+
+        src_spatial_function = arbitrary_position_filter(
+            spatial_axis=spatial_axis,
+            dx=delta_x,
+            position=transmitter_position_in_grid,
+            radius=10
+        )
+        rec_spatial_function = arbitrary_position_filter(
+            spatial_axis=spatial_axis,
+            dx=delta_x,
+            position=receiver_position_in_grid,
+            radius=10
+        )
 
         # Number of FWI iterations: NEED A BETTER STOPPING CRITERION
         n_iterations = 10
@@ -230,8 +291,8 @@ for chosen_uw_file, infile_path in enumerate(infile_path_list_uw):
         for iteration in range(n_iterations):
             print(f"Waveform {idx_waveform}, Iteration {iteration+1}/{n_iterations}")
 
-            # Forward modeling
-            wavefield_forward = pseudospectral_1D(
+            # Forward modeling with derivative computation
+            wavefield_forward, derivative_wavefield_forward = pseudospectral_1D(
                 num_x=num_x,
                 delta_x=delta_x,
                 num_t=num_t,
@@ -239,8 +300,7 @@ for chosen_uw_file, infile_path in enumerate(infile_path_list_uw):
                 source_spatial=src_spatial_function,
                 source_time=src_time_function,
                 velocity_model=velocity_model,
-                compute_derivative=False,
-                reverse_time=False
+                compute_derivative=True,
             )
 
             # Synthetic data at receiver
@@ -255,7 +315,7 @@ for chosen_uw_file, infile_path in enumerate(infile_path_list_uw):
 
             # Prepare adjoint source: residuals at receiver location, reverse time
             residual_interp = np.interp(simulation_time, observed_time, residual)
-            adj_src_time_function = residual_interp[::-1]  # Reverse time
+            adj_src_time_function = 2 * residual_interp[::-1]  # Reverse time
             adj_src_spatial_function = rec_spatial_function
 
             # Adjoint modeling
@@ -268,32 +328,50 @@ for chosen_uw_file, infile_path in enumerate(infile_path_list_uw):
                 source_time=adj_src_time_function,
                 velocity_model=velocity_model,
                 compute_derivative=False,
-                reverse_time=True
             )
 
-            # Compute spatial derivatives of forward and adjoint wavefields
-            du_dx = np.gradient(wavefield_forward, axis=1) / delta_x
-            dlam_dx = np.gradient(wavefield_adjoint, axis=1) / delta_x
+            # Compute gradient using vectorized operations
+            # Ensure that wavefield arrays are of shape (num_t, num_x)
 
-            # Compute gradient
-            gradient = np.zeros(num_x)
-            for ix in range(num_x):
-                gradient[ix] = -2 * velocity_model[ix] * np.sum(du_dx[:, ix] * dlam_dx[:, ix]) * delta_t
+            # Compute the element-wise product over all time steps and spatial points
+            print(f"velocity model: {velocity_model.shape}\nadjoint: {wavefield_adjoint.shape}\nDerivative: {derivative_wavefield_forward.shape}")
+            product = (2 / (velocity_model ** 3)) * wavefield_adjoint * derivative_wavefield_forward  # Shape: (num_t, num_x)
+
+            # Integrate over time (sum over the time axis)
+            gradient = np.sum(product, axis=0) * delta_t  # Shape: (num_x,)
 
             # Apply gradient only to gouge layers
             gradient_update = np.zeros(num_x)
-            gradient_update[idx_gouge_1] = gradient[idx_gouge_1]
-            gradient_update[idx_gouge_2] = gradient[idx_gouge_2]
+            gradient_update[idx_dict['gouge_1']] = gradient[idx_dict['gouge_1']]
+            gradient_update[idx_dict['gouge_2']] = gradient[idx_dict['gouge_2']]
 
             # Update velocity model
             step_length = 10 * (1e2 / 1e6)  # Adjust as needed
             velocity_model -= step_length * gradient_update
 
-            # Ensure velocities in steel blocks and PZT layers remain constant
-            velocity_model[idx_pzt_1] = pzt_velocity
-            velocity_model[idx_pzt_2] = pzt_velocity
-            non_gouge_indices = ~np.isin(np.arange(num_x), np.concatenate((idx_gouge_1, idx_gouge_2, idx_pzt_1, idx_pzt_2)))
-            velocity_model[non_gouge_indices] = steel_velocity
+            # Reassign velocities in all regions except the gouge layers
+            # Set velocities in PZT layers
+            velocity_model[idx_dict['pzt_1']] = pzt_velocity
+            velocity_model[idx_dict['pzt_2']] = pzt_velocity
+
+            # Set velocities in PMMA layers
+            velocity_model[idx_dict['pmma_1']] = pmma_velocity
+            velocity_model[idx_dict['pmma_2']] = pmma_velocity
+
+            # Set velocities in steel regions
+            steel_indices = np.concatenate((
+                idx_dict['side_block_1'],
+                idx_dict['central_block'],
+                idx_dict['side_block_2']
+            ))
+            velocity_model[steel_indices] = steel_velocity
+
+            # Set velocities in grooves
+            groove_velocity = 0.5 * (gouge_velocity_initial + steel_velocity)
+            velocity_model[idx_dict['groove_sb1']] = groove_velocity
+            velocity_model[idx_dict['groove_sb2']] = groove_velocity
+            velocity_model[idx_dict['groove_cb1']] = groove_velocity
+            velocity_model[idx_dict['groove_cb2']] = groove_velocity
 
             # Optionally, plot the velocity model
             plt.figure()
@@ -307,6 +385,7 @@ for chosen_uw_file, infile_path in enumerate(infile_path_list_uw):
             misfit = 0.5 * np.sum(residual ** 2)
             print(f"Misfit: {misfit}")
 
+        # After inversion iterations, before moving to the next waveform
         # Save updated velocity model for use in next waveform
         velocity_model_previous = velocity_model.copy()
 
