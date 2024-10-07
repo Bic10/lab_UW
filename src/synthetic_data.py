@@ -32,7 +32,8 @@ def build_velocity_model(
     x_receiver: float,
     pzt_layer_width: float,
     pmma_layer_width: float,
-    h_groove: float,
+    h_groove_side: float,
+    h_groove_central: float,
     steel_velocity: float,
     gouge_velocity: Union[float, np.ndarray],
     pzt_velocity: float,
@@ -83,22 +84,22 @@ def build_velocity_model(
     side_block_1_total, gouge_1, central_block_total, gouge_2, side_block_2_total = sample_dimensions
 
     # Adjust block lengths to exclude groove heights
-    side_block_1 = side_block_1_total - h_groove
-    side_block_2 = side_block_2_total - h_groove
-    central_block = central_block_total - 2 * h_groove  # Subtract grooves on both sides
+    side_block_1 = side_block_1_total - h_groove_side
+    side_block_2 = side_block_2_total - h_groove_side
+    central_block = central_block_total - 2 * h_groove_central  # Subtract grooves on both sides
 
     # Compute cumulative positions along the sample
     layer_thicknesses = [
         pmma_layer_width,
         pzt_layer_width,
         side_block_1 - x_transmitter,
-        h_groove,
+        h_groove_side,
         gouge_1,
-        h_groove,
+        h_groove_central,
         central_block,
-        h_groove,
+        h_groove_central,
         gouge_2,
-        h_groove,
+        h_groove_side,
         side_block_2 - x_receiver,
         pzt_layer_width,
         pmma_layer_width

@@ -6,6 +6,10 @@ from plotting import plot_simulation_waveform
 from typing import Union
 from scipy.signal.windows import kaiser
 
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+from matplotlib.patches import Rectangle
+
 from helpers import *
 from synthetic_data import *
 
@@ -16,7 +20,8 @@ def DDS_UW_simulation(
     pulse_time: np.ndarray,
     pulse_waveform: np.ndarray,
     sample_dimensions: tuple,
-    h_groove: float,
+    h_groove_side: float,
+    h_groove_central: float,
     frequency_cutoff: float,
     transmitter_position: float,
     receiver_position: float,
@@ -26,6 +31,7 @@ def DDS_UW_simulation(
     gouge_velocity: Union[float, np.ndarray],
     pzt_velocity: float,
     pmma_velocity: float,
+    misfit_interval: float,
     normalize_waveform: bool = True,
     enable_plotting: bool = False,
     make_movie: bool = False,
@@ -52,7 +58,8 @@ def DDS_UW_simulation(
     velocity_model, idx_dict = build_velocity_model(
         x=spatial_axis,
         sample_dimensions=sample_dimensions,
-        h_groove=h_groove,
+        h_groove_side=h_groove_side,
+        h_groove_central=h_groove_central,
         x_transmitter=transmitter_position,
         x_receiver=receiver_position,
         pzt_layer_width=pzt_layer_width,
@@ -82,7 +89,7 @@ def DDS_UW_simulation(
 
     # Create source and receiver spatial functions
     # For the way the spatial axis is created now and the positions are passed, the transmitter and the receiver are a bit tricki
-    transmitter_position_respect_to_spatial_axis = 0.5*pzt_layer_width + pmma_layer_width
+    transmitter_position_respect_to_spatial_axis = pzt_layer_width + pmma_layer_width
     src_spatial_function = arbitrary_position_filter(
         spatial_axis=spatial_axis,
         dx=dx,
@@ -90,7 +97,7 @@ def DDS_UW_simulation(
         radius=10
     )
     # since we already use the receiver_position to build the grid, its place is just at the edge between pzt and block...
-    receiver_position_respect_to_spatial_axis = total_length - 0.5*pzt_layer_width - pmma_layer_width
+    receiver_position_respect_to_spatial_axis = total_length - pzt_layer_width - pmma_layer_width
 
     rec_spatial_function = arbitrary_position_filter(
         spatial_axis=spatial_axis,
@@ -122,7 +129,7 @@ def DDS_UW_simulation(
     synthetic_waveform = np.interp(observed_time, simulation_time, simulated_waveform)
 
     if enable_plotting:
-        plot_simulation_waveform(observed_time, synthetic_waveform, observed_waveform)
+        plot_simulation_waveform(observed_time, synthetic_waveform, observed_waveform, misfit_interval)
         # plt.figure()
         # plt.plot(src_time_function)
         # plt.title("Source Time Function")
@@ -130,10 +137,10 @@ def DDS_UW_simulation(
         # plt.ylabel("Amplitude")
         # plt.show()
 
-        plt.figure()
-        plt.plot(spatial_axis,src_spatial_function)
-        plt.plot(spatial_axis,rec_spatial_function)
-        plt.show()
+        # plt.figure()
+        # plt.plot(spatial_axis,src_spatial_function)
+        # plt.plot(spatial_axis,rec_spatial_function)
+        # plt.show()
 
     if make_movie:
         # Create and save the movie using the simulation outputs
@@ -333,16 +340,6 @@ def arbitrary_position_filter(
 
     return windowed_sinc
 
-
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.animation as animation
-from matplotlib.patches import Rectangle
-
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.animation as animation
-from matplotlib.patches import Rectangle
 
 def make_movie_from_simulation(
     outfile_path: str,

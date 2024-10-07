@@ -271,10 +271,12 @@ def wavelet_selection_plot(time: np.ndarray, waveform: np.ndarray, ratio: np.nda
 
     output_path_choice(plot=plt, outfile_path=outfile_path, format=settings['format'])
 
-def plot_simulation_waveform(t, sp_simulated, sp_recorded, settings=default_settings):
+def plot_simulation_waveform(t, sp_simulated, sp_recorded, misfit_interval, settings=default_settings):
     ax = plt.gca()
     ax.plot(t, sp_recorded, label="UW recorded", color=settings['colors']['khaki'], linewidth=settings['line_width'])
     ax.plot(t, sp_simulated, label="UW simulated", color=settings['colors']['black_olive'], linewidth=settings['line_width'])
+    ax.axvspan(misfit_interval[0],misfit_interval[-1], color= settings['colors']['dutch_white'], alpha=0.5)
+    ax.text(28, -45, 'Theorical Travel\nTime Range', ha='left', fontsize=20, color= settings['colors']['darkslategray'])
     ax.set_title("Ultrasonic Wave Simulation", fontsize=settings['fontsize_title'])
     ax.set_xlabel("Time", fontsize=settings['fontsize_labels'])
     ax.set_ylabel("Amplitude", fontsize=settings['fontsize_labels'])
