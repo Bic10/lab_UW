@@ -134,8 +134,11 @@ def make_data_analysis_folders(machine_name: str, experiment_name: str, data_typ
     folder_name = "data_analysis"
 
     code_path = os.getcwd()
+
     parent_folder = os.path.abspath(os.path.join(code_path, os.pardir))
-    parent_folder = os.path.abspath(os.path.join(parent_folder, os.pardir))
+    # obrobriosa soluzione tampone per "pareggiare" la profondita del path: questa davvero non posso lasciarla cosi
+    while os.path.basename(parent_folder) != "active_source_implementation":
+        parent_folder = os.path.abspath(os.path.join(parent_folder, os.pardir))
 
     folder_path = os.path.join(parent_folder,"experiments_"+ machine_name, experiment_name, folder_name)
 

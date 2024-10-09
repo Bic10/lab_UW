@@ -40,50 +40,39 @@ def find_sync_values(mech_data_path):
 
 # General Parameters and Constants
 frequency_cutoff = 2  # [MHz] maximum frequency of the data we want to reproduce
+minimum_SNR = 4       # the minimum signal to noise ratio acceted to start computation
 
 # Constants throughout the entire experiment
-h_groove = 0.1                      # [cm] height of blocks grooves
-side_block_1_total = 2.1            # [cm] width of first side block, including groove
-side_block_2_total = 2.1            # [cm] width of second side block, including groove
-central_block_total = 5.0           # [cm] width of central block, including grooves on both sides
+side_block_1 = 2.93                 # [cm] width of first side block, with grooves
+side_block_2 = 2.93                 # [cm] width of second side block with grooves
+h_groove_side = 0.059                # [cm] hight of blocks grooves
+central_block = 4.88                # [cm] width of central block, with grooves
+h_groove_central = 0.096             # [cm] hight of blocks grooves
 pzt_layer_width = 0.1               # [cm] piezoelectric transducer width
-pmma_layer_width = 0.1              # [cm] PMMA supporting the PZT
+pmma_layer_width = 0.               # [cm] pmma supporting the PZT: in this blocks there are not
 steel_velocity = 3374 * (1e2 / 1e6) # [cm/μs] steel shear wave velocity
 pzt_velocity = 2000 * (1e2 / 1e6)   # [cm/μs] PZT shear wave velocity
-pmma_velocity = 0.4 * 0.1392        # [cm/μs] PMMA supporting the PZT
+pmma_velocity = 0.4 * 0.1392        # [cm/μs] pmmate supporting the PZT
+
+# Initial guessed velocity model of the sample: literature range for gouge at atmospheric preassure
+cmin = 300 * (1e2 / 1e6)        
+cmax = 600 * (1e2 / 1e6) 
+c_step = 10 * (1e2 / 1e6)
+initial_gouge_velocity_list = np.arange(cmin, cmax, c_step)  # Initial velocity range to test
 
 # Fixed travel time through constant sample dimensions
-pzt_depth = 1.0  # [cm] Depth from the external edge of the side block to the PZT layer
+pzt2grove = 1.71        # [cm] distance between the PZT and the top of the groves
+pzt_depth = side_block_1-pzt2grove        # [cm] Position of the PZT with respect to the external side of the block
+transmitter_position = pzt_depth    # [cm] Position of the transmitter from the beginning of the sample
 
-# Positions of transmitter and receiver (measured from the external edge of Side Block 1)
-x_transmitter = pzt_depth
-
-# Note: The receiver position will be updated in the loop as sample dimensions change
-# For the initial fixed travel time calculation, we'll use initial gouge thicknesses
-initial_thickness_gouge = 0.5  # [cm], example initial thickness
-
-# Compute initial receiver position (will be updated in the loop)
-x_receiver_initial = (
-    side_block_1_total
-    + initial_thickness_gouge
-    + central_block_total
-    + initial_thickness_gouge
-    + side_block_2_total
-    - pzt_depth
-)
-
-# Fixed travel time through constant sample dimensions (excluding variable gouge thicknesses)
-fixed_travel_time = (
-    (2 * (side_block_1_total - h_groove - pzt_depth))
-    + (central_block_total - 2 * h_groove)
-) / steel_velocity
+fixed_travel_time = (2 * (side_block_1 - transmitter_position) + central_block - 2*h_groove_side - 2*h_groove_central) / steel_velocity  # travel time of direct wave into the blocks
 
 ## GET OBSERVED DATA
 
 # Load and process the pulse waveform: it is going to be our time source function
 machine_name_pulse = "on_bench"
 experiment_name_pulse = "glued_pzt"
-data_type_pulse = "data_analysis/wavelets_from_glued_pzt"
+data_type_pulse = "data_analysis/wavelets_from_PIS1_PIS2_glued_250ns"
 infile_path_list_pulse = make_infile_path_list(machine_name=machine_name_pulse, experiment_name=experiment_name_pulse, data_type=data_type_pulse)
 
 # Assuming only one pulse is used, we can load it outside the loop
@@ -92,6 +81,8 @@ pulse_waveform, pulse_metadata = load_waveform_json(pulse_path)
 pulse_time = pulse_metadata['time_ax_waveform']
 pulse_waveform, _ = signal2noise_separation_lowpass(pulse_waveform, pulse_metadata, freq_cut=frequency_cutoff)
 pulse_waveform = pulse_waveform - pulse_waveform[0]  # Make the pulse start from zero
+plt.plot(pulse_time,pulse_waveform)
+plt.show()
 
 dt_pulse = pulse_time[1] - pulse_time[0]
 pulse_duration = pulse_time[-1] - pulse_time[0]
@@ -100,15 +91,23 @@ pulse_duration = pulse_time[-1] - pulse_time[0]
 
 # DATA FOLDERS
 machine_name = "Brava_2"
-experiment_name = "s0108"
-data_type_uw = 'data_tsv_files'
+experiment_name = "s0176"
+data_type_uw = 'data_tsv_files_sv1_sv2_only'
 data_type_mech = 'mechanical_data'
 sync_file_pattern = '*s*_data_rp'  # Pattern to find specific experiment in mechanical data
 
 # LOAD MECHANICAL DATA (Only once)
 infile_path_list_mech = make_infile_path_list(machine_name, experiment_name, data_type=data_type_mech)
 mech_data_path = find_mechanical_data(infile_path_list_mech, sync_file_pattern)
-mech_data, sync_data, sync_peaks = find_sync_values(mech_data_path)
+mech_data = pd.read_csv(mech_data_path, sep='\t', skiprows=[1])
+sync_data, sync_peaks = find_sync_values(mech_data)
+
+if sync_peaks is None:
+    # add synchronization manually!
+    # Il sistema di Biche segna inizio e fine della sincronizzazione. Io qua ho segnato solo l'iniizo della registrazione
+    # Per far funzionare il codice seguente, lascio "None" agli indici corrispondenti alla fine delle registrazioni e li
+    # contero' utilizzando il numero di onde totali registrate
+    sync_peaks = [2389,None,5273,None, 523455,None,801825,None, 1056935,None,127865,None,1396245]
 
 # MAKE UW PATH LIST (Only once)
 infile_path_list_uw = sorted(make_infile_path_list(machine_name, experiment_name, data_type=data_type_uw))
@@ -201,7 +200,8 @@ for chosen_uw_file, infile_path in enumerate(infile_path_list_uw):
             # First waveform: use homogeneous velocity model
             gouge_velocity_initial = initial_velocity_guess
             # Build initial velocity model
-            spatial_axis, delta_x, num_x = compute_grid(sample_dimensions, gouge_velocity_initial, frequency_cutoff, x_start, x_end)
+            spatial_axis, delta_x, num_x = compute_grid(
+                sample_dimensions, gouge_velocity_initial, frequency_cutoff, x_start, x_end)
             velocity_model, idx_dict = build_velocity_model(
                 x=spatial_axis,
                 sample_dimensions=sample_dimensions,

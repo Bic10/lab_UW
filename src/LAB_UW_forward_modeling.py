@@ -2,16 +2,12 @@
 
 import numpy as np
 from numpy import linalg as LA
-from plotting import plot_simulation_waveform
 from typing import Union
 from scipy.signal.windows import kaiser
 
-import matplotlib.pyplot as plt
-import matplotlib.animation as animation
-from matplotlib.patches import Rectangle
-
 from helpers import *
 from synthetic_data import *
+from plotting import *
 
 
 def DDS_UW_simulation(
@@ -28,15 +24,15 @@ def DDS_UW_simulation(
     pzt_layer_width: float,
     pmma_layer_width: float,
     steel_velocity: float,
-    gouge_velocity: Union[float, np.ndarray],
+    gouge_velocity: Union[Tuple[float, float], Tuple[np.ndarray, np.ndarray]],
     pzt_velocity: float,
     pmma_velocity: float,
     misfit_interval: float,
     normalize_waveform: bool = True,
     enable_plotting: bool = False,
     make_movie: bool = False,
-    movie_settings: dict = None,
-    movie_output_path: str = "DDS_simulation_movie.mp4"
+    plot_output_path: str = None,
+    movie_output_path: str = None
 ) -> np.ndarray:
     """
     Simulate ultrasonic wave propagation through a sample and compute the synthetic waveform.
@@ -47,10 +43,15 @@ def DDS_UW_simulation(
     # the trasmitter and receiver position should be passed as their "pzt_depth" respect to the external edge of their block
     total_length = np.sum(sample_dimensions) + 2*pmma_layer_width + 2*pzt_layer_width -  (transmitter_position + receiver_position)
 
+    (gouge_velocity_1,gouge_velocity_2) = gouge_velocity
+    min_velocity_1 = np.amin(gouge_velocity_1)
+    min_velocity_2 = np.amin(gouge_velocity_2)
+    min_velocity = min(min_velocity_1,min_velocity_2)
+
     # Cread grid according to numerical dispersion criteria for minimum wavelength
     spatial_axis, dx, num_x = compute_grid(
         total_length_to_simulate = total_length,
-        min_velocity=gouge_velocity,
+        min_velocity = min_velocity,
         frequency_cutoff=frequency_cutoff,
     )
 
@@ -65,10 +66,10 @@ def DDS_UW_simulation(
         pzt_layer_width=pzt_layer_width,
         pmma_layer_width=pmma_layer_width,
         steel_velocity=steel_velocity,
-        gouge_velocity=gouge_velocity,
+        gouge_velocity=(gouge_velocity_1,gouge_velocity_2),
         pzt_velocity=pzt_velocity,
         pmma_velocity=pmma_velocity,
-        plotting=enable_plotting
+        plotting=False
     )
 
     # Prepare time variables
@@ -89,23 +90,48 @@ def DDS_UW_simulation(
 
     # Create source and receiver spatial functions
     # For the way the spatial axis is created now and the positions are passed, the transmitter and the receiver are a bit tricki
-    transmitter_position_respect_to_spatial_axis = pzt_layer_width + pmma_layer_width
+    transmitter_position_respect_to_spatial_axis =  0.8*pzt_layer_width + pmma_layer_width
+    radius_transmitter = 2*len(idx_dict['pzt_1'])
     src_spatial_function = arbitrary_position_filter(
         spatial_axis=spatial_axis,
         dx=dx,
         position=transmitter_position_respect_to_spatial_axis,
-        radius=10
+        flip_side=None,
+        radius=radius_transmitter
     )
     # since we already use the receiver_position to build the grid, its place is just at the edge between pzt and block...
-    receiver_position_respect_to_spatial_axis = total_length - pzt_layer_width - pmma_layer_width
+    receiver_position_respect_to_spatial_axis = total_length - 0.8*pzt_layer_width - pmma_layer_width 
 
+    radius_receiver = 2*len(idx_dict['pzt_2'])
     rec_spatial_function = arbitrary_position_filter(
-        spatial_axis=spatial_axis,
-        dx=dx,
-        position=receiver_position_respect_to_spatial_axis,
-        radius=10
-    )
+                                            spatial_axis=spatial_axis,
+                                            dx=dx,
+                                            position=receiver_position_respect_to_spatial_axis,
+                                            flip_side=None,
+                                            radius=radius_receiver
+                                        )
 
+# Compute the source and receiver spatial functions using a Gaussian
+    # sigma_source = 0.5*pzt_layer_width  # Choose sigma as a few times the grid spacing
+    # sigma_receiver = 0.5*pzt_layer_width
+
+    # transmitter_position_respect_to_spatial_axis =  0.5*pzt_layer_width + pmma_layer_width
+    # src_spatial_function = synthetic_spatial_function(
+    #     x=spatial_axis,
+    #     position=transmitter_position_respect_to_spatial_axis,
+    #     sigma=sigma_source,
+    #     normalize=True,
+    #     plotting=False
+    # )
+
+    # receiver_position_respect_to_spatial_axis = total_length - 0.5*pzt_layer_width - pmma_layer_width 
+    # rec_spatial_function = synthetic_spatial_function(
+    #     x=spatial_axis,
+    #     position=receiver_position_respect_to_spatial_axis,
+    #     sigma=sigma_receiver,
+    #     normalize=True,
+    #     plotting=False
+    # )
 
     # Compute synthetic wavefield
     synthetic_field = pseudospectral_1D(
@@ -129,18 +155,7 @@ def DDS_UW_simulation(
     synthetic_waveform = np.interp(observed_time, simulation_time, simulated_waveform)
 
     if enable_plotting:
-        plot_simulation_waveform(observed_time, synthetic_waveform, observed_waveform, misfit_interval)
-        # plt.figure()
-        # plt.plot(src_time_function)
-        # plt.title("Source Time Function")
-        # plt.xlabel("Time [μs]")
-        # plt.ylabel("Amplitude")
-        # plt.show()
-
-        # plt.figure()
-        # plt.plot(spatial_axis,src_spatial_function)
-        # plt.plot(spatial_axis,rec_spatial_function)
-        # plt.show()
+        plot_simulation_waveform(observed_time, synthetic_waveform, observed_waveform, misfit_interval, outfile_path=plot_output_path)
 
     if make_movie:
         # Create and save the movie using the simulation outputs
@@ -152,7 +167,6 @@ def DDS_UW_simulation(
             sp_recorded=simulated_waveform,
             sample_dimensions=sample_dimensions,
             idx_dict=idx_dict,
-            settings=movie_settings
         )
 
     return synthetic_waveform
@@ -307,14 +321,30 @@ def compute_misfit(
     return LA.norm(observed_waveform[misfit_interval] - synthetic_waveform[misfit_interval], 2)
 
 
+import numpy as np
+from numpy import kaiser
+
 def arbitrary_position_filter(
     spatial_axis: np.ndarray,
     dx: float,
     position: float,
-    radius: int
+    radius: int,
+    flip_side: str = None  # Either 'left', 'right', or None
 ) -> np.ndarray:
     """
     Create a Kaiser-windowed sinc filter for arbitrary source/receiver positioning on a 1D grid.
+    If flip_side is specified ('left' or 'right'), the values of the windowed sinc function on that side
+    of the closest grid node are flipped and added to the values on the opposite side.
+    
+    Parameters:
+    - spatial_axis (np.ndarray): The spatial axis of the grid.
+    - dx (float): Spatial step size.
+    - position (float): Exact position of the source/receiver.
+    - radius (int): Radius of the windowed sinc function (number of grid points).
+    - flip_side (str): 'left' or 'right' to indicate which side to flip and fold.
+    
+    Returns:
+    - windowed_sinc (np.ndarray): The windowed sinc filter adjusted for the free surface.
     """
     # Normalize positions to grid indices
     grid_indices = spatial_axis / dx
@@ -336,87 +366,46 @@ def arbitrary_position_filter(
     end_idx = min(num_points, closest_node_index + radius + 1)
     
     windowed_sinc = np.zeros_like(sinc_function)
-    windowed_sinc[start_idx:end_idx] = sinc_function[start_idx:end_idx] * kaiser_window[:end_idx - start_idx]
+    window_indices = np.arange(start_idx, end_idx)
+    windowed_sinc[window_indices] = sinc_function[window_indices] * kaiser_window[:end_idx - start_idx]
+
+    # Implement the flip and fold
+    if flip_side == 'right':
+        # Indices on the left side
+        left_indices = np.arange(start_idx, closest_node_index)
+        num_left = len(left_indices)
+        # Indices on the right side
+        right_indices = np.arange(closest_node_index, closest_node_index + num_left)
+        # Adjust right_indices to not exceed end_idx
+        right_indices = right_indices[right_indices < end_idx]
+
+        # Flip the left values
+        flipped_left_values = windowed_sinc[left_indices][::-1]
+        flipped_left_values = flipped_left_values[:len(right_indices)]  # Adjust length
+
+        # Add to the right side
+        windowed_sinc[right_indices] += flipped_left_values
+
+        # Zero out the left side
+        windowed_sinc[left_indices] = 0.0
+
+    elif flip_side == 'left':
+        # Indices on the right side
+        right_indices = np.arange(closest_node_index + 1, end_idx)
+        num_right = len(right_indices)
+        # Indices on the left side
+        left_indices = np.arange(closest_node_index - num_right, closest_node_index)
+        left_indices = left_indices[left_indices >= start_idx]  # Ensure within bounds
+
+        # Flip the right values
+        flipped_right_values = windowed_sinc[right_indices][::-1]
+        flipped_right_values = flipped_right_values[:len(left_indices)]  # Adjust length
+
+        # Add to the left side
+        windowed_sinc[left_indices] += flipped_right_values
+
+        # Zero out the right side
+        windowed_sinc[right_indices] = 0.0
 
     return windowed_sinc
 
-
-def make_movie_from_simulation(
-    outfile_path: str,
-    x: np.ndarray,
-    t: np.ndarray,
-    sp_field: np.ndarray,
-    sp_recorded: np.ndarray,
-    sample_dimensions: tuple,
-    idx_dict: dict,
-    settings: dict = None
-):
-    if settings is None:
-        settings = {'figure_size': (12, 6), 'fontsize_title': 16, 'fontsize_labels': 14}
-
-    movie_sampling = 10  # Downsampling of the snapshot to speed up movie
-
-    fig, (ax, ax2) = plt.subplots(1, 2, figsize=settings['figure_size'], gridspec_kw={'width_ratios': [10, 1]})
-    ylim = 1.3 * np.amax(np.abs(sp_field))
-
-    ax.set_xlim([x[0], x[-1]])
-    ax.set_ylim([-ylim, ylim])
-    ax.set_title("Ultrasonic Wavefield in DDS Experiment", fontsize=settings['fontsize_title'], color='darkslategray')
-    ax.set_xlabel("Sample Length [cm]", fontsize=settings['fontsize_labels'], color='darkslategray')
-    ax.set_ylabel('Relative Shear Wave Amplitude', fontsize=settings['fontsize_labels'], color='darkslategray')
-
-    # Shading layers based on indices in idx_dict
-    layers = [
-        {'name': 'Gouge Layer 1', 'idx': idx_dict['gouge_1'], 'color': 'sandybrown'},
-        {'name': 'Gouge Layer 2', 'idx': idx_dict['gouge_2'], 'color': 'sandybrown'},
-        {'name': 'PZT Layer 1', 'idx': idx_dict['pzt_1'], 'color': 'violet'},
-        {'name': 'PZT Layer 2', 'idx': idx_dict['pzt_2'], 'color': 'violet'},
-        {'name': 'Grooves', 'idx': np.concatenate([idx_dict['groove_sb1'], idx_dict['groove_cb1'], idx_dict['groove_cb2'], idx_dict['groove_sb2']]), 'color': 'lightgrey'},
-        {'name': 'Steel Blocks', 'idx': np.concatenate([idx_dict['side_block_1'], idx_dict['central_block'], idx_dict['side_block_2']]), 'color': 'lightsteelblue'},
-    ]
-
-    for layer in layers:
-        ax.axvspan(x[layer['idx'][0]], x[layer['idx'][-1]], color=layer['color'], alpha=0.3, label=layer['name'])
-
-    # Plot transmitter and receiver positions
-    x_tr = x[idx_dict['pzt_1'][-1]]
-    y_tr = 0
-    pzt_width = x[idx_dict['pzt_1'][-1]] - x[idx_dict['pzt_1'][0]]
-    pzt_height = 4 * pzt_width
-    ax.add_patch(Rectangle((x_tr -  pzt_width, y_tr - pzt_height / 2), pzt_width, pzt_height, color='teal'))
-    ax.text(x_tr - pzt_width / 2, y_tr - pzt_height, 'Transmitter', ha='center', fontsize=settings['fontsize_labels'], color='darkslategray')
-
-    x_rc = x[idx_dict['pzt_2'][0]]
-    y_rc = 0
-    ax.add_patch(Rectangle((x_rc +  pzt_width, y_rc - pzt_height / 2), pzt_width, pzt_height, color='teal'))
-    ax.text(x_rc + pzt_width, y_rc - pzt_height, 'Receiver', ha='center', fontsize=settings['fontsize_labels'], color='darkslategray')
-
-    # Configure ax2 for the recorded signal
-    ax2.set_ylim([t[0], t[-1]])
-    ax2.set_xlim([-1, 1])  # Set x-limits to small range around zero
-    ax2.set_title("Recorded Signal", fontsize=settings['fontsize_title'], color='darkslategray')
-    ax2.axis('off')
-    ax2.invert_yaxis()
-
-    fig.tight_layout()
-
-    # Initialize lines for animation
-    line_wavefield, = ax.plot([], [], color='darkslategray', lw=1.5)
-    line_wavefield.set_linewidth(3.0)
-    line_recorded, = ax2.plot([], [], color='darkslategray', lw=1.5)
-    line_recorded.set_linewidth(3.0)
-
-    # Prepare data for animation
-    sp_movie = sp_field[::movie_sampling]
-    sp_recorded_movie = sp_recorded[::movie_sampling] / np.amax(np.abs(sp_recorded))
-    t_recorded_movie = t[::movie_sampling]
-    num_frames = len(sp_movie)
-
-    def update_frame(frame):
-        line_wavefield.set_data(x, sp_movie[frame])
-        line_recorded.set_data(sp_recorded_movie[:frame], t_recorded_movie[:frame])
-        return line_wavefield, line_recorded
-
-    ani = animation.FuncAnimation(fig, update_frame, frames=num_frames, blit=True, interval=20)
-    ani.save(outfile_path, fps=30, extra_args=['-vcodec', 'libx264'])
-    plt.close(fig)

@@ -1,8 +1,8 @@
 # src/synthetic_data.py
 
 import numpy as np
-import matplotlib.pyplot as plt
 from typing import Union, Tuple
+from plotting import plot_velocity_model, plot_synthetic_spatial_function
 
 def make_grid_1D(cmin: float, fmax: float, grid_len: float, ppt: int) -> np.ndarray:
     '''
@@ -35,13 +35,14 @@ def build_velocity_model(
     h_groove_side: float,
     h_groove_central: float,
     steel_velocity: float,
-    gouge_velocity: Union[float, np.ndarray],
+    gouge_velocity: Union[Tuple[float, float], Tuple[np.ndarray, np.ndarray]],
     pzt_velocity: float,
     pmma_velocity: float,
     plotting: bool = True
 ) -> Tuple[np.ndarray, dict]:
     """
-    Build a 1D velocity model for a given sample configuration.
+    Build a 1D velocity model for a given sample configuration, with smoothing zones around
+    the transmitter and receiver positions between pzt_velocity and steel_velocity.
 
     Parameters:
     ----------
@@ -50,7 +51,7 @@ def build_velocity_model(
         x = 0 corresponds to the external edge of Side Block 1.
     sample_dimensions : Tuple[float, float, float, float, float]
         A tuple containing the dimensions of different regions of the sample in cm:
-        (side_block_1_total, gouge_1, central_block_total, gouge_2, side_block_2_total).
+        (side_block_1_total, gouge_1_length, central_block_total, gouge_2_length, side_block_2_total).
         The block sizes exclude the heights of their grooves.
     x_transmitter : float
         The position of the transmitter (in cm) from the external edge of Side Block 1.
@@ -61,12 +62,15 @@ def build_velocity_model(
         The width of the piezoelectric transducers (in cm).
     pmma_layer_width : float
         The width of the PMMA layers (in cm).
-    h_groove : float
+    h_groove_side : float
         The height of the grooves (in cm).
+    h_groove_central : float
+        The height of the central block's grooves (in cm).
     steel_velocity : float
         The velocity (in cm/μs) of the steel blocks, assumed to be the same for each block.
-    gouge_velocity : Union[float, np.ndarray]
-        The velocity (in cm/μs) in the gouge regions. Can be a single float or a numpy array.
+    gouge_velocity : Union[Tuple[float, float], Tuple[np.ndarray, np.ndarray]]
+        A tuple containing the velocities (in cm/μs) in the gouge regions.
+        Each element can be a single float or a numpy array representing the 1D velocity profile.
     pzt_velocity : float
         The velocity (in cm/μs) in the piezoelectric transducer (PZT) regions.
     pmma_velocity : float
@@ -81,7 +85,7 @@ def build_velocity_model(
         - idx_dict: dict - A dictionary containing indices for different regions.
     """
     # Unpack sample dimensions
-    side_block_1_total, gouge_1, central_block_total, gouge_2, side_block_2_total = sample_dimensions
+    side_block_1_total, gouge_1_length, central_block_total, gouge_2_length, side_block_2_total = sample_dimensions
 
     # Adjust block lengths to exclude groove heights
     side_block_1 = side_block_1_total - h_groove_side
@@ -94,11 +98,11 @@ def build_velocity_model(
         pzt_layer_width,
         side_block_1 - x_transmitter,
         h_groove_side,
-        gouge_1,
+        gouge_1_length,
         h_groove_central,
         central_block,
         h_groove_central,
-        gouge_2,
+        gouge_2_length,
         h_groove_side,
         side_block_2 - x_receiver,
         pzt_layer_width,
@@ -106,150 +110,110 @@ def build_velocity_model(
     ]
     layer_starts = np.concatenate(([0.0], np.cumsum(layer_thicknesses)))
 
-    # Positions of different layers 
-    x_pmma_1_start = layer_starts[0]
-    x_pmma_1_end = layer_starts[1]
-
-    x_pzt_1_start = layer_starts[1]
-    x_pzt_1_end = layer_starts[2]
-
-    x_side_block_1_start = layer_starts[2]
-    x_side_block_1_end = layer_starts[3]
-
-    x_groove_sb1_start = layer_starts[3]
-    x_groove_sb1_end = layer_starts[4]
-
-    x_gouge_1_start = layer_starts[4]
-    x_gouge_1_end = layer_starts[5]
-
-    x_groove_cb1_start = layer_starts[5]
-    x_groove_cb1_end = layer_starts[6]
-
-    x_central_block_start = layer_starts[6]
-    x_central_block_end = layer_starts[7]
-
-    x_groove_cb2_start = layer_starts[7]
-    x_groove_cb2_end = layer_starts[8]
-
-    x_gouge_2_start = layer_starts[8]
-    x_gouge_2_end = layer_starts[9]
-
-    x_groove_sb2_start = layer_starts[9]
-    x_groove_sb2_end = layer_starts[10]
-
-    x_side_block_2_start = layer_starts[10]
-    x_side_block_2_end = layer_starts[11]
-
-    x_pzt_2_start = layer_starts[11]
-    x_pzt_2_end = layer_starts[12]
-
-    x_pmma_2_start = layer_starts[12]
-    x_pmma_2_end = layer_starts[13]
-
-    # Initialize velocity model
-    c = steel_velocity * np.ones_like(x)
-
     # Define indices for each region
     idx_dict = {}
 
-    # Indices for PMMA and PZT layers inside Side Block 1
-    idx_dict['pmma_1'] = np.where((x >= x_pmma_1_start) & (x < x_pmma_1_end))[0]
-    idx_dict['pzt_1'] = np.where((x >= x_pzt_1_start) & (x < x_pzt_1_end))[0]
+    idx_dict['pmma_1'] = np.where((x >= layer_starts[0]) & (x < layer_starts[1]))[0]
+    idx_dict['pzt_1'] = np.where((x >= layer_starts[1]) & (x < layer_starts[2]))[0]
+    idx_dict['side_block_1'] = np.where((x >= layer_starts[2]) & (x < layer_starts[3]))[0]
+    idx_dict['groove_sb1'] = np.where((x >= layer_starts[3]) & (x < layer_starts[4]))[0]
+    idx_dict['gouge_1'] = np.where((x >= layer_starts[4]) & (x < layer_starts[5]))[0]
+    idx_dict['groove_cb1'] = np.where((x >= layer_starts[5]) & (x < layer_starts[6]))[0]
+    idx_dict['central_block'] = np.where((x >= layer_starts[6]) & (x < layer_starts[7]))[0]
+    idx_dict['groove_cb2'] = np.where((x >= layer_starts[7]) & (x < layer_starts[8]))[0]
+    idx_dict['gouge_2'] = np.where((x >= layer_starts[8]) & (x < layer_starts[9]))[0]
+    idx_dict['groove_sb2'] = np.where((x >= layer_starts[9]) & (x < layer_starts[10]))[0]
+    idx_dict['side_block_2'] = np.where((x >= layer_starts[10]) & (x < layer_starts[11]))[0]
+    idx_dict['pzt_2'] = np.where((x >= layer_starts[11]) & (x < layer_starts[12]))[0]
+    idx_dict['pmma_2'] = np.where((x >= layer_starts[12]) & (x <= layer_starts[13]))[0]
 
-    # Indices for Side Block 1
-    idx_dict['side_block_1'] = np.where((x >= x_side_block_1_start) & (x < x_side_block_1_end))[0]
-
-    # Groove of Side Block 1
-    idx_dict['groove_sb1'] = np.where((x >= x_groove_sb1_start) & (x < x_groove_sb1_end))[0]
-
-    # Gouge Layer 1
-    idx_dict['gouge_1'] = np.where((x >= x_gouge_1_start) & (x < x_gouge_1_end))[0]
-
-    # Groove of Central Block (First Side)
-    idx_dict['groove_cb1'] = np.where((x >= x_groove_cb1_start) & (x < x_groove_cb1_end))[0]
-
-    # Central Block
-    idx_dict['central_block'] = np.where((x >= x_central_block_start) & (x < x_central_block_end))[0]
-
-    # Groove of Central Block (Second Side)
-    idx_dict['groove_cb2'] = np.where((x >= x_groove_cb2_start) & (x < x_groove_cb2_end))[0]
-
-    # Gouge Layer 2
-    idx_dict['gouge_2'] = np.where((x >= x_gouge_2_start) & (x < x_gouge_2_end))[0]
-
-    # Groove of Side Block 2
-    idx_dict['groove_sb2'] = np.where((x >= x_groove_sb2_start) & (x < x_groove_sb2_end))[0]
-
-    # Indices for Side Block 2
-    idx_dict['side_block_2'] = np.where((x >= x_side_block_2_start) & (x < x_side_block_2_end))[0]
-
-    # Indices for PMMA and PZT layers inside Side Block 2
-    idx_dict['pzt_2'] = np.where((x >= x_pzt_2_start) & (x < x_pzt_2_end))[0]
-    idx_dict['pmma_2'] = np.where((x >= x_pmma_2_start) & (x < x_pmma_2_end))[0]
+    # Initialize velocity model
+    c = steel_velocity * np.ones_like(x)
 
     # Assign velocities
     c[idx_dict['pmma_1']] = pmma_velocity
     c[idx_dict['pzt_1']] = pzt_velocity
     # Side Block 1 remains steel_velocity
-    c[idx_dict['groove_sb1']] = 0.5 * (gouge_velocity + steel_velocity)
-    c[idx_dict['gouge_1']] = gouge_velocity
-    c[idx_dict['groove_cb1']] = 0.5 * (gouge_velocity + steel_velocity)
+
+    # Assign velocities in Groove SB1
+    groove_sb1_length = len(idx_dict['groove_sb1'])
+    if groove_sb1_length > 0:
+        groove_sb1_start_vel = steel_velocity
+        groove_sb1_end_vel = gouge_velocity[0][0] if isinstance(gouge_velocity[0], np.ndarray) else gouge_velocity[0]
+        c[idx_dict['groove_sb1']] = np.linspace(groove_sb1_start_vel, groove_sb1_end_vel, groove_sb1_length)
+
+    # Assign velocities in Gouge Layer 1
+    if isinstance(gouge_velocity[0], np.ndarray):
+        if len(gouge_velocity[0]) != len(idx_dict['gouge_1']):
+            raise ValueError("Length of gouge_velocity[0] does not match the size of gouge_1 region.")
+        c[idx_dict['gouge_1']] = gouge_velocity[0]
+    else:
+        c[idx_dict['gouge_1']] = gouge_velocity[0]
+
+    # Assign velocities in Groove CB1
+    groove_cb1_length = len(idx_dict['groove_cb1'])
+    if groove_cb1_length > 0:
+        groove_cb1_start_vel = gouge_velocity[0][-1] if isinstance(gouge_velocity[0], np.ndarray) else gouge_velocity[0]
+        groove_cb1_end_vel = steel_velocity
+        c[idx_dict['groove_cb1']] = np.linspace(groove_cb1_start_vel, groove_cb1_end_vel, groove_cb1_length)
+
+    # Assign velocities in Central Block
     c[idx_dict['central_block']] = steel_velocity
-    c[idx_dict['groove_cb2']] = 0.5 * (gouge_velocity + steel_velocity)
-    c[idx_dict['gouge_2']] = gouge_velocity
-    c[idx_dict['groove_sb2']] = 0.5 * (gouge_velocity + steel_velocity)
+
+    # Assign velocities in Groove CB2
+    groove_cb2_length = len(idx_dict['groove_cb2'])
+    if groove_cb2_length > 0:
+        groove_cb2_start_vel = steel_velocity
+        groove_cb2_end_vel = gouge_velocity[1][0] if isinstance(gouge_velocity[1], np.ndarray) else gouge_velocity[1]
+        c[idx_dict['groove_cb2']] = np.linspace(groove_cb2_start_vel, groove_cb2_end_vel, groove_cb2_length)
+
+    # Assign velocities in Gouge Layer 2
+    if isinstance(gouge_velocity[1], np.ndarray):
+        if len(gouge_velocity[1]) != len(idx_dict['gouge_2']):
+            raise ValueError("Length of gouge_velocity[1] does not match the size of gouge_2 region.")
+        c[idx_dict['gouge_2']] = gouge_velocity[1]
+    else:
+        c[idx_dict['gouge_2']] = gouge_velocity[1]
+
+    # Assign velocities in Groove SB2
+    groove_sb2_length = len(idx_dict['groove_sb2'])
+    if groove_sb2_length > 0:
+        groove_sb2_start_vel = gouge_velocity[1][-1] if isinstance(gouge_velocity[1], np.ndarray) else gouge_velocity[1]
+        groove_sb2_end_vel = steel_velocity
+        c[idx_dict['groove_sb2']] = np.linspace(groove_sb2_start_vel, groove_sb2_end_vel, groove_sb2_length)
+
     # Side Block 2 remains steel_velocity
     c[idx_dict['pzt_2']] = pzt_velocity
     c[idx_dict['pmma_2']] = pmma_velocity
 
+    # Apply smoothing between pzt_velocity and steel_velocity around transmitter and receiver
+    # Transmitter smoothing
+    transmitter_smoothing_start = layer_starts[1]  # Start of PZT layer
+    transmitter_smoothing_end = layer_starts[2] + pzt_layer_width  # End of smoothing region
+    transmitter_indices = np.where((x >= transmitter_smoothing_start) & (x < transmitter_smoothing_end))[0]
+    if len(transmitter_indices) > 0:
+        c[transmitter_indices] = np.linspace(pzt_velocity, steel_velocity, len(transmitter_indices))
+
+    # Receiver smoothing
+    receiver_smoothing_start = layer_starts[11]  # Start of PZT layer
+    receiver_smoothing_end = layer_starts[12] + pzt_layer_width  # End of smoothing region
+    receiver_indices = np.where((x >= receiver_smoothing_start) & (x < receiver_smoothing_end))[0]
+    if len(receiver_indices) > 0:
+        c[receiver_indices] = np.linspace(steel_velocity, pzt_velocity, len(receiver_indices))
+
+    # Plotting with shaded areas
     # Plotting with shaded areas
     if plotting:
-        fig, ax = plt.subplots(figsize=(12, 6))
-        ax.plot(x, c, label='Velocity Model', color='black')
-
-        layers = [
-            {'name': 'PMMA Layer 1', 'start': x_pmma_1_start, 'end': x_pmma_1_end, 'color': 'lightblue'},
-            {'name': 'PZT Layer 1', 'start': x_pzt_1_start, 'end': x_pzt_1_end, 'color': 'violet'},
-            {'name': 'Side Block 1', 'start': x_side_block_1_start, 'end': x_side_block_1_end, 'color': 'grey'},
-            {'name': 'Groove SB1', 'start': x_groove_sb1_start, 'end': x_groove_sb1_end, 'color': 'lightgrey'},
-            {'name': 'Gouge Layer 1', 'start': x_gouge_1_start, 'end': x_gouge_1_end, 'color': 'sandybrown'},
-            {'name': 'Groove CB1', 'start': x_groove_cb1_start, 'end': x_groove_cb1_end, 'color': 'lightgrey'},
-            {'name': 'Central Block', 'start': x_central_block_start, 'end': x_central_block_end, 'color': 'grey'},
-            {'name': 'Groove CB2', 'start': x_groove_cb2_start, 'end': x_groove_cb2_end, 'color': 'lightgrey'},
-            {'name': 'Gouge Layer 2', 'start': x_gouge_2_start, 'end': x_gouge_2_end, 'color': 'sandybrown'},
-            {'name': 'Groove SB2', 'start': x_groove_sb2_start, 'end': x_groove_sb2_end, 'color': 'lightgrey'},
-            {'name': 'Side Block 2', 'start': x_side_block_2_start, 'end': x_side_block_2_end, 'color': 'grey'},
-            {'name': 'PZT Layer 2', 'start': x_pzt_2_start, 'end': x_pzt_2_end, 'color': 'violet'},
-            {'name': 'PMMA Layer 2', 'start': x_pmma_2_start, 'end': x_pmma_2_end, 'color': 'lightblue'},
-        ]
-
-        labels_used = set()
-
-        for layer in layers:
-            # Avoid duplicate labels in legend
-            if layer['name'] in labels_used:
-                label = None
-            else:
-                label = layer['name']
-                labels_used.add(layer['name'])
-            ax.axvspan(layer['start'], layer['end'], color=layer['color'], alpha=0.3, label=label)
-
-        # Plot transmitter and receiver positions
-        ax.axvline(pzt_layer_width + pmma_layer_width, color="red", linestyle='-', label='Transmitter')
-        ax.axvline(x[-1] -pzt_layer_width - pmma_layer_width, color="green", linestyle='-', label='Receiver')
-
-        ax.set_title("Velocity Model with Layers")
-        ax.set_xlabel("Position (cm)")
-        ax.set_ylabel("Velocity (cm/μs)")
-        ax.grid(True)
-        ax.legend(loc='upper right')
-        plt.show()
+        plot_velocity_model(
+            x=x,
+            c=c,
+            layer_starts=layer_starts,
+            pzt_layer_width=pzt_layer_width,
+            pmma_layer_width=pmma_layer_width,
+            outfile_path=None,  # You can specify a path if you want to save the plot
+        )
 
     return c, idx_dict
-
-
-
-
 
 def synthetic_source_time_function(t: np.ndarray) -> np.ndarray:
     '''
@@ -277,38 +241,38 @@ def synthetic_source_time_function(t: np.ndarray) -> np.ndarray:
 
     return src
 
-def synthetic_source_spatial_function(
+def synthetic_spatial_function(
     x: np.ndarray,
-    source_index: int,
+    position: float,
     sigma: float,
-    plotting: bool = True
+    normalize: bool = True,
+    plotting: bool = False,
 ) -> np.ndarray:
     '''
-    Generate a synthetic spatial function.
+    Generate a synthetic spatial function using a Gaussian.
 
     Args:
         x (np.ndarray): Spatial axis.
-        source_index (int): Index of the source.
-        sigma (float): Sigma parameter for Gaussian.
+        position (float): Physical position of the source in the same units as x.
+        sigma (float): Sigma parameter for the Gaussian, in the same units as x.
+        normalize (bool, optional): Whether to normalize the maximum amplitude to 1. Defaults to True.
         plotting (bool, optional): Whether to plot the spatial function. Defaults to True.
 
     Returns:
         np.ndarray: Synthetic spatial function.
     '''
-    dx = x[1] - x[0]
-    x0 = x[source_index - 1]
-    src_x = np.exp(-1 / sigma ** 2 * (x - x0) ** 2)
-    src_x = src_x / np.amax(src_x)
+    spatial_gaussian = np.exp(-((x - position) ** 2) / (2 * sigma ** 2))
+    if normalize:
+        spatial_gaussian = spatial_gaussian / np.amax(np.abs(spatial_gaussian))
     if plotting:
-        plt.figure()
-        plt.plot(x, src_x)
-        plt.title("Synthetic Spatial Function")
-        plt.xlabel("Position (cm)")
-        plt.ylabel("Amplitude")
-        plt.show()
-    return src_x
+        plot_synthetic_spatial_function(
+                                    x=x,
+                                    spatial_function=spatial_gaussian,
+                                    outfile_path=None,  # Specify if needed
+                                )
 
-# Functions for testing
+    return spatial_gaussian
+
 
 def synthetic_wavelets_in_noise(
     nsamples: int = 1000,
