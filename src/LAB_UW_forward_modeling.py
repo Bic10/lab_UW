@@ -28,6 +28,7 @@ def DDS_UW_simulation(
     pzt_velocity: float,
     pmma_velocity: float,
     misfit_interval: float,
+    fixed_minimum_velocity: float = None,
     normalize_waveform: bool = True,
     enable_plotting: bool = False,
     make_movie: bool = False,
@@ -43,10 +44,13 @@ def DDS_UW_simulation(
     # the trasmitter and receiver position should be passed as their "pzt_depth" respect to the external edge of their block
     total_length = np.sum(sample_dimensions) + 2*pmma_layer_width + 2*pzt_layer_width -  (transmitter_position + receiver_position)
 
-    (gouge_velocity_1,gouge_velocity_2) = gouge_velocity
-    min_velocity_1 = np.amin(gouge_velocity_1)
-    min_velocity_2 = np.amin(gouge_velocity_2)
-    min_velocity = min(min_velocity_1,min_velocity_2)
+    if fixed_minimum_velocity:                    # its a preferential choice for gradient based inversion
+        min_velocity = fixed_minimum_velocity
+    else:
+        (gouge_velocity_1,gouge_velocity_2) = gouge_velocity
+        min_velocity_1 = np.amin(gouge_velocity_1)
+        min_velocity_2 = np.amin(gouge_velocity_2)
+        min_velocity = min(min_velocity_1,min_velocity_2)
 
     # Cread grid according to numerical dispersion criteria for minimum wavelength
     spatial_axis, dx, num_x = compute_grid(
