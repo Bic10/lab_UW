@@ -38,7 +38,7 @@ def build_velocity_model(
     gouge_velocity: Union[Tuple[float, float], Tuple[np.ndarray, np.ndarray]],
     pzt_velocity: float,
     pmma_velocity: float,
-    plotting: bool = True
+    plotting: bool = False
 ) -> Tuple[np.ndarray, dict]:
     """
     Build a 1D velocity model for a given sample configuration, with smoothing zones around

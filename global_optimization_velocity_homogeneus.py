@@ -15,6 +15,50 @@ from LAB_UW_forward_modeling import *
 
 ###############################################################################################################
 # Function Definitions
+def manual_pick_arrival_times(observed_time, observed_waveform, outfile_path):
+    """
+    Manually pick arrival times from waveform data to estimate initial velocities.
+    """
+    # Initialize a list to store picked arrival times
+    picked_times = []
+
+    # Function to handle mouse clicks
+    def onclick(event):
+        if event.button == 1:  # Left click to pick a point
+            picked_time = event.xdata
+            picked_times.append(picked_time)
+            print(f"Picked time: {picked_time} seconds")
+
+            # Mark the picked time on the plot
+            plt.axvline(x=picked_time, color='r', linestyle='--')
+            plt.draw()
+
+    # Plot the waveform data
+    fig, ax = plt.subplots()
+    ax.plot(observed_time, observed_waveform, label='Waveform')
+    ax.set_xlabel('Time (seconds)')
+    ax.set_ylabel('Amplitude')
+    ax.set_title('Pick Arrival Times by Clicking')
+    ax.legend()
+
+    # Connect the click event to the onclick function
+    cid = fig.canvas.mpl_connect('button_press_event', onclick)
+
+    # Show the plot and allow picking
+    plt.show()
+
+    # Print picked arrival times
+    print(f"Picked arrival times: {picked_times}")
+
+    try:
+        os.makedirs(os.path.dirname(outfile_path))
+    except:
+        pass
+
+    with open(outfile_path, "wb") as f:
+        pickle.dump(picked_times, f)
+    
+    return picked_times
 
 def find_mechanical_data(file_path_list, pattern):
     """
@@ -60,7 +104,7 @@ def load_and_process_pulse_waveform(frequency_cutoff):
     pulse_duration = pulse_time[-1] - pulse_time[0]
     return pulse_waveform, pulse_time, pulse_duration
 
-def process_uw_file(infile_path, chosen_uw_file, sync_peaks, mech_data, pulse_waveform, pulse_time, pulse_duration, frequency_cutoff, outdir_path_l2norm, params):
+def process_uw_file(infile_path, chosen_uw_file, manual_pick_arrival_time_interval,sync_peaks, mech_data, pulse_waveform, pulse_time, pulse_duration, frequency_cutoff, outdir_path_l2norm, params):
     """
     Process a single UW data file.
     """
@@ -174,6 +218,7 @@ def process_uw_file(infile_path, chosen_uw_file, sync_peaks, mech_data, pulse_wa
 
         # Process the waveform
         result = process_waveform(
+            manual_pick_arrival_time_interval,
             observed_waveform=observed_waveform,
             observed_time=observed_time,
             idx_waveform=idx_waveform,
@@ -247,7 +292,9 @@ def process_uw_file(infile_path, chosen_uw_file, sync_peaks, mech_data, pulse_wa
 
     print("--- %s seconds for processing %s ---" % (tm.time() - start_time, outfile_name))
 
-def process_waveform(observed_waveform, 
+def process_waveform(
+                     manual_pick_arrival_time_interval, 
+                     observed_waveform, 
                      observed_time, 
                      idx_waveform, 
                      overall_index, 
@@ -289,70 +336,46 @@ def process_waveform(observed_waveform,
     range_scaling_factor = params['range_scaling_factor']
 
     if previous_min_velocity is None:
-        # # Initialize a list to store picked arrival times
-        # picked_times = []
 
-        # # Function to handle mouse clicks
-        # def onclick(event):
-        #     if event.button == 1:  # Left click to pick a point
-        #         picked_time = event.xdata
-        #         picked_times.append(picked_time)
-        #         print(f"Picked time: {picked_time} seconds")
+        try:
+            estimated_velocities = []
 
-        #         # Mark the picked time on the plot
-        #         plt.axvline(x=picked_time, color='r', linestyle='--')
-        #         plt.draw()
+            for picked_time in manual_pick_arrival_time_interval:
+                # Derived parameters
+                Delta_t = picked_time - fixed_travel_time
+                L_g = thickness_gouge_1 + thickness_gouge_2
+                L_h = 2 * h_groove_side + 2 * h_groove_central
 
-        # # Plot the waveform data
-        # fig, ax = plt.subplots()
-        # ax.plot(observed_time, observed_waveform, label='Waveform')
-        # ax.set_xlabel('Time (seconds)')
-        # ax.set_ylabel('Amplitude')
-        # ax.set_title('Pick Arrival Times by Clicking')
-        # ax.legend()
+                # Coefficients for the quadratic equation
+                A = Delta_t * 0.5
+                B = Delta_t * 0.5 * steel_velocity - L_g * 0.5 - L_h
+                C = -L_g * 0.5 * steel_velocity
 
-        # # Connect the click event to the onclick function
-        # cid = fig.canvas.mpl_connect('button_press_event', onclick)
+                # Solve the quadratic equation
+                discriminant = B**2 - 4 * A * C
 
-        # # Show the plot and allow picking
-        # plt.show()
+                if discriminant >= 0:
+                    # Two possible solutions for cmin_waveform
+                    estimated_velocity_1 = (-B + np.sqrt(discriminant)) / (2 * A)
+                    estimated_velocity_2 = (-B - np.sqrt(discriminant)) / (2 * A)
+                    estimated_velocities.append(estimated_velocity_1)
+                else:
+                    print("No real solution exists for cmin_waveform.")
 
-        # print(f"Picked arrival time: {picked_times}")
+            cmin_waveform = min(estimated_velocities)
+            cmax_waveform = max(estimated_velocities)
 
-        # estimated_velocities = []
+            print(f"Loaded manually picked initial time interval estimates: cmin={cmin_waveform}, cmax={cmax_waveform}")
 
-        # for picked_time in picked_times:
-        #     # Derived parameters
-        #     Delta_t = picked_time - fixed_travel_time
-        #     L_g = thickness_gouge_1 + thickness_gouge_2
-        #     L_h = 2 * h_groove_side + 2 * h_groove_central
+        except:
+            # If no manual estimates are found, revert to default initial estimates
+            cmin_waveform = 0.035 * (normal_stress**0.25)
+            cmax_waveform = 0.055 * (normal_stress**0.25)
+            print(f"No manual estimates found. Using default initial estimates: cmin={cmin_waveform}, cmax={cmax_waveform}")
 
-        #     # Coefficients for the quadratic equation
-        #     A = Delta_t * 0.5
-        #     B = Delta_t * 0.5 * steel_velocity - L_g * 0.5 - L_h
-        #     C = -L_g * 0.5 * steel_velocity
-
-        #     # Solve the quadratic equation
-        #     discriminant = B**2 - 4 * A * C
-
-        #     if discriminant >= 0:
-        #         # Two possible solutions for cmin_waveform
-        #         estimated_velocity_1 = (-B + np.sqrt(discriminant)) / (2 * A)
-        #         estimated_velocity_2 = (-B - np.sqrt(discriminant)) / (2 * A)
-        #         estimated_velocities.append(estimated_velocity_1)
-        #     else:
-        #         print("No real solution exists for cmin_waveform.")
-
-        # if not estimated_velocities:
-        #     print("No valid initial velocity estimates. Skipping waveform.")
-        #     return {'previous_min_velocity': previous_min_velocity}
-
-        # cmin_waveform = min(estimated_velocities)
-        # cmax_waveform = max(estimated_velocities)
-
-        # Estimate initial velocity: must be moved outside
-        cmin_waveform = 0.035 * (normal_stress**0.25)
-        cmax_waveform = 0.055 * (normal_stress**0.25)
+        # # Estimate initial velocity: must be moved outside
+        # cmin_waveform = 0.035 * (normal_stress**0.25)
+        # cmax_waveform = 0.055 * (normal_stress**0.25)
         c_step_waveform = c_step  # Use the defined step size
 
         # Define evaluation interval for L2 norm of the residuals
@@ -455,7 +478,7 @@ def process_waveform(observed_waveform,
         movie_output_path = None
 
     # Call DDS_UW_simulation with gouge_velocity as a tuple
-    synthetic_waveform = DDS_UW_simulation(
+    synthetic_waveform, _ = DDS_UW_simulation(
         observed_time=observed_time,
         observed_waveform=observed_waveform,
         pulse_time=pulse_time,
@@ -535,7 +558,7 @@ def process_velocity(args):
     receiver_position = pzt_depth  # [cm] Receiver is in the side_block_2
 
     # Call DDS_UW_simulation with gouge_velocity_tuple
-    synthetic_waveform = DDS_UW_simulation(
+    synthetic_waveform, _ = DDS_UW_simulation(
         observed_time=observed_time,
         observed_waveform=observed_waveform,
         pulse_time=pulse_time,
@@ -656,11 +679,29 @@ if __name__ == "__main__":
         'frequency_cutoff': frequency_cutoff
     }
 
+    manual_pick_arrival_time_interval_list = []
+    for infile_path_uw in infile_path_list_uw:
+        infile_path_travel_times = infile_path_uw.replace(data_type_uw, 'data_analysis/picked_travel_times').replace(".bscan.tsv",".pkl")
+
+        try:
+            with open(infile_path_travel_times, 'rb') as f:
+                manual_pick_arrival_time_interval_list.append(pickle.load(f))
+        except:
+            # LOAD UW DATA
+            observed_waveform_data, metadata = make_UW_data(infile_path_uw)
+            observed_waveform = observed_waveform_data[0,300:]
+            observed_time = metadata['time_ax_waveform'][300:]
+            manual_pick_arrival_time_interval_list.append(manual_pick_arrival_times(observed_time, 
+                                                                                    observed_waveform, 
+                                                                                    outfile_path=infile_path_travel_times))
+
     # Main Loop Over UW Files
-    for chosen_uw_file, infile_path in enumerate(infile_path_list_uw):
+    for chosen_uw_file, infile_path  in enumerate(infile_path_list_uw):
+        manual_pick_arrival_time_interval = manual_pick_arrival_time_interval_list[chosen_uw_file]
         process_uw_file(
             infile_path=infile_path,
             chosen_uw_file=chosen_uw_file,
+            manual_pick_arrival_time_interval= manual_pick_arrival_time_interval,
             sync_peaks=sync_peaks,
             mech_data=mech_data,
             pulse_waveform=pulse_waveform,
