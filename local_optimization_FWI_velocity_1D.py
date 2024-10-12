@@ -112,10 +112,8 @@ def process_uw_file(infile_path, chosen_uw_file, sync_peaks, mech_data, pulse_wa
 
     # Simulate a smaller piece of data. Since we are going to evaluate misfit in a smaller interval
     total_time_to_simulate = int(0.66 * metadata['number_of_samples'])  
-    print(f"total time to simulate {total_time_to_simulate}")
     observed_waveform_data = observed_waveform_data[:, :total_time_to_simulate]
     observed_time = observed_time[:total_time_to_simulate]
-    print(observed_waveform_data.shape)
     # Downsampling the waveforms
     number_of_waveforms_wanted = metadata['number_of_waveforms']
 
@@ -243,21 +241,34 @@ def process_waveform(
     pzt_velocity = params['pzt_velocity']
     pmma_velocity = params['pmma_velocity']
     outdir_path_image = params['outdir_path_image'][0]
+    fixed_minimum_velocity = params['fixed_minimum_velocity']  # Use the fixed value
 
     # Preprocess observed waveform
     observed_waveform = observed_waveform - np.mean(observed_waveform)
 
-    # Define evaluation interval for misfit
-    cmin_1MPa = 0.35
-    cmax_1MPa = 0.55
-    reference_stress = 20     # [MPa]
-    cmin_waveform = cmin_1MPa * (reference_stress ** 0.25)
-    cmax_waveform = cmax_1MPa * (reference_stress ** 0.25)
-    max_travel_time = fixed_travel_time + (thickness_gouge_1 + thickness_gouge_2) / cmin_waveform + 2 * (2 * h_groove_side + 2 * h_groove_central) / (steel_velocity + cmin_waveform)
-    min_travel_time = fixed_travel_time + (thickness_gouge_1 + thickness_gouge_2) / cmax_waveform + 2 * (2 * h_groove_side + 2 * h_groove_central) / (steel_velocity + cmax_waveform)
-    misfit_interval = np.where((observed_time > min_travel_time) & (observed_time < max_travel_time + pulse_duration))
+    # Unpack tuple of velocity model
+    # Check if initial_velocity_model is iterable (tuple or list)
+    if isinstance(initial_velocity_model, (tuple, list)):
+        # If it's a tuple or list, unpack normally
+        (gouge_1_velocity_initial, gouge_2_velocity_initial) = initial_velocity_model
+    else:
+        # If it's a scalar, use the same value for both gouge velocities
+        gouge_1_velocity_initial = gouge_2_velocity_initial = initial_velocity_model
 
-    # Check Signal-to-Noise Ratio
+    # Calculate travel time interval where evaluate the misfit
+    gouge_1_velocity_average = np.mean(gouge_1_velocity_initial)  
+    gouge_2_velocity_average = np.mean(gouge_2_velocity_initial)  
+
+    min_travel_time = fixed_travel_time  \
+    + thickness_gouge_1 / gouge_1_velocity_average \
+    + thickness_gouge_2 / gouge_2_velocity_average \
+    + 2 * (h_groove_side + h_groove_central) / (steel_velocity + gouge_1_velocity_average) \
+    + 2 * (h_groove_side + h_groove_central) / (steel_velocity + gouge_1_velocity_average) 
+    
+    max_travel_time = min_travel_time + 2*pulse_duration
+    misfit_interval = np.where((observed_time > min_travel_time) & (observed_time < max_travel_time))
+
+    # Check Signal-to-Noise Ratio: evaluate only waveform above min_SNR
     sure_noise_interval = np.where(observed_time < min_travel_time)
     good_data_interval = np.where(observed_time > min_travel_time)
     max_signal = np.amax(observed_waveform[good_data_interval])
@@ -268,9 +279,6 @@ def process_waveform(
 
     sample_dimensions = [side_block_1, thickness_gouge_1, central_block, thickness_gouge_2, side_block_2]
     receiver_position = pzt_depth  # [cm] Receiver is in side_block_2
-
-    # Use initial velocity model for both gouge layers
-    gouge_velocity_initial = initial_velocity_model
 
     # Call DDS_UW_simulation with gradient descent
     synthetic_waveform, updated_gouge_velocities = DDS_UW_simulation(
@@ -287,24 +295,28 @@ def process_waveform(
         pzt_layer_width=pzt_layer_width,
         pmma_layer_width=pmma_layer_width,
         steel_velocity=steel_velocity,
-        gouge_velocity=(gouge_velocity_initial, gouge_velocity_initial),
+        gouge_velocity=(gouge_1_velocity_initial, gouge_2_velocity_initial),
         pzt_velocity=pzt_velocity,
         pmma_velocity=pmma_velocity,
         misfit_interval=misfit_interval,
-        fixed_minimum_velocity=cmin_waveform,
+        fixed_minimum_velocity=fixed_minimum_velocity,
         iterative_gradient_descent=True,
         normalize_waveform=True,
-        enable_plotting=False,
-        make_movie=False
+        enable_plotting=True,
+        make_movie=False,
+        movie_output_path="simulation.mp4"
     )
 
     # Combine updated gouge velocities
-    updated_velocity_model = (updated_gouge_velocities[0], updated_gouge_velocities[1])
+    updated_velocity_model = updated_gouge_velocities
 
     # Save the updated velocity model
-    model_output_path = os.path.join(outdir_path_image, f'{outfile_name}_waveform_{overall_index}_velocity_model.npy')
-    np.save(model_output_path, updated_velocity_model)
-
+    model_output_path = os.path.join(outdir_path_image, f'{outfile_name}_waveform_{overall_index}_velocity_model.pkl')
+    with open(model_output_path , 'wb') as f:
+        pickle.dump({
+            '1D_velocity_gouge_tuple': updated_velocity_model
+                    }, f)
+        
     return updated_velocity_model
 
 
@@ -328,7 +340,10 @@ if __name__ == "__main__":
     pzt_velocity = 2000 * (1e2 / 1e6)   # [cm/μs] PZT shear wave velocity
     pmma_velocity = 1590 * (1e2 / 1e6)  # [cm/μs] PMMA velocity
 
-    # Initial guessed velocity model of the sample: literature range for gouge at atmospheric pressure
+    # Set fixed_minimum_velocity once for the entire simulation
+    fixed_minimum_velocity = 700 * (1e2 / 1e6)  # Example: Set a physically correct small value
+
+    # Initial guessed velocity model of the sample: literature range for gouge at atmospheric pressure. Not used in the current implementation
     c_step = 3 * (1e2 / 1e6)
     c_range = 100 * (1e2 / 1e6)
 
@@ -338,7 +353,6 @@ if __name__ == "__main__":
     transmitter_position = pzt_depth      # [cm] Position of the transmitter from the beginning of the sample
 
     fixed_travel_time = (2 * (side_block_1 - transmitter_position) + central_block - 2 * h_groove_side - 2 * h_groove_central) / steel_velocity  # travel time of direct wave into the blocks
-    print(f"Fixed travel time: {fixed_travel_time}")
 
     # GET OBSERVED DATA
     pulse_waveform, pulse_time, pulse_duration = load_and_process_pulse_waveform(frequency_cutoff)
@@ -393,11 +407,14 @@ if __name__ == "__main__":
         'frequency_cutoff': frequency_cutoff,
         'machine_name': machine_name,
         'experiment_name': experiment_name,
+        'fixed_minimum_velocity': fixed_minimum_velocity,  # Add fixed_minimum_velocity to the params
         'normal_stress_values': []  # To be populated during processing
     }
 
     # Main Loop Over UW Files
     for chosen_uw_file, infile_path in enumerate(infile_path_list_uw):
+        if chosen_uw_file == 0:
+            continue
         process_uw_file(
             infile_path=infile_path,
             chosen_uw_file=chosen_uw_file,
@@ -408,5 +425,5 @@ if __name__ == "__main__":
             pulse_duration=pulse_duration,
             frequency_cutoff=frequency_cutoff,
             outdir_path_l2norm=outdir_path_l2norm,
-            params=params
+            params=params  # Pass params, which now includes fixed_minimum_velocity
         )

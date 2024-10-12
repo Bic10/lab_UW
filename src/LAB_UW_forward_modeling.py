@@ -29,16 +29,18 @@ def DDS_UW_simulation(
     misfit_interval: np.ndarray,
     fixed_minimum_velocity: float = None,
     iterative_gradient_descent: bool = False,
-    n_iterations: int = 10,
-    step_length: float = 1e-4,
+    n_iterations: int = 100,
+    dc_max_start: float = 500 * 1e-4,
+    reduce_factor: float = 0.5,
+    dc_threshold: float = 1 * 1e-4 ,
     normalize_waveform: bool = True,
     enable_plotting: bool = False,
     make_movie: bool = False,
     plot_output_path: str = None,
-    movie_output_path: str = None
+    movie_output_path: str = "simulation.mp4"
 ) -> Tuple[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
     """
-    Simulate ultrasonic wave propagation through a sample and compute the synthetic waveform.
+    Simulate ultrasonic wave propagation and perform gradient-based inversion using adaptive step size.
     
     Returns:
         synthetic_waveform: np.ndarray
@@ -49,11 +51,8 @@ def DDS_UW_simulation(
     # Unpack gouge velocities
     gouge_velocity_1, gouge_velocity_2 = gouge_velocity
 
-    # If fixed_minimum_velocity is provided, use it
-    if fixed_minimum_velocity is not None:
-        min_velocity = fixed_minimum_velocity
-    else:
-        min_velocity = min(np.amin(gouge_velocity_1), np.amin(gouge_velocity_2))
+    # Initialize velocity model and min_velocity for grid construction
+    min_velocity = fixed_minimum_velocity if fixed_minimum_velocity is not None else min(np.amin(gouge_velocity_1), np.amin(gouge_velocity_2))
 
     # Create grid according to numerical dispersion criteria for minimum wavelength
     # the sensors are elastic media and the hole behind the sensors are of air 
@@ -101,7 +100,7 @@ def DDS_UW_simulation(
 
     # Create source and receiver spatial functions
     # For the way the spatial axis is created now and the positions are passed, the transmitter and the receiver are a bit tricki
-    transmitter_position_respect_to_spatial_axis =  0.8*pzt_layer_width + pmma_layer_width
+    transmitter_position_respect_to_spatial_axis =  1*pzt_layer_width + pmma_layer_width
     radius_transmitter = 2*len(idx_dict['pzt_1'])
     src_spatial_function = arbitrary_position_filter(
         spatial_axis=spatial_axis,
@@ -111,7 +110,7 @@ def DDS_UW_simulation(
         radius=radius_transmitter
     )
     # since we already use the receiver_position to build the grid, its place is just at the edge between pzt and block...
-    receiver_position_respect_to_spatial_axis = total_length - 0.8*pzt_layer_width - pmma_layer_width 
+    receiver_position_respect_to_spatial_axis = total_length - 1*pzt_layer_width - pmma_layer_width 
 
     radius_receiver = 2*len(idx_dict['pzt_2'])
     rec_spatial_function = arbitrary_position_filter(
@@ -122,12 +121,46 @@ def DDS_UW_simulation(
                                             radius=radius_receiver
                                         )
 
+    # Simulate without inversion
+    wavefield_forward = pseudospectral_1D(
+        num_x=num_x,
+        delta_x=dx,
+        num_t=num_t,
+        delta_t=dt,
+        source_spatial=src_spatial_function,
+        source_time=src_time_function,
+        velocity_model=velocity_model,
+        compute_derivative=False
+    )
+
+    # Record the simulated wavefield at the receiver position
+    simulated_waveform = np.sum(wavefield_forward * rec_spatial_function, axis=1)
+
+    if normalize_waveform:
+        amplitude_scale = np.amax(observed_waveform) / np.amax(simulated_waveform)
+        simulated_waveform *= amplitude_scale
+
+    # Interpolate the synthetic waveform onto the observed time axis
+    synthetic_waveform = np.interp(observed_time, simulation_time, simulated_waveform)
+
+    # Compute residuals and misfit
+    residual = np.zeros_like(observed_waveform)
+    residual[misfit_interval] = synthetic_waveform[misfit_interval] - observed_waveform[misfit_interval]
+
     if iterative_gradient_descent:
-        # Initialize variables for gradient descent
+        initial_misfit = np.sqrt(np.sum(residual ** 2))
+        print(f"Initial Misfit: {initial_misfit}")
+        # Initialize gradient descent parameters
+        dc_max = dc_max_start
+        misfit_prec = initial_misfit
+
+        # Set the best_velocity_model to the initial velocity model
+        best_velocity_model = velocity_model.copy()
+
         for iteration in range(n_iterations):
             print(f"Iteration {iteration + 1}/{n_iterations}")
 
-            # Forward modeling with derivative computation
+            # Forward modeling with derivative computation using the current velocity model
             wavefield_forward, derivative_wavefield_forward = pseudospectral_1D(
                 num_x=num_x,
                 delta_x=dx,
@@ -135,13 +168,12 @@ def DDS_UW_simulation(
                 delta_t=dt,
                 source_spatial=src_spatial_function,
                 source_time=src_time_function,
-                velocity_model=velocity_model,
+                velocity_model=velocity_model,  # Use the current velocity model
                 compute_derivative=True
             )
 
             # Record the simulated wavefield at the receiver position
             simulated_waveform = np.sum(wavefield_forward * rec_spatial_function, axis=1)
-
             if normalize_waveform:
                 amplitude_scale = np.amax(observed_waveform) / np.amax(simulated_waveform)
                 simulated_waveform *= amplitude_scale
@@ -149,109 +181,121 @@ def DDS_UW_simulation(
             # Interpolate the synthetic waveform onto the observed time axis
             synthetic_waveform = np.interp(observed_time, simulation_time, simulated_waveform)
 
-            # Compute residuals
+            # Compute residuals and misfit
             residual = np.zeros_like(observed_waveform)
-            residual[misfit_interval] = observed_waveform[misfit_interval] - synthetic_waveform[misfit_interval]
-
-            # Prepare adjoint source: residuals at receiver location, reverse time
-            residual_interp = np.interp(simulation_time, observed_time, residual)
-            adj_src_time_function = 2 * residual_interp[::-1]  # Reverse time
-            adj_src_spatial_function = rec_spatial_function
-
-            # Adjoint modeling
-            wavefield_adjoint = pseudospectral_1D(
-                num_x=num_x,
-                delta_x=dx,
-                num_t=num_t,
-                delta_t=dt,
-                source_spatial=adj_src_spatial_function,
-                source_time=adj_src_time_function,
-                velocity_model=velocity_model,
-                compute_derivative=False,
-            )
-
-            # Compute gradient
-            product = (2 / (velocity_model ** 3)) * wavefield_adjoint * derivative_wavefield_forward
-            gradient = np.sum(product, axis=0) * dt
-
-            # Apply gradient only to gouge layers
-            gradient_update = np.zeros(num_x)
-            gradient_update[idx_dict['gouge_1']] = gradient[idx_dict['gouge_1']]
-            gradient_update[idx_dict['gouge_2']] = gradient[idx_dict['gouge_2']]
-
-            # Update gouge velocities
-            velocity_model[idx_dict['gouge_1']] -= step_length * gradient_update[idx_dict['gouge_1']]
-            velocity_model[idx_dict['gouge_2']] -= step_length * gradient_update[idx_dict['gouge_2']]
-
-            # Enforce physical constraints on velocity
-            velocity_model[velocity_model < 0.01] = 0.01  # Minimum velocity
-
-            # Optionally, compute and print misfit
-            misfit = 0.5 * np.sum(residual ** 2)
+            residual[misfit_interval] = synthetic_waveform[misfit_interval] - observed_waveform[misfit_interval]
+            misfit = np.sqrt(np.sum(residual ** 2))
             print(f"Misfit: {misfit}")
 
-        # After inversion iterations, extract the updated gouge velocities
-        gouge_velocity_1_updated = velocity_model[idx_dict['gouge_1']]
-        gouge_velocity_2_updated = velocity_model[idx_dict['gouge_2']]
+            # Early stopping based on misfit threshold
+            if dc_max < dc_threshold:
+                print(f"Gradient reduced to minimum updating step: ({dc_threshold}). Stopped")
+                break
 
-        if enable_plotting:
-            plot_simulation_waveform(observed_time, synthetic_waveform, observed_waveform, misfit_interval, outfile_path=plot_output_path)
+            if misfit <= misfit_prec:
+                # Misfit decreased, update best model and proceed
+                misfit_prec = misfit
+                best_velocity_model = velocity_model.copy()
+                print(f"Misfit decreased, saving the current model as the best.")
 
-        if make_movie:
-            make_movie_from_simulation(
-                outfile_path=movie_output_path,
-                x=spatial_axis,
-                t=simulation_time,
-                sp_field=wavefield_forward,
-                sp_recorded=simulated_waveform,
-                sample_dimensions=sample_dimensions,
-                idx_dict=idx_dict,
-            )
+                # Adjoint modeling for gradient calculation
+                adj_src_time_function = 2 * residual[::-1]  # Reverse time
+                adj_src_time_function = interpolate_source(
+                    pulse_time=observed_time,
+                    pulse_waveform=adj_src_time_function,
+                    dt=dt
+                )
 
-        return synthetic_waveform, (gouge_velocity_1_updated, gouge_velocity_2_updated)
+                wavefield_adjoint = pseudospectral_1D(
+                    num_x=num_x,
+                    delta_x=dx,
+                    num_t=num_t,
+                    delta_t=dt,
+                    source_spatial=rec_spatial_function,
+                    source_time=adj_src_time_function,
+                    velocity_model=velocity_model,  # Use the current velocity model
+                    compute_derivative=False
+                )
+
+                # Compute the gradient
+                gradient = np.zeros_like(velocity_model)
+                for t_step in range(num_t):
+                    gradient += (2 / (velocity_model ** 3)) * wavefield_adjoint[t_step, :] * derivative_wavefield_forward[t_step, :]
+
+                gradient *= dt
+
+                # dE_max = np.max(np.abs(gradient))
+                # velocity_model -= (dc_max/dE_max) * gradient
+
+                plt.plot(velocity_model)
+                plt.show()
+
+                # Apply gradient only to gouge layers
+                gradient_update = np.zeros(num_x)
+                # gradient_update[idx_dict['gouge_1']] = gradient[idx_dict['gouge_1']]
+                # gradient_update[idx_dict['gouge_2']] = gradient[idx_dict['gouge_2']]
+                
+                gradient_update[idx_dict['pmma_1']] = gradient[idx_dict['pmma_1']]
+                gradient_update[idx_dict['pmma_2']] = gradient[idx_dict['pmma_2']]
+                gradient_update[idx_dict['pzt_1']] = gradient[idx_dict['pzt_1']]
+                gradient_update[idx_dict['pzt_2']] = gradient[idx_dict['pzt_2']]
+
+                # Update velocity model with scaled gradient
+                dE_max = np.max(np.abs(gradient_update))
+                # velocity_model[idx_dict['gouge_1']] -= (dc_max/dE_max) * gradient_update[idx_dict['gouge_1']]
+                # velocity_model[idx_dict['gouge_2']] -= (dc_max/dE_max) * gradient_update[idx_dict['gouge_2']]
+
+                velocity_model[idx_dict['pmma_1']] -= (dc_max/dE_max) * gradient_update[idx_dict['pmma_1']] 
+                velocity_model[idx_dict['pmma_2']] -= (dc_max/dE_max) * gradient_update[idx_dict['pmma_2']] 
+                velocity_model[idx_dict['pzt_1']] -= (dc_max/dE_max) * gradient_update[idx_dict['pzt_1']] 
+                velocity_model[idx_dict['pzt_2']] -= (dc_max/dE_max) * gradient_update[idx_dict['pzt_2']] 
+
+
+            else:
+                # Misfit increased, reduce step size and revert to best model
+                dc_max *= reduce_factor
+                print(f"Misfit increased, reducing maximum gradient magnitude to: {dc_max}")
+                velocity_model = best_velocity_model.copy()  # Revert to the best velocity model
 
     else:
-        # Compute synthetic wavefield without inversion
-        synthetic_field = pseudospectral_1D(
-            num_x=num_x,
-            delta_x=dx,
-            num_t=num_t,
-            delta_t=dt,
-            source_spatial=src_spatial_function,
-            source_time=src_time_function,
-            velocity_model=velocity_model,
-            compute_derivative=False
+        best_velocity_model = velocity_model.copy()
+
+    # At the end of the optimization, best_velocity_model contains the best model
+    gouge_velocity_1_updated = best_velocity_model[idx_dict['gouge_1']]  # Use the best model for output
+    gouge_velocity_2_updated = best_velocity_model[idx_dict['gouge_2']]
+
+    # Build the final velocity model using the best velocities
+    velocity_model, idx_dict = build_velocity_model(
+        x=spatial_axis,
+        sample_dimensions=sample_dimensions,
+        x_transmitter=transmitter_position,
+        x_receiver=receiver_position,
+        pzt_layer_width=pzt_layer_width,
+        pmma_layer_width=pmma_layer_width,
+        h_groove_side=h_groove_side,
+        h_groove_central=h_groove_central,
+        steel_velocity=steel_velocity,
+        gouge_velocity=(gouge_velocity_1_updated, gouge_velocity_2_updated),
+        pzt_velocity=pzt_velocity,
+        pmma_velocity=pmma_velocity,
+        plotting=False
+    )
+
+    if enable_plotting:
+        plot_simulation_waveform(observed_time, synthetic_waveform, observed_waveform, misfit_interval, outfile_path=plot_output_path)
+
+    if make_movie:
+        make_movie_from_simulation(
+            outfile_path=movie_output_path,
+            x=spatial_axis,
+            t=simulation_time,
+            sp_field=wavefield_forward,
+            sp_recorded=simulated_waveform,
+            sample_dimensions=sample_dimensions,
+            idx_dict=idx_dict,
         )
 
-        # Record the simulated wavefield at the receiver position
-        simulated_waveform = np.sum(synthetic_field * rec_spatial_function, axis=1)
-
-        if normalize_waveform:
-            amplitude_scale = np.amax(observed_waveform) / np.amax(simulated_waveform)
-            simulated_waveform *= amplitude_scale
-
-        # Interpolate the synthetic waveform onto the observed time axis
-        synthetic_waveform = np.interp(observed_time, simulation_time, simulated_waveform)
-
-        # Extract the initial gouge velocities
-        gouge_velocity_1_initial = velocity_model[idx_dict['gouge_1']]
-        gouge_velocity_2_initial = velocity_model[idx_dict['gouge_2']]
-
-        if enable_plotting:
-            plot_simulation_waveform(observed_time, synthetic_waveform, observed_waveform, misfit_interval, outfile_path=plot_output_path)
-
-        if make_movie:
-            make_movie_from_simulation(
-                outfile_path=movie_output_path,
-                x=spatial_axis,
-                t=simulation_time,
-                sp_field=synthetic_field,
-                sp_recorded=simulated_waveform,
-                sample_dimensions=sample_dimensions,
-                idx_dict=idx_dict,
-            )
-
-        return synthetic_waveform, (gouge_velocity_1_initial, gouge_velocity_2_initial)
+    return synthetic_waveform, (gouge_velocity_1_updated, gouge_velocity_2_updated)
 
 def pseudospectral_1D(
     num_x: int,
@@ -262,7 +306,6 @@ def pseudospectral_1D(
     source_time: np.ndarray,
     velocity_model: np.ndarray,
     compute_derivative: bool = False,
-    reverse_time: bool = False,
 ) -> Union[np.ndarray, tuple]:
     """
     Perform pseudospectral modeling for 1D wave propagation (forward or adjoint).
@@ -278,8 +321,6 @@ def pseudospectral_1D(
 
     # Time-stepping loop
     time_steps = range(num_t)
-    if reverse_time:
-        time_steps = reversed(time_steps)
 
     for time_step in time_steps:
         # Second spatial derivative using Fourier method
@@ -303,18 +344,12 @@ def pseudospectral_1D(
         wavefield_current[-1] = 0
 
         # Store wavefield at current time step
-        if reverse_time:
-            wavefield[num_t - 1 - time_step, :] = wavefield_current
-        else:
-            wavefield[time_step, :] = wavefield_current
+        wavefield[time_step, :] = wavefield_current
 
         # Compute derivative wavefield if required
         if compute_derivative:
             derivative = (wavefield_future - 2 * wavefield_current + wavefield_past) / (delta_t ** 2)
-            if reverse_time:
-                derivative_wavefield[num_t - 1 - time_step, :] = derivative
-            else:
-                derivative_wavefield[time_step, :] = derivative
+            derivative_wavefield[num_t - 1 - time_step, :] = derivative
 
     if compute_derivative:
         return wavefield, derivative_wavefield
@@ -399,7 +434,7 @@ def compute_misfit(
     """
     Compute the L2 norm misfit between observed and synthetic waveforms over a specified interval.
     """
-    return LA.norm(observed_waveform[misfit_interval] - synthetic_waveform[misfit_interval], 2)
+    return LA.norm(synthetic_waveform[misfit_interval] - observed_waveform[misfit_interval], 2)
 
 
 import numpy as np
@@ -489,4 +524,5 @@ def arbitrary_position_filter(
         windowed_sinc[right_indices] = 0.0
 
     return windowed_sinc
+
 

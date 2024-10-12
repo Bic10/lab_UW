@@ -139,8 +139,15 @@ def build_velocity_model(
     groove_sb1_length = len(idx_dict['groove_sb1'])
     if groove_sb1_length > 0:
         groove_sb1_start_vel = steel_velocity
-        groove_sb1_end_vel = gouge_velocity[0][0] if isinstance(gouge_velocity[0], np.ndarray) else gouge_velocity[0]
-        c[idx_dict['groove_sb1']] = np.linspace(groove_sb1_start_vel, groove_sb1_end_vel, groove_sb1_length)
+        if isinstance(gouge_velocity[0], np.ndarray):
+            groove_sb1_end_vel = gouge_velocity[0][0]
+            if groove_sb1_length == 1:
+                c[idx_dict['groove_sb1']] = groove_sb1_end_vel
+            else:
+                c[idx_dict['groove_sb1']] = np.linspace(groove_sb1_start_vel, groove_sb1_end_vel, groove_sb1_length)
+        else:
+            groove_sb1_end_vel = gouge_velocity[0]
+            c[idx_dict['groove_sb1']] = np.linspace(groove_sb1_start_vel, groove_sb1_end_vel, groove_sb1_length)
 
     # Assign velocities in Gouge Layer 1
     if isinstance(gouge_velocity[0], np.ndarray):
@@ -155,7 +162,10 @@ def build_velocity_model(
     if groove_cb1_length > 0:
         groove_cb1_start_vel = gouge_velocity[0][-1] if isinstance(gouge_velocity[0], np.ndarray) else gouge_velocity[0]
         groove_cb1_end_vel = steel_velocity
-        c[idx_dict['groove_cb1']] = np.linspace(groove_cb1_start_vel, groove_cb1_end_vel, groove_cb1_length)
+        if groove_cb1_length == 1:
+            c[idx_dict['groove_cb1']] = groove_cb1_start_vel
+        else:
+            c[idx_dict['groove_cb1']] = np.linspace(groove_cb1_start_vel, groove_cb1_end_vel, groove_cb1_length)
 
     # Assign velocities in Central Block
     c[idx_dict['central_block']] = steel_velocity
@@ -165,7 +175,10 @@ def build_velocity_model(
     if groove_cb2_length > 0:
         groove_cb2_start_vel = steel_velocity
         groove_cb2_end_vel = gouge_velocity[1][0] if isinstance(gouge_velocity[1], np.ndarray) else gouge_velocity[1]
-        c[idx_dict['groove_cb2']] = np.linspace(groove_cb2_start_vel, groove_cb2_end_vel, groove_cb2_length)
+        if groove_cb2_length == 1:
+            c[idx_dict['groove_cb2']] = groove_cb2_end_vel
+        else:
+            c[idx_dict['groove_cb2']] = np.linspace(groove_cb2_start_vel, groove_cb2_end_vel, groove_cb2_length)
 
     # Assign velocities in Gouge Layer 2
     if isinstance(gouge_velocity[1], np.ndarray):
@@ -180,16 +193,18 @@ def build_velocity_model(
     if groove_sb2_length > 0:
         groove_sb2_start_vel = gouge_velocity[1][-1] if isinstance(gouge_velocity[1], np.ndarray) else gouge_velocity[1]
         groove_sb2_end_vel = steel_velocity
-        c[idx_dict['groove_sb2']] = np.linspace(groove_sb2_start_vel, groove_sb2_end_vel, groove_sb2_length)
+        if groove_sb2_length == 1:
+            c[idx_dict['groove_sb2']] = groove_sb2_start_vel
+        else:
+            c[idx_dict['groove_sb2']] = np.linspace(groove_sb2_start_vel, groove_sb2_end_vel, groove_sb2_length)
 
     # Side Block 2 remains steel_velocity
     c[idx_dict['pzt_2']] = pzt_velocity
     c[idx_dict['pmma_2']] = pmma_velocity
 
     # Apply smoothing between pzt_velocity and steel_velocity around transmitter and receiver
-    # Transmitter smoothing
-    transmitter_smoothing_start = layer_starts[1]  # Start of PZT layer
-    transmitter_smoothing_end = layer_starts[2] + pzt_layer_width  # End of smoothing region
+    transmitter_smoothing_start = layer_starts[1]
+    transmitter_smoothing_end = layer_starts[2] + pzt_layer_width
     transmitter_indices = np.where((x >= transmitter_smoothing_start) & (x < transmitter_smoothing_end))[0]
     if len(transmitter_indices) > 0:
         c[transmitter_indices] = np.linspace(pzt_velocity, steel_velocity, len(transmitter_indices))
@@ -201,8 +216,7 @@ def build_velocity_model(
     if len(receiver_indices) > 0:
         c[receiver_indices] = np.linspace(steel_velocity, pzt_velocity, len(receiver_indices))
 
-    # Plotting with shaded areas
-    # Plotting with shaded areas
+    # Optional: Plot the velocity model
     if plotting:
         plot_velocity_model(
             x=x,
@@ -214,6 +228,7 @@ def build_velocity_model(
         )
 
     return c, idx_dict
+
 
 def synthetic_source_time_function(t: np.ndarray) -> np.ndarray:
     '''

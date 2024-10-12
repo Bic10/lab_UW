@@ -373,9 +373,6 @@ def process_waveform(
             cmax_waveform = 0.055 * (normal_stress**0.25)
             print(f"No manual estimates found. Using default initial estimates: cmin={cmin_waveform}, cmax={cmax_waveform}")
 
-        # # Estimate initial velocity: must be moved outside
-        # cmin_waveform = 0.035 * (normal_stress**0.25)
-        # cmax_waveform = 0.055 * (normal_stress**0.25)
         c_step_waveform = c_step  # Use the defined step size
 
         # Define evaluation interval for L2 norm of the residuals
@@ -672,7 +669,7 @@ if __name__ == "__main__":
         'pmma_layer_width': pmma_layer_width,
         'pzt_velocity': pzt_velocity,
         'pmma_velocity': pmma_velocity,
-        'plot_save_interval': 5,  # Save plots every 50 waveforms
+        'plot_save_interval': 1,  # Save plots every 50 waveforms
         'movie_save_interval': 100,
         'l2norm_plot_interval': 5,  # Save L2 norm plots every 50 waveforms
         'outdir_path_image': outdir_path_image,
@@ -697,6 +694,8 @@ if __name__ == "__main__":
 
     # Main Loop Over UW Files
     for chosen_uw_file, infile_path  in enumerate(infile_path_list_uw):
+        if chosen_uw_file == 0:
+            continue
         manual_pick_arrival_time_interval = manual_pick_arrival_time_interval_list[chosen_uw_file]
         process_uw_file(
             infile_path=infile_path,
