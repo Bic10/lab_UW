@@ -245,7 +245,8 @@ def DDS_UW_simulation(
                 gradient_update = np.zeros(num_x)
 
                 if invert_pzt_regions:
-                    N_adjacent = round(minimum_wavelength)        # may be this should be en external parameter too!!!
+                    N_adjacent = 10        # may be this should be en external parameter too!!!
+                    print(f'N adiacent: {N_adjacent}')
                     # Update PZT regions and adjacent steel regions
                     regions_to_update = np.concatenate([
                         idx_dict['pzt_1'],
@@ -296,14 +297,12 @@ def DDS_UW_simulation(
                 velocity_min = fixed_minimum_velocity  # [cm/μs], minimum velocity (e.g., 1000 m/s)
                 velocity_max = steel_velocity      # Maximum velocity is steel_velocity
 
-                if random.randint(0, 1):
                 # Clip velocities to physical bounds
-                    velocity_model[regions_to_update] = np.clip(velocity_model[regions_to_update], velocity_min, velocity_max)
+                velocity_model[regions_to_update] = np.clip(velocity_model[regions_to_update], velocity_min, velocity_max)
 
                 # Apply smoothing for smooth solutions
-                if random.randint(0, 1):
-                    sigma= N_adjacent
-                    velocity_model[regions_to_update] = gaussian_filter1d(velocity_model[regions_to_update], sigma=sigma)
+                sigma= N_adjacent
+                velocity_model[regions_to_update] = gaussian_filter1d(velocity_model[regions_to_update], sigma=sigma)
 
                 # plt.figure()
                 # plt.plot(velocity_model)
@@ -312,8 +311,7 @@ def DDS_UW_simulation(
 
             else:
                 # Misfit increased, reduce step size and revert to best model
-                if random.randint(0, 1):
-                    dc_max *= reduce_factor
+                dc_max *= reduce_factor
                 print(f"Misfit increased, reducing maximum gradient magnitude to: {dc_max}")
                 velocity_model = best_velocity_model.copy()  # Revert to the best velocity model
 

@@ -179,10 +179,10 @@ def process_uw_file(infile_path, chosen_uw_file, sync_peaks, mech_data, pulse_wa
         if overall_index < 3504:
             continue  # Skip other waveforms
 
-        if overall_index >= 3504 and overall_index < 4000:
+        if overall_index >= 3504 and overall_index < 3600:
             params['invert_pzt_regions'] = True
 
-        if overall_index > 4000:
+        if overall_index > 3600:
             params['invert_pzt_regions'] = False
 
         print(f"Layer thickness: {thickness_gouge_1}\tNormal_stress: {normal_stress}\tShear_stress: {shear_stress}")
@@ -309,7 +309,7 @@ def process_waveform(
         + 2 * (h_groove_side + h_groove_central) / (steel_velocity + gouge_1_velocity_average) \
         + 2 * (h_groove_side + h_groove_central) / (steel_velocity + gouge_1_velocity_average)
 
-    max_travel_time = min_travel_time + 2 * pulse_duration
+    max_travel_time = min_travel_time + pulse_duration
     misfit_interval = np.where((observed_time > min_travel_time) & (observed_time < max_travel_time))
 
     # Check Signal-to-Noise Ratio

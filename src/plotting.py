@@ -11,7 +11,7 @@ import matplotlib.animation as animation
 FONT_TYPE = "Ubuntu"
 FONT_SIZE = 30
 FIGURE_SIZE = (16, 8)
-FORMAT = ".svg"
+FORMAT = ".png"
 
 # Define the color palette for the plots
 colors = {
