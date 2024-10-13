@@ -4,10 +4,14 @@ import numpy as np
 from numpy import linalg as LA
 from typing import Union
 from scipy.signal.windows import kaiser
+from scipy.ndimage import gaussian_filter1d
 
 from helpers import *
 from synthetic_data import *
 from plotting import *
+
+import random
+
 
 def DDS_UW_simulation(
     observed_time: np.ndarray,
@@ -28,59 +32,69 @@ def DDS_UW_simulation(
     pmma_velocity: float,
     misfit_interval: np.ndarray,
     fixed_minimum_velocity: float = None,
-    iterative_gradient_descent: bool = False,
     n_iterations: int = 100,
     dc_max_start: float = 500 * 1e-4,
     reduce_factor: float = 0.5,
-    dc_threshold: float = 1 * 1e-4 ,
+    dc_threshold: float = 10 * 1e-4,
     normalize_waveform: bool = True,
     enable_plotting: bool = False,
     make_movie: bool = False,
     plot_output_path: str = None,
-    movie_output_path: str = "simulation.mp4"
-) -> Tuple[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
+    movie_output_path: str = "simulation.mp4",
+    iterative_gradient_descent: bool = False,
+    invert_pzt_regions: bool = False,
+    initial_velocity_model: np.ndarray = None,
+    idx_dict: dict = None,
+) -> Tuple[np.ndarray, np.ndarray, dict]:
     """
-    Simulate ultrasonic wave propagation and perform gradient-based inversion using adaptive step size.
+    Simulate ultrasonic wave propagation and perform gradient-based inversion.
     
     Returns:
         synthetic_waveform: np.ndarray
             The synthetic waveform simulated.
-        updated_gouge_velocities: Tuple[np.ndarray, np.ndarray]
-            The updated velocity models for the two gouge layers.
+        velocity_model: np.ndarray
+            The updated 1D velocity model after inversion.
+        idx_dict: dict
+            Dictionary of indices for different regions.
     """
     # Unpack gouge velocities
     gouge_velocity_1, gouge_velocity_2 = gouge_velocity
 
-    # Initialize velocity model and min_velocity for grid construction
-    min_velocity = fixed_minimum_velocity if fixed_minimum_velocity is not None else min(np.amin(gouge_velocity_1), np.amin(gouge_velocity_2))
+    # Compute the spatial grid
+    total_length = np.sum(sample_dimensions) + 2*pmma_layer_width + 2*pzt_layer_width - (transmitter_position + receiver_position)
+    minimum_wavelength = fixed_minimum_velocity/frequency_cutoff 
 
-    # Create grid according to numerical dispersion criteria for minimum wavelength
-    # the sensors are elastic media and the hole behind the sensors are of air 
-    # the trasmitter and receiver position should be passed as their "pzt_depth" respect to the external edge of their block
-    total_length = np.sum(sample_dimensions) + 2*pmma_layer_width + 2*pzt_layer_width -  (transmitter_position + receiver_position)
-
-    spatial_axis, dx, num_x = compute_grid(
-        total_length_to_simulate= total_length,
-        min_velocity=min_velocity,
-        frequency_cutoff=frequency_cutoff,
-    )
-
-    # Build the initial velocity model
-    velocity_model, idx_dict = build_velocity_model(
-        x=spatial_axis,
-        sample_dimensions=sample_dimensions,
-        x_transmitter=transmitter_position,
-        x_receiver=receiver_position,
-        pzt_layer_width=pzt_layer_width,
-        pmma_layer_width=pmma_layer_width,
-        h_groove_side=h_groove_side,
-        h_groove_central=h_groove_central,
-        steel_velocity=steel_velocity,
-        gouge_velocity=(gouge_velocity_1, gouge_velocity_2),
-        pzt_velocity=pzt_velocity,
-        pmma_velocity=pmma_velocity,
-        plotting=False
-    )
+    # Use provided initial_velocity_model and idx_dict, or build them
+    if initial_velocity_model is not None and idx_dict is not None:
+        velocity_model = initial_velocity_model.copy()
+        num_x = len(velocity_model)
+        spatial_axis = np.linspace(start=0,
+                                   stop=total_length,
+                                   num=num_x)
+        dx = spatial_axis[1]-spatial_axis[0]
+    
+    else:
+        # Build the initial velocity model
+        spatial_axis, dx, num_x = compute_grid(
+            total_length_to_simulate=total_length,
+            min_velocity=fixed_minimum_velocity,
+            frequency_cutoff=frequency_cutoff,
+            )
+        velocity_model, idx_dict = build_velocity_model(
+            x=spatial_axis,
+            sample_dimensions=sample_dimensions,
+            x_transmitter=transmitter_position,
+            x_receiver=receiver_position,
+            pzt_layer_width=pzt_layer_width,
+            pmma_layer_width=pmma_layer_width,
+            h_groove_side=h_groove_side,
+            h_groove_central=h_groove_central,
+            steel_velocity=steel_velocity,
+            gouge_velocity=(gouge_velocity_1, gouge_velocity_2),
+            pzt_velocity=pzt_velocity,
+            pmma_velocity=pmma_velocity,
+            plotting=False
+        )
 
     # Prepare time variables
     simulation_time, dt, num_t = prepare_time_variables(
@@ -99,9 +113,8 @@ def DDS_UW_simulation(
     src_time_function[:len(interpolated_pulse)] = interpolated_pulse
 
     # Create source and receiver spatial functions
-    # For the way the spatial axis is created now and the positions are passed, the transmitter and the receiver are a bit tricki
-    transmitter_position_respect_to_spatial_axis =  1*pzt_layer_width + pmma_layer_width
-    radius_transmitter = 2*len(idx_dict['pzt_1'])
+    transmitter_position_respect_to_spatial_axis = pzt_layer_width + pmma_layer_width
+    radius_transmitter = 2 * len(idx_dict['pzt_1'])
     src_spatial_function = arbitrary_position_filter(
         spatial_axis=spatial_axis,
         dx=dx,
@@ -109,17 +122,16 @@ def DDS_UW_simulation(
         flip_side=None,
         radius=radius_transmitter
     )
-    # since we already use the receiver_position to build the grid, its place is just at the edge between pzt and block...
-    receiver_position_respect_to_spatial_axis = total_length - 1*pzt_layer_width - pmma_layer_width 
 
-    radius_receiver = 2*len(idx_dict['pzt_2'])
+    receiver_position_respect_to_spatial_axis = total_length - pzt_layer_width - pmma_layer_width
+    radius_receiver = 2 * len(idx_dict['pzt_2'])
     rec_spatial_function = arbitrary_position_filter(
-                                            spatial_axis=spatial_axis,
-                                            dx=dx,
-                                            position=receiver_position_respect_to_spatial_axis,
-                                            flip_side=None,
-                                            radius=radius_receiver
-                                        )
+        spatial_axis=spatial_axis,
+        dx=dx,
+        position=receiver_position_respect_to_spatial_axis,
+        flip_side=None,
+        radius=radius_receiver
+    )
 
     # Simulate without inversion
     wavefield_forward = pseudospectral_1D(
@@ -224,62 +236,90 @@ def DDS_UW_simulation(
 
                 gradient *= dt
 
-                # dE_max = np.max(np.abs(gradient))
-                # velocity_model -= (dc_max/dE_max) * gradient
+                # plt.figure()
+                # plt.plot(gradient)
+                # plt.title("gradient")
+                # plt.show()
 
-                plt.plot(velocity_model)
-                plt.show()
-
-                # Apply gradient only to gouge layers
+                # Apply gradient only to specified regions
                 gradient_update = np.zeros(num_x)
-                # gradient_update[idx_dict['gouge_1']] = gradient[idx_dict['gouge_1']]
-                # gradient_update[idx_dict['gouge_2']] = gradient[idx_dict['gouge_2']]
-                
-                gradient_update[idx_dict['pmma_1']] = gradient[idx_dict['pmma_1']]
-                gradient_update[idx_dict['pmma_2']] = gradient[idx_dict['pmma_2']]
-                gradient_update[idx_dict['pzt_1']] = gradient[idx_dict['pzt_1']]
-                gradient_update[idx_dict['pzt_2']] = gradient[idx_dict['pzt_2']]
 
-                # Update velocity model with scaled gradient
-                dE_max = np.max(np.abs(gradient_update))
-                # velocity_model[idx_dict['gouge_1']] -= (dc_max/dE_max) * gradient_update[idx_dict['gouge_1']]
-                # velocity_model[idx_dict['gouge_2']] -= (dc_max/dE_max) * gradient_update[idx_dict['gouge_2']]
+                if invert_pzt_regions:
+                    N_adjacent = round(minimum_wavelength)        # may be this should be en external parameter too!!!
+                    # Update PZT regions and adjacent steel regions
+                    regions_to_update = np.concatenate([
+                        idx_dict['pzt_1'],
+                        idx_dict['pzt_2'],
+                        idx_dict['side_block_1'][:N_adjacent],
+                        idx_dict['side_block_2'][-N_adjacent:]
+                    ])
+                else:
+                    dc_max = dc_max_start/5
+                    dc_threshold = dc_threshold/5
+                    # Original behavior: update gouge layers
+                    regions_to_update = np.concatenate([idx_dict['gouge_1'], idx_dict['gouge_2']])
 
-                velocity_model[idx_dict['pmma_1']] -= (dc_max/dE_max) * gradient_update[idx_dict['pmma_1']] 
-                velocity_model[idx_dict['pmma_2']] -= (dc_max/dE_max) * gradient_update[idx_dict['pmma_2']] 
-                velocity_model[idx_dict['pzt_1']] -= (dc_max/dE_max) * gradient_update[idx_dict['pzt_1']] 
-                velocity_model[idx_dict['pzt_2']] -= (dc_max/dE_max) * gradient_update[idx_dict['pzt_2']] 
+                if not random.randint(0, 10):
+                    regions_to_update = np.concatenate([
+                        idx_dict['pzt_1'],
+                        idx_dict['pzt_2'],
+                        idx_dict['side_block_1'][:N_adjacent],
+                        idx_dict['side_block_2'][-N_adjacent:],
+                        idx_dict['gouge_1'], 
+                        idx_dict['gouge_2']
+                        ])
 
+                # Apply gradient to selected regions
+                gradient_update[regions_to_update] = gradient[regions_to_update]
+
+                # plt.figure()
+                # plt.plot(gradient_update)
+                # plt.title("gradient update")
+                # plt.show()
+
+
+                # Scale gradient
+                dE_max = np.max(np.abs(gradient_update[regions_to_update]))
+
+                if random.randint(0, 1):
+                    velocity_model[regions_to_update] += (dc_max / dE_max) * gradient_update[regions_to_update]
+                else:
+                    velocity_model[regions_to_update] -= (dc_max / dE_max) * gradient_update[regions_to_update]
+
+                # plt.figure()
+                # plt.plot(velocity_model)
+                # plt.title("updated velocity before clip and smooth")
+                # plt.show()
+
+
+                # Enforce bounds and smoothness
+                velocity_min = fixed_minimum_velocity  # [cm/μs], minimum velocity (e.g., 1000 m/s)
+                velocity_max = steel_velocity      # Maximum velocity is steel_velocity
+
+                if random.randint(0, 1):
+                # Clip velocities to physical bounds
+                    velocity_model[regions_to_update] = np.clip(velocity_model[regions_to_update], velocity_min, velocity_max)
+
+                # Apply smoothing for smooth solutions
+                if random.randint(0, 1):
+                    sigma= N_adjacent
+                    velocity_model[regions_to_update] = gaussian_filter1d(velocity_model[regions_to_update], sigma=sigma)
+
+                # plt.figure()
+                # plt.plot(velocity_model)
+                # plt.title("updated velocity after clip and smooth")
+                # plt.show()
 
             else:
                 # Misfit increased, reduce step size and revert to best model
-                dc_max *= reduce_factor
+                if random.randint(0, 1):
+                    dc_max *= reduce_factor
                 print(f"Misfit increased, reducing maximum gradient magnitude to: {dc_max}")
                 velocity_model = best_velocity_model.copy()  # Revert to the best velocity model
 
     else:
         best_velocity_model = velocity_model.copy()
 
-    # At the end of the optimization, best_velocity_model contains the best model
-    gouge_velocity_1_updated = best_velocity_model[idx_dict['gouge_1']]  # Use the best model for output
-    gouge_velocity_2_updated = best_velocity_model[idx_dict['gouge_2']]
-
-    # Build the final velocity model using the best velocities
-    velocity_model, idx_dict = build_velocity_model(
-        x=spatial_axis,
-        sample_dimensions=sample_dimensions,
-        x_transmitter=transmitter_position,
-        x_receiver=receiver_position,
-        pzt_layer_width=pzt_layer_width,
-        pmma_layer_width=pmma_layer_width,
-        h_groove_side=h_groove_side,
-        h_groove_central=h_groove_central,
-        steel_velocity=steel_velocity,
-        gouge_velocity=(gouge_velocity_1_updated, gouge_velocity_2_updated),
-        pzt_velocity=pzt_velocity,
-        pmma_velocity=pmma_velocity,
-        plotting=False
-    )
 
     if enable_plotting:
         plot_simulation_waveform(observed_time, synthetic_waveform, observed_waveform, misfit_interval, outfile_path=plot_output_path)
@@ -295,7 +335,7 @@ def DDS_UW_simulation(
             idx_dict=idx_dict,
         )
 
-    return synthetic_waveform, (gouge_velocity_1_updated, gouge_velocity_2_updated)
+    return synthetic_waveform, best_velocity_model, idx_dict
 
 def pseudospectral_1D(
     num_x: int,
@@ -385,6 +425,8 @@ def compute_grid(
     spatial_axis = spatial_axis_relative + x_start
     dx = spatial_axis[1] - spatial_axis[0]
     num_x = len(spatial_axis)
+
+
     return spatial_axis, dx, num_x
 
 

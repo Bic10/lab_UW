@@ -62,11 +62,12 @@ def load_and_process_pulse_waveform(frequency_cutoff):
     pulse_duration = pulse_time[-1] - pulse_time[0]
     return pulse_waveform, pulse_time, pulse_duration
 
-def process_uw_file(infile_path, chosen_uw_file, sync_peaks, mech_data, pulse_waveform, pulse_time, pulse_duration, frequency_cutoff, outdir_path_l2norm, params):
+def process_uw_file(infile_path, chosen_uw_file, sync_peaks, mech_data, pulse_waveform, pulse_time, pulse_duration, frequency_cutoff, outdir_path_model, params):
     """
     Process a single UW data file.
     """
     # Unpack parameters
+    invert_pzt_regions = params['invert_pzt_regions']
     minimum_SNR = params['minimum_SNR']
     fixed_travel_time = params['fixed_travel_time']
     c_step = params['c_step']
@@ -94,7 +95,7 @@ def process_uw_file(infile_path, chosen_uw_file, sync_peaks, mech_data, pulse_wa
 
     # CHOOSE OUTFILE_PATH
     outfile_name = os.path.basename(infile_path).split('.')[0]
-    outfile_path = os.path.join(outdir_path_l2norm[0], outfile_name)
+    outfile_path = os.path.join(outdir_path_model[0], outfile_name)
 
     print('PROCESSING UW DATA IN %s: ' % infile_path)
     start_time = tm.time()
@@ -143,8 +144,9 @@ def process_uw_file(infile_path, chosen_uw_file, sync_peaks, mech_data, pulse_wa
         ec_disp_mm_list = mech_data.ec_disp_mm[sync_peaks[2 * chosen_uw_file]: metadata['number_of_waveforms']].values
         time_s_list = mech_data.time_s[sync_peaks[2 * chosen_uw_file]: metadata['number_of_waveforms']].values
 
-    # Initialize previous velocity model
+    # Initialize previous_velocity_model and idx_dict
     previous_velocity_model = None
+    idx_dict = None
 
     # Load initial velocity from global optimization results
     initial_velocity_directory = make_data_analysis_folders(machine_name=params['machine_name'], experiment_name=params['experiment_name'], data_types=["global_optimization_velocity"])
@@ -159,11 +161,11 @@ def process_uw_file(infile_path, chosen_uw_file, sync_peaks, mech_data, pulse_wa
 
     # Process each waveform sequentially
     for idx_waveform, (thickness_gouge_1, thickness_gouge_2, normal_stress, shear_stress, ec_disp_mm, time_s) in enumerate(zip(thickness_gouge_1_list[::downsampling], thickness_gouge_2_list[::downsampling], normal_stress_list[::downsampling], shear_stress_list[::downsampling], ec_disp_mm_list[::downsampling], time_s_list[::downsampling])):
+
         initial_velocity = estimated_velocities[idx_waveform]
         idx = idx_waveform * downsampling
         thickness_gouge_1 *= 2                 # IT IS A SILLY PROBLEM FOR THE CURRENT COMPUTATION OF LAYER THICKNESS
         thickness_gouge_2 *= 2
-        print(f"Layer thickness: {thickness_gouge_1}\tNormal_stress: {normal_stress}\tShear_stress: {shear_stress}")
 
         try:
             observed_waveform = observed_waveform_data[idx] 
@@ -173,6 +175,18 @@ def process_uw_file(infile_path, chosen_uw_file, sync_peaks, mech_data, pulse_wa
         # Compute the overall index for synchronization
         overall_index = sync_peaks[2 * chosen_uw_file] + idx
 
+        # WAVEFORM OF THE COMPACTION MOMENT WHERE TO WORK ON IMPROVING MODEL AROUND PZTS!!!
+        if overall_index < 3504:
+            continue  # Skip other waveforms
+
+        if overall_index >= 3504 and overall_index < 4000:
+            params['invert_pzt_regions'] = True
+
+        if overall_index > 4000:
+            params['invert_pzt_regions'] = False
+
+        print(f"Layer thickness: {thickness_gouge_1}\tNormal_stress: {normal_stress}\tShear_stress: {shear_stress}")
+
         # Append stress and displacement values
         normal_stress_values.append(normal_stress)
         shear_stress_values.append(shear_stress)
@@ -180,13 +194,14 @@ def process_uw_file(infile_path, chosen_uw_file, sync_peaks, mech_data, pulse_wa
         time_s_values.append(time_s)
 
         # Process the waveform
-        updated_velocity_model = process_waveform(
+        updated_velocity_model, idx_dict = process_waveform(
             observed_waveform=observed_waveform,
             observed_time=observed_time,
             idx_waveform=idx_waveform,
             overall_index=overall_index,
             outfile_name=outfile_name,
             initial_velocity_model=initial_velocity if previous_velocity_model is None else previous_velocity_model,
+            idx_dict = idx_dict,
             thickness_gouge_1=thickness_gouge_1,
             thickness_gouge_2=thickness_gouge_2,
             pulse_waveform=pulse_waveform,
@@ -214,6 +229,7 @@ def process_waveform(
     idx_waveform,
     overall_index,
     outfile_name,
+    idx_dict,
     initial_velocity_model,
     thickness_gouge_1,
     thickness_gouge_2,
@@ -227,6 +243,7 @@ def process_waveform(
     Process a single waveform using FWI to update the 1D velocity model.
     """
     # Unpack parameters
+    invert_pzt_regions = params['invert_pzt_regions']
     frequency_cutoff = params['frequency_cutoff']
     h_groove_side = params['h_groove_side']
     h_groove_central = params['h_groove_central']
@@ -241,47 +258,75 @@ def process_waveform(
     pzt_velocity = params['pzt_velocity']
     pmma_velocity = params['pmma_velocity']
     outdir_path_image = params['outdir_path_image'][0]
-    fixed_minimum_velocity = params['fixed_minimum_velocity']  # Use the fixed value
+    fixed_minimum_velocity = params['fixed_minimum_velocity']
 
     # Preprocess observed waveform
     observed_waveform = observed_waveform - np.mean(observed_waveform)
 
-    # Unpack tuple of velocity model
-    # Check if initial_velocity_model is iterable (tuple or list)
-    if isinstance(initial_velocity_model, (tuple, list)):
-        # If it's a tuple or list, unpack normally
-        (gouge_1_velocity_initial, gouge_2_velocity_initial) = initial_velocity_model
-    else:
-        # If it's a scalar, use the same value for both gouge velocities
-        gouge_1_velocity_initial = gouge_2_velocity_initial = initial_velocity_model
+    # Build sample dimensions
+    sample_dimensions = [side_block_1, thickness_gouge_1, central_block, thickness_gouge_2, side_block_2]
+    receiver_position = pzt_depth  # [cm] Receiver is in side_block_2
+
+    # Initialize or use existing velocity model and idx_dict
+    if initial_velocity_model is None or idx_dict is None:
+        # Use initial_velocity from estimated_velocities to build the velocity model
+        gouge_velocity_initial = (initial_velocity_model, initial_velocity_model)
+        # Compute the spatial grid
+        total_length = np.sum(sample_dimensions) + 2*pmma_layer_width + 2*pzt_layer_width - (transmitter_position + receiver_position)
+        spatial_axis, dx, num_x = compute_grid(
+            total_length_to_simulate=total_length,
+            min_velocity=fixed_minimum_velocity,
+            frequency_cutoff=frequency_cutoff,
+        )
+        # Build the initial velocity model
+        initial_velocity_model, idx_dict = build_velocity_model(
+            x=spatial_axis,
+            sample_dimensions=sample_dimensions,
+            x_transmitter=transmitter_position,
+            x_receiver=receiver_position,
+            pzt_layer_width=pzt_layer_width,
+            pmma_layer_width=pmma_layer_width,
+            h_groove_side=h_groove_side,
+            h_groove_central=h_groove_central,
+            steel_velocity=steel_velocity,
+            gouge_velocity=gouge_velocity_initial,
+            pzt_velocity=pzt_velocity,
+            pmma_velocity=pmma_velocity,
+            plotting=False
+        )
+
+    # Extract gouge velocities from the velocity model
+    gouge_1_velocity_initial = initial_velocity_model[idx_dict['gouge_1']]
+    gouge_2_velocity_initial = initial_velocity_model[idx_dict['gouge_2']]
 
     # Calculate travel time interval where evaluate the misfit
-    gouge_1_velocity_average = np.mean(gouge_1_velocity_initial)  
-    gouge_2_velocity_average = np.mean(gouge_2_velocity_initial)  
+    gouge_1_velocity_average = np.mean(gouge_1_velocity_initial)
+    gouge_2_velocity_average = np.mean(gouge_2_velocity_initial)
 
-    min_travel_time = fixed_travel_time  \
-    + thickness_gouge_1 / gouge_1_velocity_average \
-    + thickness_gouge_2 / gouge_2_velocity_average \
-    + 2 * (h_groove_side + h_groove_central) / (steel_velocity + gouge_1_velocity_average) \
-    + 2 * (h_groove_side + h_groove_central) / (steel_velocity + gouge_1_velocity_average) 
-    
-    max_travel_time = min_travel_time + 2*pulse_duration
+    min_travel_time = fixed_travel_time \
+        + thickness_gouge_1 / gouge_1_velocity_average \
+        + thickness_gouge_2 / gouge_2_velocity_average \
+        + 2 * (h_groove_side + h_groove_central) / (steel_velocity + gouge_1_velocity_average) \
+        + 2 * (h_groove_side + h_groove_central) / (steel_velocity + gouge_1_velocity_average)
+
+    max_travel_time = min_travel_time + 2 * pulse_duration
     misfit_interval = np.where((observed_time > min_travel_time) & (observed_time < max_travel_time))
 
-    # Check Signal-to-Noise Ratio: evaluate only waveform above min_SNR
+    # Check Signal-to-Noise Ratio
     sure_noise_interval = np.where(observed_time < min_travel_time)
     good_data_interval = np.where(observed_time > min_travel_time)
     max_signal = np.amax(observed_waveform[good_data_interval])
     max_noise = np.amax(observed_waveform[sure_noise_interval])
     if max_signal / max_noise < params['minimum_SNR']:
         print(f"Signal to Noise ratio for waveform {idx_waveform} = {max_signal / max_noise}. Skipped computation")
-        return initial_velocity_model  # Return initial model if SNR is too low
+        return initial_velocity_model, idx_dict  # Return initial model if SNR is too low
 
-    sample_dimensions = [side_block_1, thickness_gouge_1, central_block, thickness_gouge_2, side_block_2]
-    receiver_position = pzt_depth  # [cm] Receiver is in side_block_2
+    plot_output_path = os.path.join(outdir_path_image, f'{outfile_name}_waveform_{overall_index}_velocity_model')
+    model_output_path = os.path.join(outdir_path_model[0], f'{outfile_name}_waveform_{overall_index}_velocity_model.pkl')
+    print(model_output_path)
 
     # Call DDS_UW_simulation with gradient descent
-    synthetic_waveform, updated_gouge_velocities = DDS_UW_simulation(
+    synthetic_waveform, updated_velocity_model, idx_dict = DDS_UW_simulation(
         observed_time=observed_time,
         observed_waveform=observed_waveform,
         pulse_time=pulse_time,
@@ -303,21 +348,22 @@ def process_waveform(
         iterative_gradient_descent=True,
         normalize_waveform=True,
         enable_plotting=True,
+        plot_output_path=plot_output_path,
         make_movie=False,
-        movie_output_path="simulation.mp4"
+        movie_output_path="simulation.mp4",
+        invert_pzt_regions=invert_pzt_regions,
+        initial_velocity_model=initial_velocity_model,
+        idx_dict=idx_dict
     )
 
-    # Combine updated gouge velocities
-    updated_velocity_model = updated_gouge_velocities
-
     # Save the updated velocity model
-    model_output_path = os.path.join(outdir_path_image, f'{outfile_name}_waveform_{overall_index}_velocity_model.pkl')
-    with open(model_output_path , 'wb') as f:
+    with open(model_output_path, 'wb') as f:
         pickle.dump({
-            '1D_velocity_gouge_tuple': updated_velocity_model
-                    }, f)
-        
-    return updated_velocity_model
+            'velocity_model': updated_velocity_model,
+            'idx_dict': idx_dict
+        }, f)
+
+    return updated_velocity_model, idx_dict
 
 
 ###############################################################################################################
@@ -337,7 +383,7 @@ if __name__ == "__main__":
     pzt_layer_width = 0.1               # [cm] piezoelectric transducer width
     pmma_layer_width = 0.0              # [cm] PMMA supporting the PZT (not present in this case)
     steel_velocity = 3374 * (1e2 / 1e6) # [cm/μs] steel shear wave velocity
-    pzt_velocity = 2000 * (1e2 / 1e6)   # [cm/μs] PZT shear wave velocity
+    pzt_velocity = 3374 * (1e2 / 1e6)   # [cm/μs] PZT shear wave velocity
     pmma_velocity = 1590 * (1e2 / 1e6)  # [cm/μs] PMMA velocity
 
     # Set fixed_minimum_velocity once for the entire simulation
@@ -378,13 +424,14 @@ if __name__ == "__main__":
     infile_path_list_uw = sorted(make_infile_path_list(machine_name, experiment_name, data_type=data_type_uw))
 
     # Create output directories
-    outdir_path_l2norm = make_data_analysis_folders(machine_name=machine_name, experiment_name=experiment_name, data_types=["local_optimization_velocity"])
+    outdir_path_model = make_data_analysis_folders(machine_name=machine_name, experiment_name=experiment_name, data_types=["local_optimization_velocity"])
     outdir_path_image = make_data_analysis_folders(machine_name=machine_name, experiment_name=experiment_name, data_types=["local_optimization_velocity_images_and_movie"])
 
-    print(f"The inversion results will be saved at path:\n\t {outdir_path_l2norm[0]}")
+    print(f"The inversion results will be saved at path:\n\t {outdir_path_model[0]}")
 
     # Parameters dictionary to pass around
     params = {
+        'invert_pzt_regions': False,
         'minimum_SNR': minimum_SNR,
         'fixed_travel_time': fixed_travel_time,
         'c_step': c_step,
@@ -411,9 +458,13 @@ if __name__ == "__main__":
         'normal_stress_values': []  # To be populated during processing
     }
 
+    # Initialize previous_velocity_model and idx_dict
+    previous_velocity_model = None
+    idx_dict = None
+
     # Main Loop Over UW Files
     for chosen_uw_file, infile_path in enumerate(infile_path_list_uw):
-        if chosen_uw_file == 0:
+        if chosen_uw_file != 0:
             continue
         process_uw_file(
             infile_path=infile_path,
@@ -424,6 +475,6 @@ if __name__ == "__main__":
             pulse_time=pulse_time,
             pulse_duration=pulse_duration,
             frequency_cutoff=frequency_cutoff,
-            outdir_path_l2norm=outdir_path_l2norm,
+            outdir_path_model=outdir_path_model,
             params=params  # Pass params, which now includes fixed_minimum_velocity
         )
