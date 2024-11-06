@@ -5,13 +5,11 @@ from numpy import linalg as LA
 from typing import Union
 from scipy.signal.windows import kaiser
 from scipy.ndimage import gaussian_filter1d
-
-from helpers import *
-from synthetic_data import *
-from plotting import *
-
 import random
 
+from lab_uw.helpers import *
+from lab_uw.synthetic_data import *
+from lab_uw.plotting import *
 
 def DDS_UW_simulation(
     observed_time: np.ndarray,
@@ -62,7 +60,9 @@ def DDS_UW_simulation(
 
     # Compute the spatial grid
     total_length = np.sum(sample_dimensions) + 2*pmma_layer_width + 2*pzt_layer_width - (transmitter_position + receiver_position)
-    minimum_wavelength = fixed_minimum_velocity/frequency_cutoff 
+    
+    ##### NOT IMPLEMENTED #####
+    # minimum_wavelength = fixed_minimum_velocity/frequency_cutoff 
 
     # Use provided initial_velocity_model and idx_dict, or build them
     if initial_velocity_model is not None and idx_dict is not None:

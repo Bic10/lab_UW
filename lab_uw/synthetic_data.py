@@ -2,7 +2,7 @@
 
 import numpy as np
 from typing import Union, Tuple
-from plotting import plot_velocity_model, plot_synthetic_spatial_function
+from lab_uw.plotting import plot_velocity_model, plot_synthetic_spatial_function
 
 def make_grid_1D(cmin: float, fmax: float, grid_len: float, ppt: int) -> np.ndarray:
     '''

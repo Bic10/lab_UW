@@ -9,11 +9,11 @@ import pickle
 import matplotlib.pyplot as plt
 from scipy.signal import find_peaks
 
-from file_io import *
-from signal_processing import *
-from synthetic_data import *
-from LAB_UW_forward_modeling import *
-from plotting import plot_velocity_and_stresses, plot_l2_norm_vs_velocity
+from lab_uw.file_io import *
+from lab_uw.signal_processing import *
+from lab_uw.synthetic_data import *
+from lab_uw.LAB_UW_forward_modeling import *
+from lab_uw.plotting import plot_velocity_and_stresses, plot_l2_norm_vs_velocity
 
 ###############################################################################################################
 # Function Definitions

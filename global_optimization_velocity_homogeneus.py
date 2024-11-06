@@ -8,10 +8,10 @@ import matplotlib.pyplot as plt
 from multiprocessing import Pool, cpu_count
 from scipy.signal import find_peaks
 
-from file_io import *
-from signal_processing import *
-from synthetic_data import *
-from LAB_UW_forward_modeling import *
+from lab_uw.file_io import *
+from lab_uw.signal_processing import *
+from lab_uw.synthetic_data import *
+from lab_uw.LAB_UW_forward_modeling import *
 
 ###############################################################################################################
 # Function Definitions
@@ -158,13 +158,13 @@ def process_uw_file(infile_path, chosen_uw_file, manual_pick_arrival_time_interv
     observed_waveform_data, _ = signal2noise_separation_lowpass(observed_waveform_data, metadata, freq_cut=frequency_cutoff)
 
     # simulate a smaller piece of data. Since we are going to evaluate misfit in a smaller interval
-    total_time_to_simulate = int(0.66*metadata['number_of_samples'])  
-    print(f"total time to simulate {total_time_to_simulate}")
+    total_time_to_simulate = int(metadata['number_of_samples'])  
+    # print(f"total time to simulate {total_time_to_simulate}")
     observed_waveform_data = observed_waveform_data[:,:total_time_to_simulate ]
     observed_time = observed_time[:total_time_to_simulate]
-    print(observed_waveform_data.shape)
     # Downsampling the waveforms
-    number_of_waveforms_wanted = metadata['number_of_waveforms']
+    # number_of_waveforms_wanted = metadata['number_of_waveforms']
+    number_of_waveforms_wanted = 10 
 
     downsampling = max(1, round(metadata['number_of_waveforms'] / number_of_waveforms_wanted))
     print(f"Number of waveforms in the selected subset: {metadata['number_of_waveforms']}")
@@ -200,7 +200,7 @@ def process_uw_file(infile_path, chosen_uw_file, manual_pick_arrival_time_interv
         idx = idx_waveform * downsampling
         thickness_gouge_1 *= 2                 # IT IS A SILLY PROBLEM FOR THE CURRENT COMPUTATION OF LAYER THICKNESS
         thickness_gouge_2 *= 2
-        print(f"Layer thickness: {thickness_gouge_1}\tNormal_stress: {normal_stress}\tShear_stress: {shear_stress}")
+        # print(f"Layer thickness: {thickness_gouge_1}\tNormal_stress: {normal_stress}\tShear_stress: {shear_stress}")
 
         try:
             observed_waveform = observed_waveform_data[idx] 
@@ -365,13 +365,13 @@ def process_waveform(
             cmin_waveform = min(estimated_velocities)
             cmax_waveform = max(estimated_velocities)
 
-            print(f"Loaded manually picked initial time interval estimates: cmin={cmin_waveform}, cmax={cmax_waveform}")
+            print(f"Loaded manually picked velocity: cmin={cmin_waveform:.4f}, cmax={cmax_waveform:.4f}")
 
         except:
             # If no manual estimates are found, revert to default initial estimates
             cmin_waveform = 0.035 * (normal_stress**0.25)
             cmax_waveform = 0.055 * (normal_stress**0.25)
-            print(f"No manual estimates found. Using default initial estimates: cmin={cmin_waveform}, cmax={cmax_waveform}")
+            print(f"No manual estimates found. Using default estimates: cmin={cmin_waveform:.4f}, cmax={cmax_waveform:.4f}")
 
         c_step_waveform = c_step  # Use the defined step size
 
@@ -396,7 +396,6 @@ def process_waveform(
         else: 
             is_the_first_evaluated_waveform = True
 
-        print(f"Evaluating shear wave velocity in the interval: {cmin_waveform:.4f}-{cmax_waveform:.4f}")
 
     else:
         is_the_first_evaluated_waveform = False
@@ -413,6 +412,8 @@ def process_waveform(
 
     # Create velocity list for this waveform
     gouge_velocity_list_waveform = np.arange(cmin_waveform, cmax_waveform, c_step_waveform)
+
+    print(f"Evaluating shear wave velocity in the interval: {cmin_waveform:.4f}-{cmax_waveform:.4f}")
 
     # Prepare arguments for multiprocessing over velocities
     args_list = []
@@ -475,7 +476,7 @@ def process_waveform(
         movie_output_path = None
 
     # Call DDS_UW_simulation with gouge_velocity as a tuple
-    synthetic_waveform, _ = DDS_UW_simulation(
+    synthetic_waveform, _, _ = DDS_UW_simulation(
         observed_time=observed_time,
         observed_waveform=observed_waveform,
         pulse_time=pulse_time,
@@ -493,6 +494,7 @@ def process_waveform(
         pzt_velocity=pzt_velocity,
         pmma_velocity=pmma_velocity,
         misfit_interval=misfit_interval,
+        fixed_minimum_velocity=best_gouge_velocity,
         normalize_waveform=True,
         enable_plotting=save_plot,
         make_movie=save_movie,
@@ -555,7 +557,7 @@ def process_velocity(args):
     receiver_position = pzt_depth  # [cm] Receiver is in the side_block_2
 
     # Call DDS_UW_simulation with gouge_velocity_tuple
-    synthetic_waveform, _ = DDS_UW_simulation(
+    synthetic_waveform, _, _ = DDS_UW_simulation(
         observed_time=observed_time,
         observed_waveform=observed_waveform,
         pulse_time=pulse_time,
@@ -573,6 +575,7 @@ def process_velocity(args):
         pzt_velocity=pzt_velocity,
         pmma_velocity=pmma_velocity,
         misfit_interval=misfit_interval,
+        fixed_minimum_velocity=min(gouge_velocity_tuple),
         normalize_waveform=True,
         enable_plotting=False
     )
@@ -609,7 +612,7 @@ if __name__ == "__main__":
     pmma_velocity = 1590 * (1e2 / 1e6)  # [cm/μs] PMMA velocity
 
     # Initial guessed velocity model of the sample: literature range for gouge at atmospheric pressure
-    c_step = 3 * (1e2 / 1e6)
+    c_step = 100 * (1e2 / 1e6)
     c_range = 100 * (1e2 / 1e6)
     range_scaling_factor = 1         # initial c_range is c_range*range_scaling_factor
 
@@ -619,7 +622,6 @@ if __name__ == "__main__":
     transmitter_position = pzt_depth      # [cm] Position of the transmitter from the beginning of the sample
 
     fixed_travel_time = (2 * (side_block_1 - transmitter_position) + central_block - 2 * h_groove_side - 2 * h_groove_central) / steel_velocity  # travel time of direct wave into the blocks
-    print(f"Fixed travel time: {fixed_travel_time}")
 
     # GET OBSERVED DATA
     pulse_waveform, pulse_time, pulse_duration = load_and_process_pulse_waveform(frequency_cutoff)

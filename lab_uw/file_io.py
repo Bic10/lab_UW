@@ -3,6 +3,7 @@ import numpy as np
 import os
 import json
 import re
+
 # HANDLE TSV FILES FROM EUROSCAN
 def make_UW_data(infile_path: str) -> tuple[np.ndarray, dict]:
     '''

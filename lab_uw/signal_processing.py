@@ -2,7 +2,7 @@
 
 import numpy as np
 from math import ceil
-from plotting import *
+from lab_uw.plotting import *
 
 # WAVEFORMS PREPROCESSING
 def remove_starting_noise(data: np.ndarray, metadata: dict, remove_initial_samples: int = 0) -> tuple[np.ndarray, dict]:
