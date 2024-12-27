@@ -1,108 +1,63 @@
-import glob
-import os
-import time as tm
-import numpy as np
-import pandas as pd
+# lab_uw/global_optimization_velocity_homogeneus.py
+
+# Libraries
+from pathlib import Path
 import pickle
-import matplotlib.pyplot as plt
-from multiprocessing import Pool, cpu_count
-from scipy.signal import find_peaks
 
-from lab_uw.file_io import *
-from lab_uw.signal_processing import *
-from lab_uw.synthetic_data import *
-from lab_uw.LAB_UW_forward_modeling import *
+from lab_uw.data_io import UltrasonicDataHandler, MechanicalDataHandler
+from lab_uw.directory_manager import DirectoryManager
+from lab_uw.signal_processing import SignalProcessor
+from lab_uw.simulation_setup import *
+from lab_uw.forward_modeling import *
+from lab_uw.plotting import InteractivePlotter
 
-###############################################################################################################
 # Function Definitions
-def manual_pick_arrival_times(observed_time, observed_waveform, outfile_path):
+def prepare_manual_pick_arrival_times(
+    dir_manager, machine_name, experiment_name, infile_path_list_uw, start_sample=300
+):
     """
-    Manually pick arrival times from waveform data to estimate initial velocities.
+    Prepare manual pick arrival times by processing UW files.
+
+    Parameters:
+        dir_manager (DirectoryManager): Manages directory paths.
+        machine_name (str): Name of the machine used for the experiment.
+        experiment_name (str): Name of the experiment.
+        infile_path_list_uw (list[Path]): List of paths to ultrasonic waveform files.
+        start_sample (int, optional): Starting sample for processing. Defaults to 300.
+
+    Returns:
+        list: A list of manual pick arrival time intervals.
     """
-    # Initialize a list to store picked arrival times
-    picked_times = []
+    # Prepare output directory
+    experiment_path = dir_manager.base_dir / f"experiments_{machine_name}" / experiment_name
+    picked_travel_times_dir = experiment_path / 'data_analysis' / 'picked_travel_times'
+    picked_travel_times_dir.mkdir(parents=True, exist_ok=True)
 
-    # Function to handle mouse clicks
-    def onclick(event):
-        if event.button == 1:  # Left click to pick a point
-            picked_time = event.xdata
-            picked_times.append(picked_time)
-            print(f"Picked time: {picked_time} seconds")
+    manual_pick_arrival_time_interval_list = []
 
-            # Mark the picked time on the plot
-            plt.axvline(x=picked_time, color='r', linestyle='--')
-            plt.draw()
+    for infile_path_uw in infile_path_list_uw:
+        stem = Path(infile_path_uw.stem).stem  # Get file stem
+        new_file_name = f"{stem}.pkl"
+        infile_path_travel_times = picked_travel_times_dir / new_file_name
 
-    # Plot the waveform data
-    fig, ax = plt.subplots()
-    ax.plot(observed_time, observed_waveform, label='Waveform')
-    ax.set_xlabel('Time (seconds)')
-    ax.set_ylabel('Amplitude')
-    ax.set_title('Pick Arrival Times by Clicking')
-    ax.legend()
+        try:
+            with open(infile_path_travel_times, 'rb') as f:
+                manual_pick_arrival_time_interval_list.append(pickle.load(f))
+        except FileNotFoundError:
+            # Instantiate UltrasonicDataHandler using the Path object
+            ultrasonic_handler = UltrasonicDataHandler.make_UW_data(infile_path_uw)
+            observed_waveform_data, metadata = ultrasonic_handler.waveform_data, ultrasonic_handler.metadata
+            observed_waveform = observed_waveform_data[0, start_sample:]
+            observed_time = metadata['time_ax_waveform'][start_sample:]
 
-    # Connect the click event to the onclick function
-    cid = fig.canvas.mpl_connect('button_press_event', onclick)
+            picked_times = InteractivePlotter.manual_pick_arrival_times(
+                observed_time=observed_time,
+                observed_waveform=observed_waveform,
+                outfile_path=infile_path_travel_times
+            )
+            manual_pick_arrival_time_interval_list.append(picked_times)
 
-    # Show the plot and allow picking
-    plt.show()
-
-    # Print picked arrival times
-    print(f"Picked arrival times: {picked_times}")
-
-    try:
-        os.makedirs(os.path.dirname(outfile_path))
-    except:
-        pass
-
-    with open(outfile_path, "wb") as f:
-        pickle.dump(picked_times, f)
-    
-    return picked_times
-
-def find_mechanical_data(file_path_list, pattern):
-    """
-    Find a specific file in a list of file paths using a pattern.
-    """
-    for file_path in file_path_list:
-        if glob.fnmatch.fnmatch(file_path, pattern):
-            print("MECHANICAL DATA CHOSEN:", file_path)
-            return file_path
-    return None  # No file found in the list
-
-def find_sync_values(mech_data):
-    """
-    Find synchronization peak values within a mechanical data file.
-    """
-    try:
-        sync_data = mech_data.sync
-        # Find synchronization peaks in the synchronization data
-        sync_peaks, _ = find_peaks(sync_data, prominence=4.2, height=4)
-        return sync_data, sync_peaks
-
-    except:
-        print("There is no synchronization data in the reduced file. Please insert it manually!")
-        return None, None
-
-def load_and_process_pulse_waveform(frequency_cutoff):
-    """
-    Load and process the pulse waveform to be used as the time source function.
-    """
-    machine_name_pulse = "on_bench"
-    experiment_name_pulse = "glued_pzt"
-    data_type_pulse = "data_analysis/wavelets_from_PIS1_PIS2_glued_250ns"
-    infile_path_list_pulse = make_infile_path_list(machine_name=machine_name_pulse, experiment_name=experiment_name_pulse, data_type=data_type_pulse)
-    
-    # Assuming only one pulse is used
-    pulse_path = sorted(infile_path_list_pulse)[0]
-    pulse_waveform, pulse_metadata = load_waveform_json(pulse_path)
-    pulse_time = pulse_metadata['time_ax_waveform']
-    pulse_waveform, _ = signal2noise_separation_lowpass(pulse_waveform, pulse_metadata, freq_cut=frequency_cutoff)
-    pulse_waveform = (pulse_waveform - pulse_waveform[0])  # Make the pulse start from zero
-    
-    dt_pulse = pulse_time[1] - pulse_time[0]
-    pulse_duration = pulse_time[-1] - pulse_time[0]
-    return pulse_waveform, pulse_time, pulse_duration
+    return manual_pick_arrival_time_interval_list
 
 def process_uw_file(infile_path, chosen_uw_file, manual_pick_arrival_time_interval,sync_peaks, mech_data, pulse_waveform, pulse_time, pulse_duration, frequency_cutoff, outdir_path_l2norm, params):
     """
@@ -110,7 +65,7 @@ def process_uw_file(infile_path, chosen_uw_file, manual_pick_arrival_time_interv
     """
     # Unpack parameters
     minimum_SNR = params['minimum_SNR']
-    fixed_travel_time = params['fixed_travel_time']
+    assembly_travel_time = params['assembly_travel_time']
     c_step = params['c_step']
     c_range = params['c_range']
     range_scaling_factor = params['range_scaling_factor']
@@ -198,8 +153,11 @@ def process_uw_file(infile_path, chosen_uw_file, manual_pick_arrival_time_interv
     # Process each waveform sequentially
     for idx_waveform, (thickness_gouge_1, thickness_gouge_2, normal_stress, shear_stress, ec_disp_mm, time_s) in enumerate(zip(thickness_gouge_1_list[::downsampling], thickness_gouge_2_list[::downsampling], normal_stress_list[::downsampling], shear_stress_list[::downsampling], ec_disp_mm_list[::downsampling], time_s_list[::downsampling])):
         idx = idx_waveform * downsampling
-        thickness_gouge_1 *= 2                 # IT IS A SILLY PROBLEM FOR THE CURRENT COMPUTATION OF LAYER THICKNESS
+        # THERE IS A SILLY PROBLEM FOR THE CURRENT COMPUTATION OF LAYER THICKNESS: 
+        # IN THE REDUCTION SCRIPT THEY ARE HALF OF THE REAL ONE
+        thickness_gouge_1 *= 2                 
         thickness_gouge_2 *= 2
+        
         # print(f"Layer thickness: {thickness_gouge_1}\tNormal_stress: {normal_stress}\tShear_stress: {shear_stress}")
 
         try:
@@ -232,7 +190,7 @@ def process_uw_file(infile_path, chosen_uw_file, manual_pick_arrival_time_interv
             pulse_waveform=pulse_waveform,
             pulse_time=pulse_time,
             pulse_duration=pulse_duration,
-            fixed_travel_time=fixed_travel_time,
+            assembly_travel_time=assembly_travel_time,
             c_step=c_step,
             c_range=c_range,
             frequency_cutoff=frequency_cutoff,
@@ -307,7 +265,7 @@ def process_waveform(
                      pulse_waveform, 
                      pulse_time, 
                      pulse_duration, 
-                     fixed_travel_time, 
+                     assembly_travel_time, 
                      c_step, 
                      c_range, 
                      frequency_cutoff, 
@@ -342,7 +300,7 @@ def process_waveform(
 
             for picked_time in manual_pick_arrival_time_interval:
                 # Derived parameters
-                Delta_t = picked_time - fixed_travel_time
+                Delta_t = picked_time - assembly_travel_time
                 L_g = thickness_gouge_1 + thickness_gouge_2
                 L_h = 2 * h_groove_side + 2 * h_groove_central
 
@@ -376,8 +334,8 @@ def process_waveform(
         c_step_waveform = c_step  # Use the defined step size
 
         # Define evaluation interval for L2 norm of the residuals
-        max_travel_time = fixed_travel_time + thickness_gouge_1 / cmin_waveform + thickness_gouge_2 / cmin_waveform + 2 * (2 * h_groove_side + 2 * h_groove_central) / (steel_velocity + cmin_waveform)
-        min_travel_time = fixed_travel_time + thickness_gouge_1 / cmax_waveform + thickness_gouge_2 / cmax_waveform + 2 * (2 * h_groove_side + 2 * h_groove_central) / (steel_velocity + cmax_waveform)
+        max_travel_time = assembly_travel_time + thickness_gouge_1 / cmin_waveform + thickness_gouge_2 / cmin_waveform + 2 * (2 * h_groove_side + 2 * h_groove_central) / (steel_velocity + cmin_waveform)
+        min_travel_time = assembly_travel_time + thickness_gouge_1 / cmax_waveform + thickness_gouge_2 / cmax_waveform + 2 * (2 * h_groove_side + 2 * h_groove_central) / (steel_velocity + cmax_waveform)
         misfit_interval = np.where((observed_time > min_travel_time) & (observed_time < max_travel_time + pulse_duration))
 
         sure_noise_interval = np.where(observed_time < min_travel_time)
@@ -406,14 +364,14 @@ def process_waveform(
         c_step_waveform = c_step
 
         # Define evaluation interval for L2 norm of the residuals
-        max_travel_time = fixed_travel_time + thickness_gouge_1 / cmin_waveform + thickness_gouge_2 / cmin_waveform + 2 * (2 * h_groove_side + 2 * h_groove_central) / (steel_velocity + cmin_waveform)
-        min_travel_time = fixed_travel_time + thickness_gouge_1 / cmax_waveform + thickness_gouge_2 / cmax_waveform + 2 * (2 * h_groove_side + 2 * h_groove_central) / (steel_velocity + cmax_waveform)
+        max_travel_time = assembly_travel_time + thickness_gouge_1 / cmin_waveform + thickness_gouge_2 / cmin_waveform + 2 * (2 * h_groove_side + 2 * h_groove_central) / (steel_velocity + cmin_waveform)
+        min_travel_time = assembly_travel_time + thickness_gouge_1 / cmax_waveform + thickness_gouge_2 / cmax_waveform + 2 * (2 * h_groove_side + 2 * h_groove_central) / (steel_velocity + cmax_waveform)
         misfit_interval = np.where((observed_time > min_travel_time) & (observed_time < max_travel_time + pulse_duration))
 
     # Create velocity list for this waveform
     gouge_velocity_list_waveform = np.arange(cmin_waveform, cmax_waveform, c_step_waveform)
 
-    print(f"Evaluating shear wave velocity in the interval: {cmin_waveform:.4f}-{cmax_waveform:.4f}")
+    print(f"Evaluating velocity in the interval: {cmin_waveform:.4f}-{cmax_waveform:.4f}, with steo of {c_step:.4f}")
 
     # Prepare arguments for multiprocessing over velocities
     args_list = []
@@ -597,65 +555,139 @@ def process_velocity(args):
 if __name__ == "__main__":
     # General Parameters and Constants
     frequency_cutoff = 2  # [MHz] maximum frequency of the data we want to reproduce
-    minimum_SNR = 5       # the minimum signal to noise ratio accepted to start computation
+    minimum_SNR = 5       # the minimum signal-to-noise ratio accepted to start computation
 
     # Constants throughout the entire experiment
-    side_block_1 = 2.93                 # [cm] width of first side block, with grooves
-    side_block_2 = 2.93                 # [cm] width of second side block with grooves
-    h_groove_side = 0.059               # [cm] height of side block grooves
+    # # These are the dimensions for Pignalberi side blocks 1 and 2
+    # side_block_1 = 2.93                 # [cm] width of first side block, with grooves
+    # side_block_2 = 2.93                 # [cm] width of second side block with grooves
+    # h_groove_side = 0.059               # [cm] height of side block grooves
+    # pzt_layer_width = 0.1               # [cm] piezoelectric transducer width
+    # pmma_layer_width = 0.0              # [cm] PMMA supporting the PZT (not present in this case)
+    # steel_velocity = 3374 * (1e2 / 1e6) # [cm/μs] steel shear wave velocity
+    # pzt_velocity = 2000 * (1e2 / 1e6)   # [cm/μs] PZT shear wave velocity
+    # pmma_velocity = 1590 * (1e2 / 1e6)  # [cm/μs] PMMA velocity
+    # pzt2grove = 1.71  # [cm] distance between the PZT and the top of the grooves
+    # pzt_depth = side_block_1 - pzt2grove  # [cm] Position of the PZT with respect to the external side of the block
+    # transmitter_position = pzt_depth  # [cm] Position of the transmitter from the beginning of the sample
+
+    # This is one of the central block
     central_block = 4.88                # [cm] width of central block, with grooves
     h_groove_central = 0.096            # [cm] height of central block grooves
+
+    # These are the dimensions of Mauro side blocks 1 and 2
+    side_block_1 = 2                 # [cm] width of first side block, with grooves
+    side_block_2 = 2                 # [cm] width of second side block with grooves
+    h_groove_side = 0.059               # [cm] height of side block grooves
     pzt_layer_width = 0.1               # [cm] piezoelectric transducer width
-    pmma_layer_width = 0.0              # [cm] PMMA supporting the PZT (not present in this case)
+    pmma_layer_width = 0.1              # [cm] PMMA supporting the PZT (not present in this case)
     steel_velocity = 3374 * (1e2 / 1e6) # [cm/μs] steel shear wave velocity
     pzt_velocity = 2000 * (1e2 / 1e6)   # [cm/μs] PZT shear wave velocity
     pmma_velocity = 1590 * (1e2 / 1e6)  # [cm/μs] PMMA velocity
+    pzt2grove = 1  # [cm] distance between the PZT and the top of the grooves
+    pzt_depth = side_block_1 - pzt2grove  # [cm] Position of the PZT with respect to the external side of the block
+    transmitter_position = pzt_depth  # [cm] Position of the transmitter from the beginning of the sample
+
+
+    # Fixed travel time through constant sample dimensions
+    assembly_travel_time = (2 * (side_block_1 - transmitter_position) + central_block -
+                         2 * h_groove_side - 2 * h_groove_central) / steel_velocity  # travel time of direct wave into the blocks
+
+
+    # GET OBSERVED DATA
+
+    # DATA FOLDERS INPUT
+    machine_name = "Brava_2"
+    experiment_name = "s0108sw06car102030"
+    data_type_uw = 'uw_data'
+    data_type_mech = 'mechanical_data'
+    mech_file_name = f'{experiment_name}_data_rp'  # Pattern to find specific experiment in mechanical data
+
+    # Initialize DirectoryManager and Data Handlers
+    dir_manager = DirectoryManager()
+    
+    # Create output directories
+    outdir_path_l2norm = dir_manager.make_data_analysis_folders(
+        machine_name=machine_name,
+        experiment_name=experiment_name,
+        data_types=["global_optimization_velocity"]
+    )
+
+    print(f"The misfits calculated will be saved at path:\n\t {outdir_path_l2norm[0]}")
+
+    outdir_path_image = dir_manager.make_data_analysis_folders(
+        machine_name=machine_name,
+        experiment_name=experiment_name,
+        data_types=["global_optimization_velocity_images_and_movie"]
+    )
+
+    ## LOAD SORUCE TIME FUNCTIONS
+    # Load and process the pulse waveform to be used as the time source function.
+    # At the moment, extracted using the notebook "identify_wavelet"
+    # So far it is inconsistent the naming of "wavelet", "pulse" and "source time function" for the same thing.
+    machine_name_pulse = "on_bench"
+    experiment_name_pulse = "glued_pzt"
+    data_type_pulse = "data_analysis" / "wavelets_from_PIS1_PIS2_glued_250ns"
+
+
+    dir_manager = DirectoryManager()
+    data_handler = UltrasonicDataHandler()
+    signal_processor = SignalProcessor()
+
+    infile_path_list_pulse = dir_manager.make_infile_path_list(machine_name=machine_name_pulse, experiment_name=experiment_name_pulse, data_type=data_type_pulse)
+    
+    # Assuming only one pulse is used
+    pulse_path = sorted(infile_path_list_pulse)[0]
+    pulse_waveform, pulse_metadata = data_handler.load_waveform_json(pulse_path)
+    pulse_time = pulse_metadata['time_ax_waveform']
+    pulse_waveform, _ = signal_processor.signal2noise_separation_lowpass(pulse_waveform, pulse_metadata, freq_cut=frequency_cutoff)
+    pulse_waveform = (pulse_waveform - pulse_waveform[0])  # Make the pulse start from zero
+    
+    dt_pulse = pulse_time[1] - pulse_time[0]
+    pulse_duration = pulse_time[-1] - pulse_time[0]
+    
+    import matplotlib.pyplot as plt
+    import sys
+
+    plt.plot(pulse_time, pulse_waveform)
+    # pulse_waveform, pulse_time, pulse_duration = load_and_process_pulse_waveform(frequency_cutoff)
+
+    sys.exit("Fixing pulse choice")
+
+    ## LOAD MECHANICAL DATA
+    infile_path_list_mech = dir_manager.make_infile_path_list(machine_name, experiment_name, data_type=data_type_mech)
+    for infile_path in infile_path_list_mech:
+        if infile_path.name == mech_file_name:
+            mech_data_path = infile_path
+
+    mech_handler = MechanicalDataHandler.make_mechanical_data(mech_data_path)
+    mech_data = mech_handler.mech_data
+    # Find synchronization values, at least in case it is one of the column of the reduced file, at the moment
+    # Evaluate if integrate reduction script here or moving directly toward the use of Rock_Mechanics_Lab_Database
+    sync_data, sync_peaks = mech_handler.find_sync_values()
+
+    # MAKE UW PATH LIST 
+    infile_path_list_uw = sorted(dir_manager.make_infile_path_list(machine_name, experiment_name, data_type=data_type_uw))
+
+
+    # INITIAL VELOCITY GUESS:
+    # 1) extract it from manually picked arrival times on some of the ultrasonic waveform
+    manual_pick_arrival_time_interval_list = prepare_manual_pick_arrival_times(
+        dir_manager=dir_manager,
+        machine_name=machine_name,
+        experiment_name=experiment_name,
+        infile_path_list_uw=infile_path_list_uw
+    )
 
     # Initial guessed velocity model of the sample: literature range for gouge at atmospheric pressure
     c_step = 100 * (1e2 / 1e6)
     c_range = 100 * (1e2 / 1e6)
-    range_scaling_factor = 1         # initial c_range is c_range*range_scaling_factor
-
-    # Fixed travel time through constant sample dimensions
-    pzt2grove = 1.71        # [cm] distance between the PZT and the top of the grooves
-    pzt_depth = side_block_1 - pzt2grove  # [cm] Position of the PZT with respect to the external side of the block
-    transmitter_position = pzt_depth      # [cm] Position of the transmitter from the beginning of the sample
-
-    fixed_travel_time = (2 * (side_block_1 - transmitter_position) + central_block - 2 * h_groove_side - 2 * h_groove_central) / steel_velocity  # travel time of direct wave into the blocks
-
-    # GET OBSERVED DATA
-    pulse_waveform, pulse_time, pulse_duration = load_and_process_pulse_waveform(frequency_cutoff)
-
-    # DATA FOLDERS
-    machine_name = "Brava_2"
-    experiment_name = "s0176"
-    data_type_uw = 'data_tsv_files_sv1_sv2_only'
-    data_type_mech = 'mechanical_data'
-    sync_file_pattern = '*s*_data_rp'  # Pattern to find specific experiment in mechanical data
-
-    # LOAD MECHANICAL DATA (Only once)
-    infile_path_list_mech = make_infile_path_list(machine_name, experiment_name, data_type=data_type_mech)
-    mech_data_path = find_mechanical_data(infile_path_list_mech, sync_file_pattern)
-    mech_data = pd.read_csv(mech_data_path, sep='\t', skiprows=[1])
-    sync_data, sync_peaks = find_sync_values(mech_data)
-
-    if sync_peaks is None:
-        # Add synchronization manually if not found
-        sync_peaks = [2389, None, 5273, None, 523455, None, 801825, None, 1056935, None, 127865, None, 1396245]
-
-    # MAKE UW PATH LIST (Only once)
-    infile_path_list_uw = sorted(make_infile_path_list(machine_name, experiment_name, data_type=data_type_uw))
-
-    # Create output directories
-    outdir_path_l2norm = make_data_analysis_folders(machine_name=machine_name, experiment_name=experiment_name, data_types=["global_optimization_velocity"])
-    outdir_path_image = make_data_analysis_folders(machine_name=machine_name, experiment_name=experiment_name, data_types=["global_optimization_velocity_images_and_movie"])
-
-    print(f"The misfits calculated will be saved at path:\n\t {outdir_path_l2norm[0]}")
+    range_scaling_factor = 1  # initial c_range is c_range*range_scaling_factor
 
     # Parameters dictionary to pass around
     params = {
         'minimum_SNR': minimum_SNR,
-        'fixed_travel_time': fixed_travel_time,
+        'assembly_travel_time': assembly_travel_time,
         'c_step': c_step,
         'c_range': c_range,
         'range_scaling_factor': range_scaling_factor,
@@ -671,44 +703,26 @@ if __name__ == "__main__":
         'pmma_layer_width': pmma_layer_width,
         'pzt_velocity': pzt_velocity,
         'pmma_velocity': pmma_velocity,
-        'plot_save_interval': 1,  # Save plots every 50 waveforms
+        'plot_save_interval': 1,  # Save plots every n waveform
         'movie_save_interval': 100,
-        'l2norm_plot_interval': 5,  # Save L2 norm plots every 50 waveforms
-        'outdir_path_image': outdir_path_image,
+        'l2norm_plot_interval': 5,  # Save L2 norm plots every n waveforms
+        'outdir_path_image': outdir_path_image[0],
         'frequency_cutoff': frequency_cutoff
     }
-
-    manual_pick_arrival_time_interval_list = []
-    for infile_path_uw in infile_path_list_uw:
-        infile_path_travel_times = infile_path_uw.replace(data_type_uw, 'data_analysis/picked_travel_times').replace(".bscan.tsv",".pkl")
-
-        try:
-            with open(infile_path_travel_times, 'rb') as f:
-                manual_pick_arrival_time_interval_list.append(pickle.load(f))
-        except:
-            # LOAD UW DATA
-            observed_waveform_data, metadata = make_UW_data(infile_path_uw)
-            observed_waveform = observed_waveform_data[0,300:]
-            observed_time = metadata['time_ax_waveform'][300:]
-            manual_pick_arrival_time_interval_list.append(manual_pick_arrival_times(observed_time, 
-                                                                                    observed_waveform, 
-                                                                                    outfile_path=infile_path_travel_times))
-
-    # Main Loop Over UW Files
-    for chosen_uw_file, infile_path  in enumerate(infile_path_list_uw):
-        if chosen_uw_file == 0:
-            continue
+    
+    for chosen_uw_file, infile_path in enumerate(infile_path_list_uw):
         manual_pick_arrival_time_interval = manual_pick_arrival_time_interval_list[chosen_uw_file]
+
         process_uw_file(
             infile_path=infile_path,
             chosen_uw_file=chosen_uw_file,
-            manual_pick_arrival_time_interval= manual_pick_arrival_time_interval,
+            manual_pick_arrival_time_interval=manual_pick_arrival_time_interval,
             sync_peaks=sync_peaks,
             mech_data=mech_data,
             pulse_waveform=pulse_waveform,
             pulse_time=pulse_time,
             pulse_duration=pulse_duration,
             frequency_cutoff=frequency_cutoff,
-            outdir_path_l2norm=outdir_path_l2norm,
+            outdir_path_l2norm=outdir_path_l2norm[0],
             params=params
         )

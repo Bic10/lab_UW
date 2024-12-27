@@ -2,11 +2,11 @@ PROBLEMI ED INCONGRUENZE
 
 1) calibrazione per trovare velocita' acciaio: al momento e' in "cross_correlation_and_steel_velocity.ipynb". Da separare
 
-2) Le varie impostazioni per i plot sono sparpagliate in giro, compresa la palette colori. Andrebbero mantenute ma raccolte e razionalizzate. In particolare, font, palette e fontsize relativa si possono codificare tutte in maniera da avere dei plot rapidi per poster, presentazioni, articoli.
+2) DONE Le varie impostazioni per i plot sono sparpagliate in giro, compresa la palette colori. Andrebbero mantenute ma raccolte e razionalizzate. In particolare, font, palette e fontsize relativa si possono codificare tutte in maniera da avere dei plot rapidi per poster, presentazioni, articoli.    
 
 3) Estrazione dati meccanici: tutto il codice che utilizza congiuntamente dati meccanici ed ultrasonici dovrebbe stare nello stesso posto.
 
-4) PARALLELIZZAZIONE non nel singolo file ma anche nella lista delle velocita' da provare: per ogni file, il computo per le velocita' e' indipendente, quindi si puo parallelizzare invece che file per file anche velocita' per velocita' a prescindere dal file.
+4) DONE PARALLELIZZAZIONE non nel singolo file ma anche nella lista delle velocita' da provare: per ogni file, il computo per le velocita' e' indipendente, quindi si puo parallelizzare invece che file per file anche velocita' per velocita' a prescindere dal file.
 
 5) SINCRONIZZAZIONE: non si puo' ignorare il fatto che abbiamo uno sfasamento tra le onde registrate ed i record number piccati. Che fare? La soluzione attuale e' scentificamente inaccettabile, visto che a bassi campionamenti possiamo avere uno sfasamento tra dato meccanico ed ultrasonico di decimi di secondo
 
@@ -14,6 +14,6 @@ PROBLEMI ED INCONGRUENZE
 va sincronizzato ai sensori effettivamente usati nell'esperimento. Al momento e' artigianale
 
 
-IMPLEMENTARE DAO
+IMPLEMENTARE DAO : WORK IN PROGRESS ROCK MECHANICS LAB DATABASE
 1) Come forzare le persone ad inserire l'esperimento nel database? Si puo aggirare l'ostacolo, scegliendo un nome del file rappresentativo ed univoco. Praticamente come si fa ora, ma vincolato e standardizzato.
 2) Si puo vincolare l'accesso ai dati utilizzando gli operatori della macchina al momento dell'esperimento!s

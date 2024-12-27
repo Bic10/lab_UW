@@ -1,6 +1,25 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Sphinx documentation
+docs/_build/
+docs/_autosummary/
+docs/_static/
+docs/_templates/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# macOS system files
+.DS_Store
+
+# Windows system files
+Thumbs.db
 
 # Distribution / packaging
 .Python

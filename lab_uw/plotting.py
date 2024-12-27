@@ -1,668 +1,1008 @@
-# src/plotting.py
+# lab_uw/plotting.py
 
-import os
+from pathlib import Path
+import pickle
 import matplotlib.pyplot as plt
 import numpy as np
 import matplotlib.colors as mcolors
 from matplotlib.patches import Rectangle
 import matplotlib.animation as animation
+from typing import Optional, Dict, Tuple, List, Union
 
-# Define global variables for font type, fontsize, figure size, and color palette
-FONT_TYPE = "Ubuntu"
-FONT_SIZE = 30
-FIGURE_SIZE = (16, 8)
-FORMAT = ".png"
+class Plotter:
+    """
+    A class containing methods for plotting various aspects of waveform data and simulations.
+    """
 
-# Define the color palette for the plots
-colors = {
-    'reseda_green': '#788054',
-    'dutch_white': '#E0D6B4',
-    'khaki': '#CABB9E',
-    'platinum': '#E7E5E2',
-    'black_olive': '#322D1E',
-    'sandybrown': 'sandybrown',
-    'lightgrey': 'lightgrey',
-    'lightsteelblue': 'lightsteelblue',
-    'indianred': 'indianred',
-    'teal': 'teal',
-    'darkslategray': 'darkslategray'
-}
+    # Define default settings for plots
+    FONT_TYPE = "Ubuntu"
+    FONT_SIZE = 30
+    FIGURE_SIZE = (16, 8)
+    FORMAT = ".png"
 
-# Define default settings for plots
-default_settings = {
-    'colors': colors,
-    'fontsize_title': FONT_SIZE,
-    'fontsize_labels': 0.7 * FONT_SIZE,
-    'fontsize_ticks': 0.7 * FONT_SIZE,
-    'line_width': 4.0,
-    'figure_size': FIGURE_SIZE,
-    'format': FORMAT,
-}
+    # Define the color palette for the plots
+    COLORS = {
+        'reseda_green': '#788054',
+        'dutch_white': '#E0D6B4',
+        'khaki': '#CABB9E',
+        'platinum': '#E7E5E2',
+        'black_olive': '#322D1E',
+        'sandybrown': 'sandybrown',
+        'lightgrey': 'lightgrey',
+        'lightsteelblue': 'lightsteelblue',
+        'indianred': 'indianred',
+        'teal': 'teal',
+        'darkslategray': 'darkslategray'
+    }
 
-def output_path_choice(fig: plt.Figure, outfile_path: str = None, format: str = FORMAT) -> None:
-    '''
-    Saving or showing option for plot functions
-    - fig: The figure object to be saved or shown.
-    - outfile_path: Path to save the plot.
-    - format: File format for saving the plot.
-    '''
-    if outfile_path:
-        outfile_name = os.path.basename(outfile_path)
-        current_title = fig.axes[0].get_title()
-        fig.axes[0].set_title(current_title + " " + outfile_name)
-        fig.savefig(outfile_path + format, dpi=300)
-        plt.close(fig)  # Close the figure to prevent it from being displayed
- #       print(f"Plot saved to {outfile_path}{format}")
-    else:
+    DEFAULT_SETTINGS = {
+        'colors': COLORS,
+        'fontsize_title': FONT_SIZE,
+        'fontsize_labels': int(0.7 * FONT_SIZE),
+        'fontsize_ticks': int(0.7 * FONT_SIZE),
+        'line_width': 4.0,
+        'figure_size': FIGURE_SIZE,
+        'format': FORMAT,
+    }
+
+    def __init__(self, settings: Optional[Dict] = None):
+        """
+        Initialize the Plotter with optional custom settings.
+
+        Args:
+            settings (Dict, optional): Custom plot settings. Defaults to None.
+        """
+        if settings is None:
+            self.settings = self.DEFAULT_SETTINGS.copy()
+        else:
+            self.settings = {**self.DEFAULT_SETTINGS, **settings}
+
+    def output_path_choice(
+        self,
+        fig: plt.Figure,
+        outfile_path: Optional[Union[str, Path]] = None,
+        format: Optional[str] = None
+    ) -> None:
+        """
+        Save or display the figure based on the provided outfile_path.
+
+        Args:
+            fig (plt.Figure): The figure object to be saved or shown.
+            outfile_path (Union[str, Path], optional): Path to save the plot. If None, the plot is displayed.
+            format (str, optional): File format for saving the plot. Defaults to self.settings['format'].
+        """
+        if format is None:
+            format = self.settings['format']
+
+        if outfile_path:
+            # Ensure outfile_path is a Path object
+            outfile_path = Path(outfile_path)
+
+            # Get the filename from the outfile_path
+            outfile_name = outfile_path.name
+
+            # Update the plot title to include the filename
+            current_title = fig.axes[0].get_title()
+            fig.axes[0].set_title(f"{current_title} {outfile_name}")
+
+            # Ensure the outfile_path has the correct extension
+            if outfile_path.suffix != format:
+                outfile_path = outfile_path.with_suffix(format)
+
+            # Save the figure to the specified path
+            fig.savefig(outfile_path, dpi=300)
+            plt.close(fig)  # Close the figure to prevent it from being displayed
+        else:
+            # Display the plot if no outfile_path is provided
+            plt.show()
+
+    def uw_all_plot(self,
+                    data: np.ndarray,
+                    metadata: Dict,
+                    step_wf_to_plot: int,
+                    highlight_start: int,
+                    highlight_end: int,
+                    xlim_plot: float,
+                    ticks_steps_waveforms: float,
+                    outfile_path: Optional[str] = None) -> None:
+        """
+        Plots stacked waveforms with optional highlighting.
+
+        Args:
+            data (np.ndarray): 2D array representing waveform data (n_waveforms, n_samples).
+            metadata (Dict): Metadata dictionary containing 'time_ax_waveform'.
+            step_wf_to_plot (int): Step size for plotting waveforms.
+            highlight_start (int): Index of the start point for highlighting.
+            highlight_end (int): Index of the end point for highlighting.
+            xlim_plot (float): Limit for the x-axis.
+            ticks_steps_waveforms (float): Step size for ticks on the waveform axis.
+            outfile_path (str, optional): Path to save the plot.
+
+        Raises:
+            ValueError: If data is not a 2D array or if indices are out of bounds.
+        """
+        if data.ndim != 2:
+            raise ValueError("data must be a 2D numpy array.")
+        if not ('time_ax_waveform' in metadata):
+            raise KeyError("metadata must contain 'time_ax_waveform'.")
+
+        time_ax_waveform = metadata["time_ax_waveform"]
+        if highlight_start < 0 or highlight_end > data.shape[0]:
+            raise ValueError("highlight_start and highlight_end must be within the range of data indices.")
+
+        time_ticks_waveforms = np.arange(time_ax_waveform[0], time_ax_waveform[-1], ticks_steps_waveforms)
+        data_to_plot = data[::step_wf_to_plot]
+        ymax = 1.3 * np.amax(data_to_plot)
+        ymin = 1.3 * np.amin(data_to_plot)
+
+        fig, ax = plt.subplots(figsize=self.settings['figure_size'])
+
+        ax.plot(time_ax_waveform, data_to_plot.T, color='black', linewidth=0.8, alpha=0.5)
+        ax.plot(time_ax_waveform, data[highlight_start:highlight_end].T, color='red')
+        ax.set_xlabel('Time [$\\mu s$]', fontsize=self.settings['fontsize_labels'])
+        ax.set_ylabel('Amplitude [a.u.]', fontsize=self.settings['fontsize_labels'])
+        ax.set_xticks(time_ticks_waveforms)
+        ax.set_ylim([ymin, ymax])
+        ax.set_xlim(time_ax_waveform[0], xlim_plot)
+        ax.grid(alpha=0.1)
+        ax.set_title("Stacked Waveforms", fontsize=self.settings['fontsize_title'], fontname=self.FONT_TYPE)
+        ax.tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
+
+        fig.tight_layout()
+
+        self.output_path_choice(fig=fig, outfile_path=outfile_path)
+
+    def amplitude_map(self,
+                      data: np.ndarray,
+                      metadata: Dict,
+                      outfile_path: Optional[str] = None) -> None:
+        """
+        Plots an amplitude map of waveform data.
+
+        Args:
+            data (np.ndarray): 2D array representing waveform data (n_waveforms, n_samples).
+            metadata (Dict): Metadata dictionary containing necessary keys.
+            outfile_path (str, optional): Path to save the plot.
+
+        Raises:
+            KeyError: If required keys are missing in metadata.
+        """
+        required_keys = ['time_ax_waveform', 'sampling_rate', 'number_of_samples', 'acquisition_frequency']
+        for key in required_keys:
+            if key not in metadata:
+                raise KeyError(f"Missing '{key}' in metadata.")
+
+        time_ax_waveform = metadata['time_ax_waveform']
+        sampling_rate = metadata['sampling_rate']
+        number_of_samples = metadata['number_of_samples']
+        acquisition_frequency = metadata['acquisition_frequency']
+
+        fig, ax = plt.subplots(figsize=self.settings['figure_size'])
+        cmap = plt.get_cmap('seismic')
+
+        extent = [0, data.shape[0] * acquisition_frequency, 0, number_of_samples * sampling_rate]
+
+        im = ax.imshow(data.T, aspect='auto', origin='lower', interpolation='none',
+                       cmap=cmap, vmin=np.amin(data), vmax=np.amax(data), extent=extent)
+
+        cbar = fig.colorbar(im, pad=0.04)
+        cbar.set_label("Relative Amplitude", fontsize=self.settings['fontsize_labels'])
+
+        ax.set_title("Amplitude Map", fontsize=self.settings['fontsize_title'], fontname=self.FONT_TYPE)
+        ax.set_xlabel('Time [s]', fontsize=self.settings['fontsize_labels'])
+        ax.set_ylabel('Waveform Time [$\\mu s$]', fontsize=self.settings['fontsize_labels'])
+        ax.tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
+
+        fig.tight_layout()
+
+        self.output_path_choice(fig=fig, outfile_path=outfile_path)
+
+
+    # def amplitude_spectrum_map(
+    #     self,
+    #     signal_freqs: np.ndarray,
+    #     amp_spectrum: np.ndarray,
+    #     metadata: Dict,
+    #     freq_cut: float,
+    #     outfile_path: Optional[str] = None
+    # ) -> None:
+    #     """
+    #     Plots an amplitude spectrum map of waveform data.
+
+    #     Parameters
+    #     ----------
+    #     signal_freqs : np.ndarray
+    #         Frequencies of the signal (size n_samples).
+    #     amp_spectrum : np.ndarray
+    #         Amplitude spectrum of shape (n_waveforms, n_samples).
+    #     metadata : dict
+    #         Metadata dictionary containing 'time_ax_acquisition'.
+    #     freq_cut : float
+    #         Maximum frequency to display on the y-axis (in MHz).
+    #     outfile_path : str, optional
+    #         Path to save the plot.
+        
+    #     Raises
+    #     ------
+    #     KeyError
+    #         If 'time_ax_acquisition' is missing in metadata.
+    #     ValueError
+    #         If dimensions of amp_spectrum and signal_freqs do not match or if amp_spectrum is not 2D.
+    #     """
+    #     if 'time_ax_acquisition' not in metadata:
+    #         raise KeyError("metadata must contain 'time_ax_acquisition'.")
+
+    #     if amp_spectrum.ndim != 2:
+    #         raise ValueError("amp_spectrum must be a 2D numpy array.")
+
+    #     time_ax_acquisition = metadata['time_ax_acquisition']
+    #     wave_num, wave_len = amp_spectrum.shape
+
+    #     # Only plot half of the spectrum if it's symmetrical (e.g., for real signals)
+    #     spectrum_length = wave_len // 2
+    #     signal_freqs = signal_freqs[:spectrum_length]
+    #     amp_spectrum = amp_spectrum[:, :spectrum_length]
+
+    #     fig, ax = plt.subplots(figsize=self.settings['figure_size'])
+
+    #     # Using LogNorm to highlight wide dynamic range
+    #     pcm = ax.pcolormesh(
+    #         time_ax_acquisition,
+    #         signal_freqs,
+    #         amp_spectrum.T,
+    #         cmap="plasma",
+    #         norm=mcolors.LogNorm(vmin=1e-3, vmax=amp_spectrum.max())
+    #     )
+    #     ax.set_ylim([0, freq_cut])
+    #     ax.set_title('Amplitude Spectrum Map', fontsize=self.settings['fontsize_title'], fontname=self.FONT_TYPE)
+    #     ax.set_xlabel("Time [s]", fontsize=self.settings['fontsize_labels'])
+    #     ax.set_ylabel("Frequency [MHz]", fontsize=self.settings['fontsize_labels'])
+    #     ax.tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
+
+    #     cbar = fig.colorbar(pcm, pad=0.04)
+    #     cbar.set_label("Spectral Amplitude", fontsize=self.settings['fontsize_labels'])
+
+    #     fig.tight_layout()
+
+    #     # Use your existing output path choice method
+    #     self.output_path_choice(fig=fig, outfile_path=outfile_path)
+
+
+    def amplitude_spectrum_map(
+        self,
+        signal_freqs: np.ndarray,
+        amp_spectrum: np.ndarray,
+        metadata: Dict,
+        freq_cut: float,
+        outfile_path: Optional[str] = None
+    ) -> None:
+        """
+        Provides alternative visualizations to see how the amplitude spectrum
+        changes across waveforms in the experiment.
+
+        Parameters
+        ----------
+        signal_freqs : np.ndarray
+            Frequencies of the signal (n_samples).
+        amp_spectrum : np.ndarray
+            Amplitude spectrum of shape (n_waveforms, n_samples).
+        metadata : Dict
+            Metadata dictionary containing 'time_ax_acquisition'.
+        freq_cut : float
+            Maximum frequency to display on the y-axis (in MHz).
+        outfile_path : str, optional
+            Path to save the resulting figure. If None, the figure is shown.
+
+        Notes
+        -----
+        - This function creates three subplots:
+        1) Line plot (with alpha-blended lines),
+        2) 2D histogram using a log color scale,
+        3) The same 2D histogram using a linear color scale.
+        - For large datasets, the alpha-blended line plot may be slow. The 2D
+        histograms can reveal hidden structures more efficiently.
+        """
+        if 'time_ax_acquisition' not in metadata:
+            raise KeyError("metadata must contain 'time_ax_acquisition'.")
+
+        # Check dimensions
+        if amp_spectrum.ndim != 2:
+            raise ValueError("amp_spectrum must be a 2D numpy array.")
+        wave_num, wave_len = amp_spectrum.shape
+
+        # Only use half the spectrum if you have symmetrical data
+        spectrum_length = wave_len // 2
+        signal_freqs = signal_freqs[:spectrum_length]
+        amp_spectrum = amp_spectrum[:, :spectrum_length]
+
+        time_ax_acquisition = metadata['time_ax_acquisition']
+        if len(time_ax_acquisition) != wave_num:
+            raise ValueError("time_ax_acquisition length does not match amp_spectrum waveforms.")
+
+        # We only plot up to freq_cut
+        freq_mask = signal_freqs <= freq_cut
+        freq_subset = signal_freqs[freq_mask]
+        amp_spectrum_subset = amp_spectrum[:, freq_mask]
+
+        # Create the figure and subplots
+        fig, axes = plt.subplots(nrows=3, figsize=self.settings['figure_size'], constrained_layout=True)
+
+        # -- 1) Line Plot with alpha --
+        # Each waveform: X axis = frequencies, Y axis = amplitude
+        # We'll transpose so lines go freq -> amplitude across wave_num series.
+        # This can be slow for large wave_num, so alpha is used to help reveal structure.
+        axes[0].plot(freq_subset, amp_spectrum_subset.T, color="C0", alpha=0.05)
+        axes[0].set_title("Line Plot with Alpha", fontsize=self.settings['fontsize_title'])
+        axes[0].set_xlabel("Frequency [MHz]", fontsize=self.settings['fontsize_labels'])
+        axes[0].set_ylabel("Amplitude [a.u.]", fontsize=self.settings['fontsize_labels'])
+        axes[0].tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
+        axes[0].set_xlim([0, freq_cut])
+
+        # -- 2) 2D Histogram with log color scale --
+        # Flatten time and freq so we can call np.histogram2d(x, y).
+        # 'x' ~ freq, 'y' ~ amplitude, but let's do:
+        # x -> freq, y -> amplitude values or log(amplitude).
+        # Or, we can do a quick partial "interpolation" approach as in the snippet you shared.
+        # For demonstration, let's just flatten.
+        freq_flat = np.broadcast_to(freq_subset, amp_spectrum_subset.shape).ravel()
+        amp_flat = amp_spectrum_subset.ravel()
+
+        # Build 2D histogram
+        # You can tune bins here for freq and amplitude scale
+        num_freq_bins = 200
+        num_amp_bins = 200
+
+        # We do amplitude in log scale to help spread out the dynamic range
+        amp_flat_positive = amp_flat[amp_flat > 0]  # must be positive for log scale
+        freq_flat_positive = freq_flat[amp_flat > 0]
+
+        # Convert amplitude to dB scale or keep it linear - let's keep linear for demonstration
+        # but must handle 0 or negative values carefully for log norm
+        freq_bins = np.linspace(0, freq_cut, num_freq_bins)
+        # for amplitude, pick a range that captures the data well:
+        amp_min, amp_max = amp_flat_positive.min(), amp_flat_positive.max()
+        amp_bins = np.logspace(np.log10(amp_min), np.log10(amp_max), num_amp_bins)
+
+        h, xedges, yedges = np.histogram2d(
+            freq_flat_positive, amp_flat_positive, bins=[freq_bins, amp_bins]
+        )
+
+        pcm = axes[1].pcolormesh(
+            xedges, yedges, h.T,
+            cmap="plasma",
+            norm=mcolors.LogNorm(vmin=1, vmax=h.max()),
+            rasterized=True
+        )
+        axes[1].set_title("2D Histogram (Log Colorscale)", fontsize=self.settings['fontsize_title'])
+        axes[1].set_xlabel("Frequency [MHz]", fontsize=self.settings['fontsize_labels'])
+        axes[1].set_ylabel("Amplitude [a.u.]", fontsize=self.settings['fontsize_labels'])
+        axes[1].tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
+        axes[1].set_xlim([0, freq_cut])
+        axes[1].set_ylim([amp_min, amp_max])
+        cbar = fig.colorbar(pcm, ax=axes[1], pad=0.01)
+        cbar.set_label("# Points (log scale)", fontsize=self.settings['fontsize_labels'])
+
+        # -- 3) Same 2D histogram, linear color scale --
+        pcm2 = axes[2].pcolormesh(
+            xedges, yedges, h.T,
+            cmap="plasma",
+            vmax=h.max(),
+            rasterized=True
+        )
+        axes[2].set_title("2D Histogram (Linear Colorscale)", fontsize=self.settings['fontsize_title'])
+        axes[2].set_xlabel("Frequency [MHz]", fontsize=self.settings['fontsize_labels'])
+        axes[2].set_ylabel("Amplitude [a.u.]", fontsize=self.settings['fontsize_labels'])
+        axes[2].tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
+        axes[2].set_xlim([0, freq_cut])
+        axes[2].set_ylim([amp_min, amp_max])
+        cbar2 = fig.colorbar(pcm2, ax=axes[2], pad=0.01)
+        cbar2.set_label("# Points (linear scale)", fontsize=self.settings['fontsize_labels'])
+
+        # Tweak layout or call fig.tight_layout() if constrained_layout is off
+        # Save or show
+        self.output_path_choice(fig=fig, outfile_path=outfile_path)
+
+    def filtered_amp_and_phase_spectrum_plot(self,
+                                             signal_freqs: np.ndarray,
+                                             amp_spectrum: np.ndarray,
+                                             phase_spectrum: np.ndarray,
+                                             filtered_amp_spectrum: np.ndarray,
+                                             lowpass_filter: np.ndarray,
+                                             freq_cut: float,
+                                             outfile_path: Optional[str] = None) -> None:
+        """
+        Plots the filtered amplitude and phase spectrum.
+
+        Args:
+            signal_freqs (np.ndarray): Frequencies of the signal.
+            amp_spectrum (np.ndarray): Amplitude spectrum.
+            phase_spectrum (np.ndarray): Phase spectrum.
+            filtered_amp_spectrum (np.ndarray): Filtered amplitude spectrum.
+            lowpass_filter (np.ndarray): Low-pass filter mask.
+            freq_cut (float): Cut-off frequency.
+            outfile_path (str, optional): Path to save the plot.
+
+        Raises:
+            ValueError: If input arrays are not 1D or lengths do not match.
+        """
+        arrays = [signal_freqs, amp_spectrum, phase_spectrum, filtered_amp_spectrum, lowpass_filter]
+        if not all(arr.ndim == 1 for arr in arrays):
+            raise ValueError("All input arrays must be 1D numpy arrays.")
+        if not all(len(arr) == len(signal_freqs) for arr in arrays):
+            raise ValueError("All input arrays must have the same length.")
+
+        spectrum_length = len(signal_freqs) // 2
+        amp_spectrum = amp_spectrum[:spectrum_length]
+        phase_spectrum = phase_spectrum[:spectrum_length]
+        filtered_amp_spectrum = filtered_amp_spectrum[:spectrum_length]
+        signal_freqs = signal_freqs[:spectrum_length]
+        lowpass_filter = lowpass_filter[:spectrum_length]
+
+        max_freq = signal_freqs[np.argmax(amp_spectrum)]
+
+        fig, ax = plt.subplots(2, 1, figsize=self.settings['figure_size'])
+
+        ax[0].semilogy(signal_freqs, amp_spectrum, label="Amplitude Spectrum")
+        ax[0].semilogy(signal_freqs, lowpass_filter * np.amax(amp_spectrum), label="Filter Shape")
+        ax[0].semilogy(signal_freqs, filtered_amp_spectrum, label="Filtered Amplitude Spectrum")
+        ax[0].vlines(max_freq, np.amin(filtered_amp_spectrum), np.amax(filtered_amp_spectrum), "r", "--",
+                     label=f"Max Spectrum = {max_freq:.2f} MHz")
+        ax[0].vlines(freq_cut, np.amin(filtered_amp_spectrum), np.amax(filtered_amp_spectrum), "r", "-",
+                     label=f"Cut-off Frequency = {freq_cut} MHz")
+        ax[0].legend(fontsize=self.settings['fontsize_ticks'])
+        ax[0].set_xlim([0, np.amax(signal_freqs)])
+        ax[0].set_ylabel("Amplitude [a.u.]", fontsize=self.settings['fontsize_labels'])
+        ax[0].set_xlabel("Frequency [MHz]", fontsize=self.settings['fontsize_labels'])
+        ax[0].set_title("Amplitude Spectrum of a Waveform", fontsize=self.settings['fontsize_title'], fontname=self.FONT_TYPE)
+        ax[0].tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
+
+        ax[1].plot(signal_freqs, phase_spectrum)
+        ax[1].set_xlim([0, np.amax(signal_freqs)])
+        ax[1].set_yticks(np.linspace(-np.pi, np.pi, 5))
+        ax[1].set_yticklabels([r'$-\pi$', r'$-\frac{\pi}{2}$', r'$0$', r'$\frac{\pi}{2}$', r'$\pi$'])
+        ax[1].set_ylabel("Phase [rad]", fontsize=self.settings['fontsize_labels'])
+        ax[1].set_xlabel("Frequency [MHz]", fontsize=self.settings['fontsize_labels'])
+        ax[1].set_title("Phase Spectrum of a Waveform", fontsize=self.settings['fontsize_title'], fontname=self.FONT_TYPE)
+        ax[1].tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
+
+        fig.tight_layout()
+
+        self.output_path_choice(fig=fig, outfile_path=outfile_path)
+
+    def signal_vs_filtered_signal_plot(self,
+                                       single_waveform: np.ndarray,
+                                       single_waveform_filtered: np.ndarray,
+                                       metadata: Dict,
+                                       freq_cut: float,
+                                       outfile_path: Optional[str] = None) -> None:
+        """
+        Plot a comparison between a waveform and its filtered version.
+
+        Args:
+            single_waveform (np.ndarray): The original waveform data.
+            single_waveform_filtered (np.ndarray): The filtered waveform data.
+            metadata (Dict): Metadata containing 'time_ax_waveform'.
+            freq_cut (float): Cut-off frequency for filtering.
+            outfile_path (str, optional): Path to save the plot.
+
+        Raises:
+            ValueError: If waveforms are not 1D arrays or lengths do not match.
+            KeyError: If 'time_ax_waveform' is missing in metadata.
+        """
+        if 'time_ax_waveform' not in metadata:
+            raise KeyError("metadata must contain 'time_ax_waveform'.")
+        if single_waveform.ndim != 1 or single_waveform_filtered.ndim != 1:
+            raise ValueError("single_waveform and single_waveform_filtered must be 1D numpy arrays.")
+        if len(single_waveform) != len(single_waveform_filtered):
+            raise ValueError("single_waveform and single_waveform_filtered must have the same length.")
+
+        time_ax = metadata['time_ax_waveform']
+        fig, ax = plt.subplots(figsize=self.settings['figure_size'])
+        ax.plot(time_ax, single_waveform, color="lightgray", label="Original Waveform", linewidth=self.settings['line_width'])
+        ax.plot(time_ax, single_waveform_filtered, color="black", label="Filtered Waveform", linewidth=self.settings['line_width'])
+        ax.set_xlabel('Time [$\\mu s$]', fontsize=self.settings['fontsize_labels'])
+        ax.set_ylabel('Amplitude [a.u.]', fontsize=self.settings['fontsize_labels'])
+        ax.set_title(f"Effect of Lowpass Filtering at {freq_cut:.2f} MHz", fontsize=self.settings['fontsize_title'], fontname=self.FONT_TYPE)
+        ax.legend(fontsize=self.settings['fontsize_ticks'])
+        ax.tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
+        ax.grid(alpha=0.3)
+
+        fig.tight_layout()
+
+        self.output_path_choice(fig=fig, outfile_path=outfile_path)
+
+    def wavelet_selection_plot(self,
+                               time: np.ndarray,
+                               waveform: np.ndarray,
+                               ratio: np.ndarray,
+                               index_max_list: List[int],
+                               index_min_before_list: List[int],
+                               index_min_after_list: List[int],
+                               outfile_path: Optional[str] = None) -> None:
+        """
+        Plot waveform data along with STA/LTA analysis results.
+
+        Args:
+            time (np.ndarray): Time array.
+            waveform (np.ndarray): Waveform data.
+            ratio (np.ndarray): STA/LTA ratio.
+            index_max_list (List[int]): List of indices for maximum values.
+            index_min_before_list (List[int]): List of indices for minimum values before maximum.
+            index_min_after_list (List[int]): List of indices for minimum values after maximum.
+            outfile_path (str, optional): Path to save the plot.
+
+        Raises:
+            ValueError: If input arrays are not 1D or lengths do not match.
+        """
+        if not all(arr.ndim == 1 for arr in [time, waveform, ratio]):
+            raise ValueError("time, waveform, and ratio must be 1D numpy arrays.")
+        if not (len(time) == len(waveform) == len(ratio)):
+            raise ValueError("time, waveform, and ratio must have the same length.")
+
+        fig, ax = plt.subplots(figsize=self.settings['figure_size'])
+        ax.plot(time, waveform, label='Recorded Waveform', alpha=0.5, linewidth=self.settings['line_width'])
+        norm = (np.amax(waveform) / np.amax(ratio))
+        ax.plot(time, norm * ratio, label='STA/LTA on Waveform')
+        ax.plot(time[index_max_list], norm * ratio[index_max_list], "r.", label='Maxima')
+        ax.plot(time[index_min_before_list], norm * ratio[index_min_before_list], "g.", label='Minima Before')
+        ax.plot(time[index_min_after_list], norm * ratio[index_min_after_list], "k.", label='Minima After')
+        ax.set_xlabel('Time [$\\mu$s]', fontsize=self.settings['fontsize_labels'])
+        ax.set_ylabel('Amplitude [a.u.]', fontsize=self.settings['fontsize_labels'])
+        ax.legend(loc="lower left", fontsize=self.settings['fontsize_ticks'])
+        ax.set_title("Wavelet Selection Using STA/LTA", fontsize=self.settings['fontsize_title'])
+        ax.tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
+        ax.grid(alpha=0.3)
+
+        fig.tight_layout()
+
+        self.output_path_choice(fig=fig, outfile_path=outfile_path)
+
+    def plot_simulation_waveform(self,
+                                 t: np.ndarray,
+                                 sp_simulated: np.ndarray,
+                                 sp_recorded: np.ndarray,
+                                 misfit_interval: np.ndarray,
+                                 outfile_path: Optional[str] = None) -> None:
+        """
+        Plot the simulated waveform against the recorded waveform.
+
+        Args:
+            t (np.ndarray): Time array.
+            sp_simulated (np.ndarray): Simulated waveform.
+            sp_recorded (np.ndarray): Recorded waveform.
+            misfit_interval (np.ndarray): Indices of the misfit interval.
+            outfile_path (str, optional): Path to save the plot.
+
+        Raises:
+            ValueError: If input arrays are not 1D or lengths do not match.
+        """
+        if not all(arr.ndim == 1 for arr in [t, sp_simulated, sp_recorded]):
+            raise ValueError("t, sp_simulated, and sp_recorded must be 1D numpy arrays.")
+        if not (len(t) == len(sp_simulated) == len(sp_recorded)):
+            raise ValueError("t, sp_simulated, and sp_recorded must have the same length.")
+
+        fig, ax = plt.subplots(figsize=self.settings['figure_size'])
+        ax.plot(t, sp_recorded, label="Recorded Waveform", color=self.settings['colors']['black_olive'], linewidth=self.settings['line_width'])
+        ax.plot(t, sp_simulated, label="Simulated Waveform", color=self.settings['colors']['indianred'], linewidth=self.settings['line_width'])
+
+        # Check misfit_interval
+        if misfit_interval.size > 0:
+            misfit_start_time = t[misfit_interval[0]]
+            misfit_end_time = t[misfit_interval[-1]]
+
+            # Add shaded region for misfit interval
+            ax.axvspan(misfit_start_time, misfit_end_time, color=self.settings['colors']['dutch_white'], alpha=0.5)
+            ax.text(misfit_start_time, min(sp_recorded), 'Misfit Evaluation Interval', ha='left', fontsize=self.settings['fontsize_labels'], color=self.settings['colors']['darkslategray'])
+        else:
+            print("Misfit interval is empty; cannot shade region.")
+
+        ax.set_title("Ultrasonic Wave Simulation", fontsize=self.settings['fontsize_title'])
+        ax.set_xlabel("Time [$\\mu s$]", fontsize=self.settings['fontsize_labels'])
+        ax.set_ylabel("Amplitude [a.u.]", fontsize=self.settings['fontsize_labels'])
+        ax.tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
+        ax.legend(fontsize=self.settings['fontsize_ticks'])
+        ax.grid(alpha=0.3)
+
+        fig.tight_layout()
+
+        self.output_path_choice(fig=fig, outfile_path=outfile_path)
+
+    def make_movie_from_simulation(self,
+                                    outfile_path: str,
+                                    x: np.ndarray,
+                                    t: np.ndarray,
+                                    sp_field: np.ndarray,
+                                    sp_recorded: np.ndarray,
+                                    sample_dimensions: Tuple[float, float],
+                                    idx_dict: Dict[str, np.ndarray]) -> None:
+            """
+            Create an animation of the wavefield simulation.
+
+            Args:
+                outfile_path (str): Path to save the movie file.
+                x (np.ndarray): Spatial axis.
+                t (np.ndarray): Time array.
+                sp_field (np.ndarray): Simulated wavefield (2D array).
+                sp_recorded (np.ndarray): Recorded waveform.
+                sample_dimensions (Tuple[float, float]): Dimensions of the sample.
+                idx_dict (Dict[str, np.ndarray]): Dictionary of indices for different layers.
+
+            Raises:
+                ValueError: If input arrays have incorrect dimensions or lengths.
+            """
+            # Input validation
+            if x.ndim != 1 or t.ndim != 1:
+                raise ValueError("x and t must be 1D numpy arrays.")
+            if sp_field.ndim != 2:
+                raise ValueError("sp_field must be a 2D numpy array.")
+            if sp_field.shape != (len(t), len(x)):
+                raise ValueError("sp_field shape must be (len(t), len(x)).")
+            if sp_recorded.ndim != 1:
+                raise ValueError("sp_recorded must be a 1D numpy array.")
+            if len(sp_recorded) != len(t):
+                raise ValueError("sp_recorded must have the same length as t.")
+
+            movie_sampling = 10  # Downsampling of the snapshot to speed up movie
+
+            fig, (ax, ax2) = plt.subplots(1, 2, figsize=self.settings['figure_size'], gridspec_kw={'width_ratios': [10, 1]})
+            ylim = 1.3 * np.amax(np.abs(sp_field))
+
+            ax.set_xlim([x[0], x[-1]])
+            ax.set_ylim([-ylim, ylim])
+            ax.set_title("Ultrasonic Wavefield in DDS Experiment", fontsize=self.settings['fontsize_title'], color=self.settings['colors']['darkslategray'])
+            ax.set_xlabel("Sample Length [cm]", fontsize=self.settings['fontsize_labels'], color=self.settings['colors']['darkslategray'])
+            ax.set_ylabel('Relative Shear Wave Amplitude', fontsize=self.settings['fontsize_labels'], color=self.settings['colors']['darkslategray'])
+            ax.tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
+
+            # Shading layers based on indices in idx_dict
+            layers = [
+                {'name': 'Gouge Layer 1', 'idx': idx_dict.get('gouge_1'), 'color': self.settings['colors']['sandybrown']},
+                {'name': 'Gouge Layer 2', 'idx': idx_dict.get('gouge_2'), 'color': self.settings['colors']['sandybrown']},
+                {'name': 'PZT Layer 1', 'idx': idx_dict.get('pzt_1'), 'color': self.settings['colors']['indianred']},
+                {'name': 'PZT Layer 2', 'idx': idx_dict.get('pzt_2'), 'color': self.settings['colors']['indianred']},
+                {'name': 'Grooves', 'idx': np.concatenate([idx_dict.get(key) for key in ['groove_sb1', 'groove_cb1', 'groove_cb2', 'groove_sb2'] if idx_dict.get(key) is not None]), 'color': self.settings['colors']['lightgrey']},
+                {'name': 'Steel Blocks', 'idx': np.concatenate([idx_dict.get(key) for key in ['side_block_1', 'central_block', 'side_block_2'] if idx_dict.get(key) is not None]), 'color': self.settings['colors']['lightsteelblue']},
+            ]
+
+            for layer in layers:
+                if layer['idx'] is not None and len(layer['idx']) > 0:
+                    ax.axvspan(x[layer['idx'][0]], x[layer['idx'][-1]], color=layer['color'], alpha=0.3, label=layer['name'])
+
+            # Plot transmitter and receiver positions
+            x_tr = x[idx_dict['pzt_1'][-1]]
+            y_tr = 0
+            pzt_width = x[idx_dict['pzt_1'][-1]] - x[idx_dict['pzt_1'][0]]
+            pzt_height = 4 * pzt_width
+            ax.add_patch(Rectangle((x_tr - pzt_width, y_tr - pzt_height / 2), pzt_width, pzt_height, color=self.settings['colors']['teal']))
+            ax.text(x_tr - pzt_width / 2, y_tr - pzt_height, 'Transmitter', ha='center', fontsize=self.settings['fontsize_labels'], color=self.settings['colors']['darkslategray'])
+
+            x_rc = x[idx_dict['pzt_2'][0]]
+            y_rc = 0
+            ax.add_patch(Rectangle((x_rc, y_rc - pzt_height / 2), pzt_width, pzt_height, color=self.settings['colors']['teal']))
+            ax.text(x_rc + pzt_width / 2, y_rc - pzt_height, 'Receiver', ha='center', fontsize=self.settings['fontsize_labels'], color=self.settings['colors']['darkslategray'])
+
+            # Configure ax2 for the recorded signal
+            ax2.set_ylim([t[0], t[-1]])
+            ax2.set_xlim([-1, 1])  # Set x-limits to small range around zero
+            ax2.set_title("Recorded Signal", fontsize=self.settings['fontsize_title'], color=self.settings['colors']['darkslategray'])
+            ax2.axis('off')
+            ax2.invert_yaxis()
+
+            fig.tight_layout()
+
+            # Initialize lines for animation
+            line_wavefield, = ax.plot([], [], color=self.settings['colors']['darkslategray'], lw=self.settings['line_width'])
+            line_recorded, = ax2.plot([], [], color=self.settings['colors']['darkslategray'], lw=self.settings['line_width'])
+
+            # Prepare data for animation
+            sp_movie = sp_field[::movie_sampling]
+            sp_recorded_movie = sp_recorded[::movie_sampling] / np.amax(np.abs(sp_recorded))
+            t_recorded_movie = t[::movie_sampling]
+            num_frames = len(sp_movie)
+
+            def update_frame(frame):
+                line_wavefield.set_data(x, sp_movie[frame])
+                line_recorded.set_data(sp_recorded_movie[:frame], t_recorded_movie[:frame])
+                return line_wavefield, line_recorded
+
+            ani = animation.FuncAnimation(fig, update_frame, frames=num_frames, blit=True, interval=20)
+            ani.save(outfile_path, fps=30, extra_args=['-vcodec', 'libx264'])
+            plt.close(fig)
+
+    def plot_velocity_model(self,
+                            x: np.ndarray,
+                            c: np.ndarray,
+                            layer_starts: np.ndarray,
+                            pzt_layer_width: float,
+                            pmma_layer_width: float,
+                            outfile_path: Optional[str] = None) -> None:
+        """
+        Plot the velocity model with layers and smoothing.
+
+        Args:
+            x (np.ndarray): Spatial axis.
+            c (np.ndarray): Velocity model array.
+            layer_starts (np.ndarray): Cumulative positions along the sample.
+            pzt_layer_width (float): Width of the PZT layer.
+            pmma_layer_width (float): Width of the PMMA layer.
+            outfile_path (str, optional): Path to save the plot.
+
+        Raises:
+            ValueError: If input arrays have incorrect dimensions or lengths.
+        """
+        if x.ndim != 1 or c.ndim != 1:
+            raise ValueError("x and c must be 1D numpy arrays.")
+        if len(x) != len(c):
+            raise ValueError("x and c must have the same length.")
+        if layer_starts.ndim != 1:
+            raise ValueError("layer_starts must be a 1D numpy array.")
+
+        fig, ax = plt.subplots(figsize=self.settings['figure_size'])
+        ax.plot(x, c, label='Velocity Model', color='black', linewidth=self.settings['line_width'])
+
+        layers = [
+            {'name': 'PMMA Layer 1', 'start': layer_starts[0], 'end': layer_starts[1], 'color': self.settings['colors']['platinum']},
+            {'name': 'PZT Layer 1', 'start': layer_starts[1], 'end': layer_starts[2], 'color': self.settings['colors']['indianred']},
+            {'name': 'Side Block 1', 'start': layer_starts[2], 'end': layer_starts[3], 'color': self.settings['colors']['lightsteelblue']},
+            {'name': 'Groove SB1', 'start': layer_starts[3], 'end': layer_starts[4], 'color': self.settings['colors']['lightgrey']},
+            {'name': 'Gouge Layer 1', 'start': layer_starts[4], 'end': layer_starts[5], 'color': self.settings['colors']['sandybrown']},
+            {'name': 'Groove CB1', 'start': layer_starts[5], 'end': layer_starts[6], 'color': self.settings['colors']['lightgrey']},
+            {'name': 'Central Block', 'start': layer_starts[6], 'end': layer_starts[7], 'color': self.settings['colors']['lightsteelblue']},
+            {'name': 'Groove CB2', 'start': layer_starts[7], 'end': layer_starts[8], 'color': self.settings['colors']['lightgrey']},
+            {'name': 'Gouge Layer 2', 'start': layer_starts[8], 'end': layer_starts[9], 'color': self.settings['colors']['sandybrown']},
+            {'name': 'Groove SB2', 'start': layer_starts[9], 'end': layer_starts[10], 'color': self.settings['colors']['lightgrey']},
+            {'name': 'Side Block 2', 'start': layer_starts[10], 'end': layer_starts[11], 'color': self.settings['colors']['lightsteelblue']},
+            {'name': 'PZT Layer 2', 'start': layer_starts[11], 'end': layer_starts[12], 'color': self.settings['colors']['indianred']},
+            {'name': 'PMMA Layer 2', 'start': layer_starts[12], 'end': layer_starts[13], 'color': self.settings['colors']['platinum']},
+        ]
+
+        labels_used = set()
+
+        for layer in layers:
+            label = layer['name'] if layer['name'] not in labels_used else None
+            labels_used.add(layer['name'])
+            ax.axvspan(layer['start'], layer['end'], color=layer['color'], alpha=0.3, label=label)
+
+        # Plot transmitter and receiver positions
+        transmitter_pos = pzt_layer_width + pmma_layer_width
+        receiver_pos = x[-1] - pzt_layer_width - pmma_layer_width
+        ax.axvline(transmitter_pos, color="red", linestyle='-', label='Transmitter')
+        ax.axvline(receiver_pos, color="green", linestyle='-', label='Receiver')
+
+        ax.set_title("Velocity Model with Layers and Smoothing", fontsize=self.settings['fontsize_title'])
+        ax.set_xlabel("Position (cm)", fontsize=self.settings['fontsize_labels'])
+        ax.set_ylabel("Velocity (cm/$\\mu$s)", fontsize=self.settings['fontsize_labels'])
+        ax.grid(True)
+        ax.legend(loc='upper right', fontsize=self.settings['fontsize_ticks'])
+        ax.tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
+
+        fig.tight_layout()
+
+        self.output_path_choice(fig=fig, outfile_path=outfile_path)
+
+    def plot_synthetic_spatial_function(self,
+                                        x: np.ndarray,
+                                        spatial_function: np.ndarray,
+                                        outfile_path: Optional[str] = None) -> None:
+        """
+        Plot the synthetic spatial function.
+
+        Args:
+            x (np.ndarray): Spatial axis.
+            spatial_function (np.ndarray): The synthetic spatial function values.
+            outfile_path (str, optional): Path to save the plot.
+
+        Raises:
+            ValueError: If x and spatial_function are not 1D arrays of the same length.
+        """
+        if x.ndim != 1 or spatial_function.ndim != 1:
+            raise ValueError("x and spatial_function must be 1D numpy arrays.")
+        if len(x) != len(spatial_function):
+            raise ValueError("x and spatial_function must have the same length.")
+
+        fig, ax = plt.subplots(figsize=self.settings['figure_size'])
+        ax.plot(x, spatial_function, linewidth=self.settings['line_width'])
+        ax.set_title("Synthetic Spatial Function", fontsize=self.settings['fontsize_title'])
+        ax.set_xlabel("Position (cm)", fontsize=self.settings['fontsize_labels'])
+        ax.set_ylabel("Amplitude", fontsize=self.settings['fontsize_labels'])
+        ax.tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
+        ax.grid(alpha=0.3)
+
+        fig.tight_layout()
+
+        self.output_path_choice(fig=fig, outfile_path=outfile_path)
+
+    def plot_velocity_and_stresses(self,
+                                   x_values: np.ndarray,
+                                   velocities: np.ndarray,
+                                   normal_stress: np.ndarray,
+                                   shear_stress: np.ndarray,
+                                   x_label: str,
+                                   velocity_label: str,
+                                   stress_labels: Tuple[str, str],
+                                   title: str,
+                                   outfile_path: Optional[str] = None) -> None:
+        """
+        Plot estimated velocities and two stresses vs a common x-axis variable.
+
+        Args:
+            x_values (np.ndarray): The x-axis values (e.g., displacement or time).
+            velocities (np.ndarray): Estimated velocities.
+            normal_stress (np.ndarray): Normal stress values.
+            shear_stress (np.ndarray): Shear stress values.
+            x_label (str): Label for the x-axis.
+            velocity_label (str): Label for the velocity y-axis.
+            stress_labels (Tuple[str, str]): Labels for the stress y-axes.
+            title (str): Title of the plot.
+            outfile_path (str, optional): Path to save the plot.
+
+        Raises:
+            ValueError: If input arrays are not 1D or lengths do not match.
+        """
+        if not all(arr.ndim == 1 for arr in [x_values, velocities, normal_stress, shear_stress]):
+            raise ValueError("All input arrays must be 1D numpy arrays.")
+        if not (len(x_values) == len(velocities) == len(normal_stress) == len(shear_stress)):
+            raise ValueError("All input arrays must have the same length.")
+
+        fig, ax = plt.subplots(figsize=self.settings['figure_size'])
+
+        # Plot velocities on the left y-axis
+        color1 = 'tab:blue'
+        ax.set_xlabel(x_label, fontsize=self.settings['fontsize_labels'])
+        ax.set_ylabel(velocity_label, color=color1, fontsize=self.settings['fontsize_labels'])
+        ax.plot(x_values, velocities, color=color1, label=velocity_label, linewidth=self.settings['line_width'])
+        ax.tick_params(axis='y', labelcolor=color1, labelsize=self.settings['fontsize_ticks'])
+        ax.tick_params(axis='x', labelsize=self.settings['fontsize_ticks'])
+
+        # Create a second y-axis for normal stress
+        ax2 = ax.twinx()
+        color2 = 'tab:red'
+        ax2.set_ylabel(stress_labels[0], color=color2, fontsize=self.settings['fontsize_labels'])
+        ax2.plot(x_values, normal_stress, color=color2, linestyle='--', label=stress_labels[0], linewidth=self.settings['line_width'])
+        ax2.tick_params(axis='y', labelcolor=color2, labelsize=self.settings['fontsize_ticks'])
+
+        # Adjust the position of ax2 to make room for a third y-axis
+        ax2.spines['right'].set_position(('axes', 1.0))
+
+        # Create a third y-axis for shear stress
+        ax3 = ax.twinx()
+        color3 = 'tab:green'
+        ax3.set_ylabel(stress_labels[1], color=color3, fontsize=self.settings['fontsize_labels'])
+        ax3.plot(x_values, shear_stress, color=color3, linestyle='-', label=stress_labels[1], linewidth=self.settings['line_width'])
+        ax3.tick_params(axis='y', labelcolor=color3, labelsize=self.settings['fontsize_ticks'])
+
+        # Offset the third y-axis
+        ax3.spines['right'].set_position(('axes', 1.15))
+
+        # Add grid, legend, and title
+        lines, labels = ax.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        lines3, labels3 = ax3.get_legend_handles_labels()
+        ax.legend(lines + lines2 + lines3, labels + labels2 + labels3, loc='upper left', fontsize=self.settings['fontsize_ticks'])
+
+        ax.set_title(title, fontsize=self.settings['fontsize_title'])
+        ax.grid(alpha=0.3)
+
+        fig.tight_layout()
+
+        self.output_path_choice(fig=fig, outfile_path=outfile_path)
+
+    def plot_l2_norm_vs_velocity(self,
+                                 gouge_velocity: np.ndarray,
+                                 L2norm: np.ndarray,
+                                 overall_index: int,
+                                 outfile_path: Optional[str] = None) -> None:
+        """
+        Plot the L2 norm vs Gouge velocity.
+
+        Args:
+            gouge_velocity (np.ndarray): Array of gouge velocity values.
+            L2norm (np.ndarray): Array of L2 norm values corresponding to the velocity.
+            overall_index (int): Index of the waveform for plot title.
+            outfile_path (str, optional): Path to save the plot.
+
+        Raises:
+            ValueError: If gouge_velocity and L2norm are not 1D arrays of the same length.
+        """
+        if gouge_velocity.ndim != 1 or L2norm.ndim != 1:
+            raise ValueError("gouge_velocity and L2norm must be 1D numpy arrays.")
+        if len(gouge_velocity) != len(L2norm):
+            raise ValueError("gouge_velocity and L2norm must have the same length.")
+
+        fig, ax = plt.subplots(figsize=self.settings['figure_size'])
+        
+        # Plotting the L2 norm vs gouge velocity
+        ax.plot(gouge_velocity, L2norm, linewidth=self.settings['line_width'])
+        ax.set_xlabel('Gouge Velocity (cm/$\\mu$s)', fontsize=self.settings['fontsize_labels'])
+        ax.set_ylabel('L2 Norm of Residuals', fontsize=self.settings['fontsize_labels'])
+        ax.set_title(f'L2 Norm vs Gouge Velocity for Waveform {overall_index}', fontsize=self.settings['fontsize_title'])
+        ax.tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
+        ax.grid(alpha=0.3)
+        
+        self.output_path_choice(fig=fig, outfile_path=outfile_path)
+       
+class InteractivePlotter:
+    """
+    Class for plotting waveforms and handling interactive user inputs.
+    """
+
+    @staticmethod
+    def manual_pick_arrival_times(
+        observed_time: np.ndarray,
+        observed_waveform: np.ndarray,
+        outfile_path: Optional[Path] = None
+    ) -> List[float]:
+        """
+        Manually pick arrival times from waveform data to estimate initial velocities.
+
+        Parameters
+        ----------
+        observed_time : np.ndarray
+            Array of time values corresponding to the observed waveform.
+        observed_waveform : np.ndarray
+            The observed waveform data.
+        outfile_path : Optional[Path]
+            Path to save the picked arrival times. If None, the picked times are not saved to a file.
+
+        Returns
+        -------
+        picked_times : List[float]
+            List of picked arrival times in seconds.
+
+        Notes
+        -----
+        - Left-click on the plot to pick arrival times.
+        - Close the plot window to finish picking.
+        - Picked times will be displayed and optionally saved to `outfile_path`.
+        """
+        # Validate inputs
+        if observed_time.ndim != 1 or observed_waveform.ndim != 1:
+            raise ValueError("observed_time and observed_waveform must be 1D numpy arrays.")
+        if len(observed_time) != len(observed_waveform):
+            raise ValueError("observed_time and observed_waveform must have the same length.")
+
+        # Initialize a list to store picked arrival times
+        picked_times = []
+
+        # Function to handle mouse clicks
+        def onclick(event):
+            if event.button == 1 and event.inaxes:  # Left click within axes
+                picked_time = event.xdata
+                picked_times.append(picked_time)
+                print(f"Picked time: {picked_time:.6f} seconds")
+
+                # Mark the picked time on the plot
+                event.inaxes.axvline(x=picked_time, color='r', linestyle='--')
+                plt.draw()
+
+        # Plot the waveform data
+        fig, ax = plt.subplots()
+        ax.plot(observed_time, observed_waveform, label='Waveform')
+        ax.set_xlabel('Time (seconds)')
+        ax.set_ylabel('Amplitude')
+        ax.set_title('Pick Arrival Times by Clicking')
+        ax.legend()
+        ax.grid(True)
+
+        # Connect the click event to the onclick function
+        cid = fig.canvas.mpl_connect('button_press_event', onclick)
+
+        # Show the plot and allow picking
         plt.show()
 
-def uw_all_plot(data: np.ndarray, 
-                metadata: dict, 
-                step_wf_to_plot: int, 
-                highlight_start: int, 
-                highlight_end: int, 
-                xlim_plot: float, 
-                ticks_steps_waveforms: float, 
-                outfile_path: str = None, 
-                settings=default_settings) -> None:
-    '''
-    Plots stacked waveforms with optional highlighting.
+        # Disconnect the event handler
+        fig.canvas.mpl_disconnect(cid)
 
-    Args:
-    - data: Numpy array representing waveform data.
-    - metadata: Metadata dictionary containing information about the data.
-    - step_wf_to_plot: Step size for plotting waveforms.
-    - highlight_start: Index of the start point for highlighting.
-    - highlight_end: Index of the end point for highlighting.
-    - xlim_plot: Limit for the x-axis.
-    - ticks_steps_waveforms: Step size for ticks on the waveform axis.
-    - outfile_path: Path to save the plot.
-    - settings: Dictionary with plot settings.
+        # Save picked times to file if outfile_path is provided
+        if outfile_path:
+            # Ensure outfile_path is a Path object
+            outfile_path = Path(outfile_path)
 
-    Returns:
-    - None
-    '''
+            # Create parent directories if they don't exist
+            outfile_path.parent.mkdir(parents=True, exist_ok=True)
 
-    time_ax_waveform = metadata["time_ax_waveform"]
-    time_ticks_waveforms = np.arange(time_ax_waveform[0], time_ax_waveform[-1], ticks_steps_waveforms)
-    
-    data_to_plot = data[::step_wf_to_plot]
-    ymax = 1.3 * np.amax(data_to_plot)
-    ymin = 1.3 * np.amin(data_to_plot)
+            with open(outfile_path, "wb") as f:
+                pickle.dump(picked_times, f)
+            print(f"Picked times saved to {outfile_path}")
 
-    fig, ax = plt.subplots(figsize=settings['figure_size'])
-
-    ax.plot(time_ax_waveform, data_to_plot.T, color='black', linewidth=0.8, alpha=0.5)
-    ax.plot(time_ax_waveform[highlight_start:highlight_end], data[highlight_start:highlight_end], color='red')
-    ax.set_xlabel('Time [$\mu s$]', fontsize=settings['fontsize_labels'])
-    ax.set_ylabel('Amplitude [.]', fontsize=settings['fontsize_labels'])
-    ax.set_xticks(time_ticks_waveforms)
-    ax.set_ylim([ymin, ymax])
-    ax.set_xlim(time_ax_waveform[0], xlim_plot)
-    ax.grid(alpha=0.1)
-    ax.set_title("Stacked Waveforms", fontsize=settings['fontsize_title'], fontname=FONT_TYPE)
-    ax.tick_params(axis='both', which='major', labelsize=settings['fontsize_ticks'])
-
-    fig.tight_layout()
-
-    output_path_choice(fig=fig, outfile_path=outfile_path, format=settings['format'])
-
-def amplitude_map(data: np.ndarray, 
-                  metadata: dict, 
-                  amp_scale: float, 
-                  outfile_path: str = None, 
-                  settings=default_settings) -> None:
-    '''
-    Plots an amplitude map of waveform data.
-
-    Args:
-    - data: Numpy array representing waveform data.
-    - metadata: Metadata dictionary containing information about the data.
-    - amp_scale: Scale for amplitude.
-    - outfile_path: Path to save the plot.
-    - settings: Dictionary with plot settings.
-
-    Returns:
-    - None
-    '''
-
-    time_ax_waveform = metadata['time_ax_waveform']
-    sampling_rate = metadata['sampling_rate']
-    number_of_samples = metadata['number_of_samples']
-    acquisition_frequency = metadata['acquisition_frequency']
-
-    fig, ax = plt.subplots(figsize=settings['figure_size'])
-    ax.set_title("Amplitude Map", fontsize=settings['fontsize_title'], fontname=FONT_TYPE)
-    cmap = plt.get_cmap('seismic')
-    
-    im = ax.imshow(data.T, aspect='auto', origin='lower', interpolation='none',
-                   cmap=cmap, vmin=-amp_scale, vmax=amp_scale,
-                   extent=[0, data.shape[0] * acquisition_frequency, 0, number_of_samples * sampling_rate])
-    
-    cbar = fig.colorbar(im, pad=0.04)
-    cbar.set_label("Relative Amplitude", fontsize=settings['fontsize_labels'])
-
-    ax.set_xlabel('Time [s]', fontsize=settings['fontsize_labels'])
-    ax.set_ylabel('Waveform Time [$\mu s$]', fontsize=settings['fontsize_labels'])
-    ax.tick_params(axis='both', which='major', labelsize=settings['fontsize_ticks'])
-
-    fig.tight_layout()
-
-    output_path_choice(fig=fig, outfile_path=outfile_path, format=settings['format'])
-
-def amplitude_spectrum_map(signal_freqs: np.ndarray,
-                           amp_spectrum: np.ndarray, 
-                           metadata: dict, 
-                           outfile_path: str = None, 
-                           settings=default_settings) -> None:
-    '''
-    Plots an amplitude spectrum map of waveform data.
-
-    Args:
-    - signal_freqs: Frequencies of the signal.
-    - amp_spectrum: Amplitude spectrum.
-    - metadata: Metadata dictionary containing information about the data.
-    - outfile_path: Path to save the plot.
-    - settings: Dictionary with plot settings.
-
-    Returns:
-    - None
-    '''
-    
-    wave_num, wave_len = amp_spectrum.shape
-    spectrum_length = round(wave_len / 2)
-    signal_freqs = signal_freqs[:spectrum_length]
-    amp_spectrum = amp_spectrum[:, :spectrum_length]
-
-    time_ax_acquisition = metadata['time_ax_acquisition']
-
-    fig, ax = plt.subplots(figsize=settings['figure_size'])
-    pcm = ax.pcolormesh(time_ax_acquisition, signal_freqs, amp_spectrum.T, cmap="gist_gray", norm=mcolors.LogNorm())
-    ax.set_title('Amplitude Spectrum Map', fontsize=settings['fontsize_title'], fontname=FONT_TYPE)
-    ax.set_xlabel("Time [s]", fontsize=settings['fontsize_labels'])
-    ax.set_ylabel("Frequency [$MHz$]", fontsize=settings['fontsize_labels'])
-    ax.tick_params(axis='both', which='major', labelsize=settings['fontsize_ticks'])
-    cbar = fig.colorbar(pcm, pad=0.04)
-    cbar.set_label("Spectral Amplitude", fontsize=settings['fontsize_labels'])
-
-    fig.tight_layout()
-
-    output_path_choice(fig=fig, outfile_path=outfile_path, format=settings['format'])
-
-def filtered_amp_and_phase_spectrum_plot(signal_freqs: np.ndarray, amp_spectrum: np.ndarray, phase_spectrum: np.ndarray, filtered_amp_spectrum: np.ndarray, lowpass_filter: np.ndarray, sampling_rate: float, outfile_path: str = None, settings=default_settings) -> None:
-    '''
-    Plots the filtered amplitude and phase spectrum.
-
-    Args:
-    - signal_freqs: Frequencies of the signal.
-    - amp_spectrum: Amplitude spectrum.
-    - phase_spectrum: Phase spectrum.
-    - filtered_amp_spectrum: Filtered amplitude spectrum.
-    - lowpass_filter: Low-pass filter.
-    - sampling_rate: Sampling rate of the signal.
-    - outfile_path: Path to save the plot.
-    - settings: Dictionary with plot settings.
-
-    Returns:
-    - None
-    '''
-
-    spectrum_length = round(len(amp_spectrum) / 2)
-    amp_spectrum = amp_spectrum[:spectrum_length]
-    phase_spectrum = phase_spectrum[:spectrum_length]
-    filtered_amp_spectrum = filtered_amp_spectrum[:spectrum_length]
-    signal_freqs = signal_freqs[:spectrum_length]
-    lowpass_filter = lowpass_filter[:spectrum_length]
-
-    max_freq = signal_freqs[np.argmax(amp_spectrum)]
-
-    fig, ax = plt.subplots(2, 1, figsize=settings['figure_size'])
-
-    ax[0].semilogy(signal_freqs, amp_spectrum, label="Amplitude Spectrum")
-    ax[0].semilogy(signal_freqs, lowpass_filter * np.amax(amp_spectrum), label="Filter Shape")
-    ax[0].semilogy(signal_freqs, filtered_amp_spectrum, label="Filtered Amplitude Spectrum")
-    ax[0].vlines(max_freq, np.amin(filtered_amp_spectrum), np.amax(filtered_amp_spectrum), "r", "--", label=f"Max Spectrum = {max_freq:.2f} MHz")
-    ax[0].vlines(2, np.amin(filtered_amp_spectrum), np.amax(filtered_amp_spectrum), "r", "-", label="Sensor Resonance Frequency = 2 MHz")
-    ax[0].legend(fontsize=settings['fontsize_ticks'])
-    ax[0].set_xlim([0, np.amax(signal_freqs)])
-    ax[0].set_ylabel("Amplitude [a.u.]", fontsize=settings['fontsize_labels'])
-    ax[0].set_xlabel("Frequency [MHz]", fontsize=settings['fontsize_labels'])
-    ax[0].set_title("Amplitude Spectrum of a Waveform", fontsize=settings['fontsize_title'], fontname=FONT_TYPE)
-    ax[0].tick_params(axis='both', which='major', labelsize=settings['fontsize_ticks'])
-
-    ax[1].plot(signal_freqs, phase_spectrum)
-    ax[1].set_yticks(np.linspace(-np.pi, np.pi, 5))
-    ax[1].set_yticklabels([r'$-\pi$', r'$-\frac{\pi}{2}$', r'$0$', r'$\frac{\pi}{2}$', r'$\pi$'])
-    ax[1].set_ylabel("Phase [rad]", fontsize=settings['fontsize_labels'])
-    ax[1].set_xlabel("Frequency [MHz]", fontsize=settings['fontsize_labels'])
-    ax[1].set_title("Phase Spectrum of a Waveform", fontsize=settings['fontsize_title'], fontname=FONT_TYPE)
-    ax[1].tick_params(axis='both', which='major', labelsize=settings['fontsize_ticks'])
-
-    fig.tight_layout()
-
-    output_path_choice(fig=fig, outfile_path=outfile_path, format=settings['format'])
-
-def signal_vs_filtered_signal_plot(single_waveform: np.ndarray, 
-                                   single_waveform_filtered: np.ndarray, 
-                                   metadata: dict, freq_cut: float, 
-                                   outfile_path: str = None, 
-                                   settings=default_settings) -> None:
-    """
-    Plot a comparison between a waveform and its filtered version.
-
-    Args:
-    - single_waveform: The original waveform data.
-    - single_waveform_filtered: The filtered waveform data.
-    - metadata: Metadata containing information about the waveform.
-    - freq_cut: Cut-off frequency for filtering.
-    - outfile_path: Path to save the plot.
-    - settings: Dictionary with plot settings.
-
-    Returns:
-    - None
-    """
-    time_ax = metadata['time_ax_waveform']
-    fig, ax = plt.subplots(figsize=settings['figure_size'])
-    ax.plot(time_ax, single_waveform, color="lightgray", label="Original Waveform", linewidth=settings['line_width'])
-    ax.plot(time_ax, single_waveform_filtered, color="black", label="Filtered Waveform", linewidth=settings['line_width'])
-    ax.set_xlabel('Time [$\mu s$]', fontsize=settings['fontsize_labels'])
-    ax.set_ylabel('Amplitude [a.u.]', fontsize=settings['fontsize_labels'])
-    ax.set_title(f"Effect of Lowpass Filtering at {freq_cut:.2f} MHz", fontsize=settings['fontsize_title'], fontname=FONT_TYPE)
-    ax.legend(fontsize=settings['fontsize_ticks'])
-    ax.tick_params(axis='both', which='major', labelsize=settings['fontsize_ticks'])
-    ax.grid(alpha=0.3)
-
-    fig.tight_layout()
-
-    output_path_choice(fig=fig, outfile_path=outfile_path, format=settings['format'])
-
-def wavelet_selection_plot(time: np.ndarray, 
-                           waveform: np.ndarray, 
-                           ratio: np.ndarray, 
-                           index_max_list: list, 
-                           index_min_before_list: list, 
-                           index_min_after_list: list, 
-                           outfile_path: str = None, 
-                           settings=default_settings) -> None:
-    """
-    Plot waveform data along with STA/LTA analysis results.
-
-    Args:
-    - time: Time array.
-    - waveform: Waveform data.
-    - ratio: STA/LTA ratio.
-    - index_max_list: List of indices for maximum values.
-    - index_min_before_list: List of indices for minimum values before maximum.
-    - index_min_after_list: List of indices for minimum values after maximum.
-    - outfile_path: Path to save the plot.
-    - settings: Dictionary with plot settings.
-
-    Returns:
-    - None
-    """
-    fig, ax = plt.subplots(figsize=settings['figure_size'])
-    ax.plot(time, waveform, label='Recorded Waveform', alpha=0.5, linewidth=settings['line_width'])
-    norm = (np.amax(waveform) / np.amax(ratio))
-    ax.plot(time, norm * ratio, label='STA/LTA on Waveform')
-    ax.plot(time[index_max_list], norm * ratio[index_max_list], "r.", label='Maxima')
-    ax.plot(time[index_min_before_list], norm * ratio[index_min_before_list], "g.", label='Minima Before')
-    ax.plot(time[index_min_after_list], norm * ratio[index_min_after_list], "k.", label='Minima After')
-    ax.set_xlabel('Time [$\mu$s]', fontsize=settings['fontsize_labels'])
-    ax.set_ylabel('Amplitude [a.u.]', fontsize=settings['fontsize_labels'])
-    ax.legend(loc="lower left", fontsize=settings['fontsize_ticks'])
-    ax.set_title("Wavelet Selection Using STA/LTA", fontsize=settings['fontsize_title'])
-    ax.tick_params(axis='both', which='major', labelsize=settings['fontsize_ticks'])
-    ax.grid(alpha=0.3)
-
-    fig.tight_layout()
-
-    output_path_choice(fig=fig, outfile_path=outfile_path, format=settings['format'])
-
-def plot_simulation_waveform(t: np.ndarray, 
-                             sp_simulated: np.ndarray, 
-                             sp_recorded: np.ndarray, 
-                             misfit_interval: np.ndarray, 
-                             outfile_path: str = None, 
-                             settings=default_settings):
-    """
-    Plot the simulated waveform against the recorded waveform.
-
-    Args:
-    - t: Time array.
-    - sp_simulated: Simulated waveform.
-    - sp_recorded: Recorded waveform.
-    - misfit_interval: Indices of the misfit interval.
-    - outfile_path: Path to save the plot.
-    - settings: Dictionary with plot settings.
-
-    Returns:
-    - None
-    """
-    fig, ax = plt.subplots(figsize=settings['figure_size'])
-    ax.plot(t, sp_recorded, label="Recorded Waveform", color=settings['colors']['black_olive'], linewidth=settings['line_width'])
-    ax.plot(t, sp_simulated, label="Simulated Waveform", color=settings['colors']['indianred'], linewidth=settings['line_width'])
-    
-    # Convert misfit_interval indices to time values
-    if len(misfit_interval[0]) > 0:
-        misfit_start_time = t[misfit_interval[0][0]]
-        misfit_end_time = t[misfit_interval[0][-1]]
-        
-        # Add shaded region for misfit interval
-        ax.axvspan(misfit_start_time, misfit_end_time, color=settings['colors']['dutch_white'], alpha=0.5)
-        ax.text(misfit_start_time, min(sp_recorded), 'Misfit Evaluation Interval', ha='left', fontsize=settings['fontsize_labels'], color='darkslategray')
-    else:
-        print("Misfit interval is empty; cannot shade region.")
-    
-    ax.set_title("Ultrasonic Wave Simulation", fontsize=settings['fontsize_title'])
-    ax.set_xlabel("Time [$\mu s$]", fontsize=settings['fontsize_labels'])
-    ax.set_ylabel("Amplitude [a.u.]", fontsize=settings['fontsize_labels'])
-    ax.tick_params(axis='both', which='major', labelsize=settings['fontsize_ticks'])
-    ax.legend(fontsize=settings['fontsize_ticks'])
-    ax.grid(alpha=0.3)
-
-    fig.tight_layout()
-
-    output_path_choice(fig=fig, outfile_path=outfile_path, format=settings['format'])
-
-def make_movie_from_simulation(
-    outfile_path: str,
-    x: np.ndarray,
-    t: np.ndarray,
-    sp_field: np.ndarray,
-    sp_recorded: np.ndarray,
-    sample_dimensions: tuple,
-    idx_dict: dict,
-    settings = default_settings
-):
-    """
-    Create an animation of the wavefield simulation.
-
-    Args:
-    - outfile_path: Path to save the movie file.
-    - x: Spatial axis.
-    - t: Time array.
-    - sp_field: Simulated wavefield (2D array).
-    - sp_recorded: Recorded waveform.
-    - sample_dimensions: Dimensions of the sample.
-    - idx_dict: Dictionary of indices for different layers.
-    - settings: Dictionary with plot settings.
-
-    Returns:
-    - None
-    """
-
-    movie_sampling = 10  # Downsampling of the snapshot to speed up movie
-
-    fig, (ax, ax2) = plt.subplots(1, 2, figsize=settings['figure_size'], gridspec_kw={'width_ratios': [10, 1]})
-    ylim = 1.3 * np.amax(np.abs(sp_field))
-
-    ax.set_xlim([x[0], x[-1]])
-    ax.set_ylim([-ylim, ylim])
-    ax.set_title("Ultrasonic Wavefield in DDS Experiment", fontsize=settings['fontsize_title'], color='darkslategray')
-    ax.set_xlabel("Sample Length [cm]", fontsize=settings['fontsize_labels'], color='darkslategray')
-    ax.set_ylabel('Relative Shear Wave Amplitude', fontsize=settings['fontsize_labels'], color='darkslategray')
-    ax.tick_params(axis='both', which='major', labelsize=settings['fontsize_ticks'])
-
-    # Shading layers based on indices in idx_dict
-    layers = [
-        {'name': 'Gouge Layer 1', 'idx': idx_dict['gouge_1'], 'color': settings['colors']['sandybrown']},
-        {'name': 'Gouge Layer 2', 'idx': idx_dict['gouge_2'], 'color': settings['colors']['sandybrown']},
-        {'name': 'PZT Layer 1', 'idx': idx_dict['pzt_1'], 'color': settings['colors']['indianred']},
-        {'name': 'PZT Layer 2', 'idx': idx_dict['pzt_2'], 'color': settings['colors']['indianred']},
-        {'name': 'Grooves', 'idx': np.concatenate([idx_dict['groove_sb1'], idx_dict['groove_cb1'], idx_dict['groove_cb2'], idx_dict['groove_sb2']]), 'color': settings['colors']['lightgrey']},
-        {'name': 'Steel Blocks', 'idx': np.concatenate([idx_dict['side_block_1'], idx_dict['central_block'], idx_dict['side_block_2']]), 'color': settings['colors']['lightsteelblue']},
-    ]
-
-    for layer in layers:
-        ax.axvspan(x[layer['idx'][0]], x[layer['idx'][-1]], color=layer['color'], alpha=0.3, label=layer['name'])
-
-    # Plot transmitter and receiver positions
-    x_tr = x[idx_dict['pzt_1'][-1]]
-    y_tr = 0
-    pzt_width = x[idx_dict['pzt_1'][-1]] - x[idx_dict['pzt_1'][0]]
-    pzt_height = 4 * pzt_width
-    ax.add_patch(Rectangle((x_tr -  pzt_width, y_tr - pzt_height / 2), pzt_width, pzt_height, color=settings['colors']['teal']))
-    ax.text(x_tr - pzt_width / 2, y_tr - pzt_height, 'Transmitter', ha='center', fontsize=settings['fontsize_labels'], color=settings['colors']['darkslategray'])
-
-    x_rc = x[idx_dict['pzt_2'][0]]
-    y_rc = 0
-    ax.add_patch(Rectangle((x_rc, y_rc - pzt_height / 2), pzt_width, pzt_height, color=settings['colors']['teal']))
-    ax.text(x_rc + pzt_width / 2, y_rc - pzt_height, 'Receiver', ha='center', fontsize=settings['fontsize_labels'], color=settings['colors']['darkslategray'])
-
-    # Configure ax2 for the recorded signal
-    ax2.set_ylim([t[0], t[-1]])
-    ax2.set_xlim([-1, 1])  # Set x-limits to small range around zero
-    ax2.set_title("Recorded Signal", fontsize=settings['fontsize_title'], color='darkslategray')
-    ax2.axis('off')
-    ax2.invert_yaxis()
-
-    fig.tight_layout()
-
-    # Initialize lines for animation
-    line_wavefield, = ax.plot([], [], color=settings['colors']['darkslategray'], lw=1.5)
-    line_wavefield.set_linewidth(3.0)
-    line_recorded, = ax2.plot([], [], color=settings['colors']['darkslategray'], lw=1.5)
-    line_recorded.set_linewidth(3.0)
-
-    # Prepare data for animation
-    sp_movie = sp_field[::movie_sampling]
-    sp_recorded_movie = sp_recorded[::movie_sampling] / np.amax(np.abs(sp_recorded))
-    t_recorded_movie = t[::movie_sampling]
-    num_frames = len(sp_movie)
-
-    def update_frame(frame):
-        line_wavefield.set_data(x, sp_movie[frame])
-        line_recorded.set_data(sp_recorded_movie[:frame], t_recorded_movie[:frame])
-        return line_wavefield, line_recorded
-
-    ani = animation.FuncAnimation(fig, update_frame, frames=num_frames, blit=True, interval=20)
-    ani.save(outfile_path, fps=30, extra_args=['-vcodec', 'libx264'])
-    plt.close(fig)
-
-def plot_velocity_model(
-    x: np.ndarray,
-    c: np.ndarray,
-    layer_starts: np.ndarray,
-    pzt_layer_width: float,
-    pmma_layer_width: float,
-    outfile_path: str = None,
-    settings = default_settings
-) -> None:
-    """
-    Plot the velocity model with layers and smoothing.
-
-    Args:
-        x (np.ndarray): Spatial axis.
-        c (np.ndarray): Velocity model array.
-        layer_starts (np.ndarray): Cumulative positions along the sample.
-        pzt_layer_width (float): Width of the PZT layer.
-        pmma_layer_width (float): Width of the PMMA layer.
-        outfile_path (str, optional): Path to save the plot. Defaults to None.
-        settings (dict, optional): Plot settings. Defaults to default_settings.
-
-    Returns:
-        None
-    """
-    fig, ax = plt.subplots(figsize=settings['figure_size'])
-    ax.plot(x, c, label='Velocity Model', color='black', linewidth=settings['line_width'])
-
-    layers = [
-        {'name': 'PMMA Layer 1', 'start': layer_starts[0], 'end': layer_starts[1], 'color': settings['colors']['platinum']},
-        {'name': 'PZT Layer 1', 'start': layer_starts[1], 'end': layer_starts[2], 'color': settings['colors']['indianred']},
-        {'name': 'Side Block 1', 'start': layer_starts[2], 'end': layer_starts[3], 'color': settings['colors']['lightsteelblue']},
-        {'name': 'Groove SB1', 'start': layer_starts[3], 'end': layer_starts[4], 'color': settings['colors']['lightgrey']},
-        {'name': 'Gouge Layer 1', 'start': layer_starts[4], 'end': layer_starts[5], 'color': settings['colors']['sandybrown']},
-        {'name': 'Groove CB1', 'start': layer_starts[5], 'end': layer_starts[6], 'color': settings['colors']['lightgrey']},
-        {'name': 'Central Block', 'start': layer_starts[6], 'end': layer_starts[7], 'color': settings['colors']['lightsteelblue']},
-        {'name': 'Groove CB2', 'start': layer_starts[7], 'end': layer_starts[8], 'color': settings['colors']['lightgrey']},
-        {'name': 'Gouge Layer 2', 'start': layer_starts[8], 'end': layer_starts[9], 'color': settings['colors']['sandybrown']},
-        {'name': 'Groove SB2', 'start': layer_starts[9], 'end': layer_starts[10], 'color': settings['colors']['lightgrey']},
-        {'name': 'Side Block 2', 'start': layer_starts[10], 'end': layer_starts[11], 'color': settings['colors']['lightsteelblue']},
-        {'name': 'PZT Layer 2', 'start': layer_starts[11], 'end': layer_starts[12], 'color': settings['colors']['indianred']},
-        {'name': 'PMMA Layer 2', 'start': layer_starts[12], 'end': layer_starts[13], 'color': settings['colors']['platinum']},
-    ]
-
-    labels_used = set()
-
-    for layer in layers:
-        label = layer['name'] if layer['name'] not in labels_used else None
-        labels_used.add(layer['name'])
-        ax.axvspan(layer['start'], layer['end'], color=layer['color'], alpha=0.3, label=label)
-
-    # Plot transmitter and receiver positions
-    transmitter_pos = pzt_layer_width + pmma_layer_width
-    receiver_pos = x[-1] - pzt_layer_width - pmma_layer_width
-    ax.axvline(transmitter_pos, color="red", linestyle='-', label='Transmitter')
-    ax.axvline(receiver_pos, color="green", linestyle='-', label='Receiver')
-
-    ax.set_title("Velocity Model with Layers and Smoothing", fontsize=settings['fontsize_title'])
-    ax.set_xlabel("Position (cm)", fontsize=settings['fontsize_labels'])
-    ax.set_ylabel("Velocity (cm/μs)", fontsize=settings['fontsize_labels'])
-    ax.grid(True)
-    ax.legend(loc='upper right', fontsize=settings['fontsize_ticks'])
-    ax.tick_params(axis='both', which='major', labelsize=settings['fontsize_ticks'])
-
-    fig.tight_layout()
-
-    output_path_choice(fig=fig, outfile_path=outfile_path, format=settings['format'])
-
-def plot_synthetic_spatial_function(
-    x: np.ndarray,
-    spatial_function: np.ndarray,
-    outfile_path: str = None,
-    settings = default_settings
-) -> None:
-    """
-    Plot the synthetic spatial function.
-
-    Args:
-        x (np.ndarray): Spatial axis.
-        spatial_function (np.ndarray): The synthetic spatial function values.
-        outfile_path (str, optional): Path to save the plot. Defaults to None.
-        settings (dict, optional): Plot settings. Defaults to default_settings.
-
-    Returns:
-        None
-    """
-    fig, ax = plt.subplots(figsize=settings['figure_size'])
-    ax.plot(x, spatial_function, linewidth=settings['line_width'])
-    ax.set_title("Synthetic Spatial Function", fontsize=settings['fontsize_title'])
-    ax.set_xlabel("Position (cm)", fontsize=settings['fontsize_labels'])
-    ax.set_ylabel("Amplitude", fontsize=settings['fontsize_labels'])
-    ax.tick_params(axis='both', which='major', labelsize=settings['fontsize_ticks'])
-    ax.grid(alpha=0.3)
-
-    fig.tight_layout()
-
-    output_path_choice(fig=fig, outfile_path=outfile_path, format=settings['format'])
-
-def plot_velocity_and_stresses(
-    x_values: np.ndarray,
-    velocities: np.ndarray,
-    normal_stress: np.ndarray,
-    shear_stress: np.ndarray,
-    x_label: str,
-    velocity_label: str,
-    stress_labels: tuple[str, str],
-    title: str,
-    outfile_path: str = None,
-    settings= default_settings
-) -> None:
-    """
-    Plot estimated velocities and two stresses vs a common x-axis variable.
-
-    Args:
-        x_values (np.ndarray): The x-axis values (e.g., ec_disp_mm or time_s).
-        velocities (np.ndarray): Estimated velocities.
-        normal_stress (np.ndarray): Normal stress values.
-        shear_stress (np.ndarray): Shear stress values.
-        x_label (str): Label for the x-axis.
-        velocity_label (str): Label for the velocity y-axis.
-        stress_labels (Tuple[str, str]): Labels for the stress y-axes.
-        title (str): Title of the plot.
-        outfile_path (str, optional): Path to save the plot. Defaults to None.
-        settings (dict, optional): Plot settings. Defaults to default_settings.
-
-    Returns:
-        None
-    """
-    fig, ax = plt.subplots(figsize=settings['figure_size'])
-
-    # Plot velocities on the left y-axis
-    color1 = 'tab:blue'
-    ax.set_xlabel(x_label, fontsize=settings['fontsize_labels'])
-    ax.set_ylabel(velocity_label, color=color1, fontsize=settings['fontsize_labels'])
-    ax.plot(x_values, velocities, color=color1, label=velocity_label, linewidth=settings['line_width'])
-    ax.tick_params(axis='y', labelcolor=color1, labelsize=settings['fontsize_ticks'])
-    ax.tick_params(axis='x', labelsize=settings['fontsize_ticks'])
-
-    # Create a second y-axis for normal stress
-    ax2 = ax.twinx()
-    color2 = 'tab:red'
-    ax2.set_ylabel(stress_labels[0], color=color2, fontsize=settings['fontsize_labels'])
-    ax2.plot(x_values, normal_stress, color=color2, linestyle='--', label=stress_labels[0], linewidth=settings['line_width'])
-    ax2.tick_params(axis='y', labelcolor=color2, labelsize=settings['fontsize_ticks'])
-
-    # Adjust the position of ax2 to make room for a third y-axis
-    ax2.spines['right'].set_position(('axes', 1.0))
-
-    # Create a third y-axis for shear stress
-    ax3 = ax.twinx()
-    color3 = 'tab:green'
-    ax3.set_ylabel(stress_labels[1], color=color3, fontsize=settings['fontsize_labels'])
-    ax3.plot(x_values, shear_stress, color=color3, linestyle='-', label=stress_labels[1], linewidth=settings['line_width'])
-    ax3.tick_params(axis='y', labelcolor=color3, labelsize=settings['fontsize_ticks'])
-
-    # Offset the third y-axis
-    ax3.spines['right'].set_position(('axes', 1.15))
-
-    # Add grid, legend, and title
-    lines, labels = ax.get_legend_handles_labels()
-    lines2, labels2 = ax2.get_legend_handles_labels()
-    lines3, labels3 = ax3.get_legend_handles_labels()
-    ax.legend(lines + lines2 + lines3, labels + labels2 + labels3, loc='upper left', fontsize=settings['fontsize_ticks'])
-
-    ax.set_title(title, fontsize=settings['fontsize_title'])
-    ax.grid(alpha=0.3)
-
-    fig.tight_layout()
-
-    output_path_choice(fig=fig, outfile_path=outfile_path, format=settings['format'])
-
-def plot_l2_norm_vs_velocity(
-    gouge_velocity: np.ndarray,
-    L2norm: np.ndarray,
-    overall_index: int,
-    outfile_path: str = None,
-    settings: dict = default_settings
-) -> None:
-    """
-    Plot and save the L2 norm vs Gouge velocity plot at specified intervals.
-
-    Args:
-        gouge_velocity (np.ndarray): Array of gouge velocity values.
-        L2norm (np.ndarray): Array of L2 norm values corresponding to the velocity.
-        overall_index (int): Index of the waveform for plot title and file name.
-        outfile_name (str): Base name for the output plot file.
-        outdir_path_image (str): Directory to save the plot file.
-        idx_waveform (int): Current waveform index for interval checking.
-        l2norm_plot_interval (int): Interval to save plots (e.g., every Nth waveform).
-        settings (dict, optional): Plot settings. Defaults to default_settings.
-
-    Returns:
-        None
-    """
-
-    fig, ax = plt.subplots(figsize=settings['figure_size'])
-    
-    # Plotting the L2 norm vs gouge velocity
-    ax.plot(gouge_velocity, L2norm, linewidth=settings['line_width'])
-    ax.set_xlabel('Gouge Velocity (cm/μs)', fontsize=settings['fontsize_labels'])
-    ax.set_ylabel('L2 Norm of Residuals', fontsize=settings['fontsize_labels'])
-    ax.set_title(f'L2 Norm vs Gouge Velocity for Waveform {overall_index}', fontsize=settings['fontsize_title'])
-    ax.tick_params(axis='both', which='major', labelsize=settings['fontsize_ticks'])
-    ax.grid(alpha=0.3)
-    
-    # Save the plot using the custom function and settings
-    output_path_choice(fig=fig, outfile_path=outfile_path, format=settings['format'])
-        
+        return picked_times
