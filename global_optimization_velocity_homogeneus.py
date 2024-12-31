@@ -109,6 +109,7 @@ def process_uw_file(infile_path, chosen_uw_file, manual_pick_arrival_time_interv
     observed_waveform_data = observed_waveform_data - np.mean(observed_waveform_data)
     initial_time_removed = 300  # number of samples
     observed_waveform_data[:, :initial_time_removed] = 0
+    
     # Frequency low-pass filter
     observed_waveform_data, _ = signal2noise_separation_lowpass(observed_waveform_data, metadata, freq_cut=frequency_cutoff)
 
@@ -627,17 +628,14 @@ if __name__ == "__main__":
     # So far it is inconsistent the naming of "wavelet", "pulse" and "source time function" for the same thing.
     machine_name_pulse = "on_bench"
     experiment_name_pulse = "glued_pzt"
-    data_type_pulse = "data_analysis" / "wavelets_from_PIS1_PIS2_glued_250ns"
+    data_type_pulse = "data_analysis/wavelets_from_PIS1_PIS2_glued_250ns"
+    infile_path_list_pulse = dir_manager.make_infile_path_list(machine_name=machine_name_pulse, experiment_name=experiment_name_pulse, data_type=data_type_pulse)
+    pulse_path = sorted(infile_path_list_pulse)[0]
 
-
-    dir_manager = DirectoryManager()
-    data_handler = UltrasonicDataHandler()
+    data_handler = UltrasonicDataHandler.make_UW_data(pulse_path)
     signal_processor = SignalProcessor()
 
-    infile_path_list_pulse = dir_manager.make_infile_path_list(machine_name=machine_name_pulse, experiment_name=experiment_name_pulse, data_type=data_type_pulse)
     
-    # Assuming only one pulse is used
-    pulse_path = sorted(infile_path_list_pulse)[0]
     pulse_waveform, pulse_metadata = data_handler.load_waveform_json(pulse_path)
     pulse_time = pulse_metadata['time_ax_waveform']
     pulse_waveform, _ = signal_processor.signal2noise_separation_lowpass(pulse_waveform, pulse_metadata, freq_cut=frequency_cutoff)
@@ -646,14 +644,6 @@ if __name__ == "__main__":
     dt_pulse = pulse_time[1] - pulse_time[0]
     pulse_duration = pulse_time[-1] - pulse_time[0]
     
-    import matplotlib.pyplot as plt
-    import sys
-
-    plt.plot(pulse_time, pulse_waveform)
-    # pulse_waveform, pulse_time, pulse_duration = load_and_process_pulse_waveform(frequency_cutoff)
-
-    sys.exit("Fixing pulse choice")
-
     ## LOAD MECHANICAL DATA
     infile_path_list_mech = dir_manager.make_infile_path_list(machine_name, experiment_name, data_type=data_type_mech)
     for infile_path in infile_path_list_mech:

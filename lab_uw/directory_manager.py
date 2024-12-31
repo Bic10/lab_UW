@@ -25,6 +25,8 @@ class DirectoryManager:
         """
         Generates a list of input file paths based on the machine name, experiment name, and data type.
         """
+        data_type = Path(data_type)
+        
         indir_path = self.base_dir / f"experiments_{machine_name}" / experiment_name / data_type
 
         if not indir_path.exists():

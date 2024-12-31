@@ -40,7 +40,7 @@ class Plotter:
         'fontsize_title': FONT_SIZE,
         'fontsize_labels': int(0.7 * FONT_SIZE),
         'fontsize_ticks': int(0.7 * FONT_SIZE),
-        'line_width': 4.0,
+        'line_width': 1.0,
         'figure_size': FIGURE_SIZE,
         'format': FORMAT,
     }
@@ -173,24 +173,27 @@ class Plotter:
                 raise KeyError(f"Missing '{key}' in metadata.")
 
         time_ax_waveform = metadata['time_ax_waveform']
-        sampling_rate = metadata['sampling_rate']
-        number_of_samples = metadata['number_of_samples']
-        acquisition_frequency = metadata['acquisition_frequency']
+        first_sample_time = time_ax_waveform[0]
+        last_sample_time = time_ax_waveform[-1]
+        time_ax_acquisition = metadata['time_ax_acquisition']
+        first_waveform_time = time_ax_acquisition[0]
+        last_waveform_time = time_ax_acquisition[-1]
 
         fig, ax = plt.subplots(figsize=self.settings['figure_size'])
         cmap = plt.get_cmap('seismic')
 
-        extent = [0, data.shape[0] * acquisition_frequency, 0, number_of_samples * sampling_rate]
+        extent = [first_waveform_time, last_waveform_time, first_sample_time, last_sample_time]
 
+        amp_scale_limit = max(-np.amin(data),np.amax(data))
         im = ax.imshow(data.T, aspect='auto', origin='lower', interpolation='none',
-                       cmap=cmap, vmin=np.amin(data), vmax=np.amax(data), extent=extent)
+                       cmap=cmap, vmin=-amp_scale_limit, vmax=amp_scale_limit, extent=extent)
 
         cbar = fig.colorbar(im, pad=0.04)
         cbar.set_label("Relative Amplitude", fontsize=self.settings['fontsize_labels'])
 
         ax.set_title("Amplitude Map", fontsize=self.settings['fontsize_title'], fontname=self.FONT_TYPE)
-        ax.set_xlabel('Time [s]', fontsize=self.settings['fontsize_labels'])
-        ax.set_ylabel('Waveform Time [$\\mu s$]', fontsize=self.settings['fontsize_labels'])
+        ax.set_xlabel('Experiment Time [s]', fontsize=self.settings['fontsize_labels'])
+        ax.set_ylabel('Waveform Travel Time [$\\mu s$]', fontsize=self.settings['fontsize_labels'])
         ax.tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
 
         fig.tight_layout()
@@ -198,77 +201,77 @@ class Plotter:
         self.output_path_choice(fig=fig, outfile_path=outfile_path)
 
 
-    # def amplitude_spectrum_map(
-    #     self,
-    #     signal_freqs: np.ndarray,
-    #     amp_spectrum: np.ndarray,
-    #     metadata: Dict,
-    #     freq_cut: float,
-    #     outfile_path: Optional[str] = None
-    # ) -> None:
-    #     """
-    #     Plots an amplitude spectrum map of waveform data.
-
-    #     Parameters
-    #     ----------
-    #     signal_freqs : np.ndarray
-    #         Frequencies of the signal (size n_samples).
-    #     amp_spectrum : np.ndarray
-    #         Amplitude spectrum of shape (n_waveforms, n_samples).
-    #     metadata : dict
-    #         Metadata dictionary containing 'time_ax_acquisition'.
-    #     freq_cut : float
-    #         Maximum frequency to display on the y-axis (in MHz).
-    #     outfile_path : str, optional
-    #         Path to save the plot.
-        
-    #     Raises
-    #     ------
-    #     KeyError
-    #         If 'time_ax_acquisition' is missing in metadata.
-    #     ValueError
-    #         If dimensions of amp_spectrum and signal_freqs do not match or if amp_spectrum is not 2D.
-    #     """
-    #     if 'time_ax_acquisition' not in metadata:
-    #         raise KeyError("metadata must contain 'time_ax_acquisition'.")
-
-    #     if amp_spectrum.ndim != 2:
-    #         raise ValueError("amp_spectrum must be a 2D numpy array.")
-
-    #     time_ax_acquisition = metadata['time_ax_acquisition']
-    #     wave_num, wave_len = amp_spectrum.shape
-
-    #     # Only plot half of the spectrum if it's symmetrical (e.g., for real signals)
-    #     spectrum_length = wave_len // 2
-    #     signal_freqs = signal_freqs[:spectrum_length]
-    #     amp_spectrum = amp_spectrum[:, :spectrum_length]
-
-    #     fig, ax = plt.subplots(figsize=self.settings['figure_size'])
-
-    #     # Using LogNorm to highlight wide dynamic range
-    #     pcm = ax.pcolormesh(
-    #         time_ax_acquisition,
-    #         signal_freqs,
-    #         amp_spectrum.T,
-    #         cmap="plasma",
-    #         norm=mcolors.LogNorm(vmin=1e-3, vmax=amp_spectrum.max())
-    #     )
-    #     ax.set_ylim([0, freq_cut])
-    #     ax.set_title('Amplitude Spectrum Map', fontsize=self.settings['fontsize_title'], fontname=self.FONT_TYPE)
-    #     ax.set_xlabel("Time [s]", fontsize=self.settings['fontsize_labels'])
-    #     ax.set_ylabel("Frequency [MHz]", fontsize=self.settings['fontsize_labels'])
-    #     ax.tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
-
-    #     cbar = fig.colorbar(pcm, pad=0.04)
-    #     cbar.set_label("Spectral Amplitude", fontsize=self.settings['fontsize_labels'])
-
-    #     fig.tight_layout()
-
-    #     # Use your existing output path choice method
-    #     self.output_path_choice(fig=fig, outfile_path=outfile_path)
-
-
     def amplitude_spectrum_map(
+        self,
+        signal_freqs: np.ndarray,
+        amp_spectrum: np.ndarray,
+        metadata: Dict,
+        freq_cut: float,
+        outfile_path: Optional[str] = None
+    ) -> None:
+        """
+        Plots an amplitude spectrum map of waveform data.
+
+        Parameters
+        ----------
+        signal_freqs : np.ndarray
+            Frequencies of the signal (size n_samples).
+        amp_spectrum : np.ndarray
+            Amplitude spectrum of shape (n_waveforms, n_samples).
+        metadata : dict
+            Metadata dictionary containing 'time_ax_acquisition'.
+        freq_cut : float
+            Maximum frequency to display on the y-axis (in MHz).
+        outfile_path : str, optional
+            Path to save the plot.
+        
+        Raises
+        ------
+        KeyError
+            If 'time_ax_acquisition' is missing in metadata.
+        ValueError
+            If dimensions of amp_spectrum and signal_freqs do not match or if amp_spectrum is not 2D.
+        """
+        if 'time_ax_acquisition' not in metadata:
+            raise KeyError("metadata must contain 'time_ax_acquisition'.")
+
+        if amp_spectrum.ndim != 2:
+            raise ValueError("amp_spectrum must be a 2D numpy array.")
+
+        time_ax_acquisition = metadata['time_ax_acquisition']
+        wave_num, wave_len = amp_spectrum.shape
+
+        # Only plot half of the spectrum if it's symmetrical (e.g., for real signals)
+        spectrum_length = wave_len // 2
+        signal_freqs = signal_freqs[:spectrum_length]
+        amp_spectrum = amp_spectrum[:, :spectrum_length]
+
+        fig, ax = plt.subplots(figsize=self.settings['figure_size'])
+
+        # Using LogNorm to highlight wide dynamic range
+        pcm = ax.pcolormesh(
+            time_ax_acquisition,
+            signal_freqs,
+            amp_spectrum.T,
+            cmap="plasma",
+            norm=mcolors.LogNorm(vmin=1e-3, vmax=amp_spectrum.max())
+        )
+        ax.set_ylim([0, freq_cut])
+        ax.set_title('Amplitude Spectrum Map', fontsize=self.settings['fontsize_title'], fontname=self.FONT_TYPE)
+        ax.set_xlabel("Time [s]", fontsize=self.settings['fontsize_labels'])
+        ax.set_ylabel("Frequency [MHz]", fontsize=self.settings['fontsize_labels'])
+        ax.tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
+
+        cbar = fig.colorbar(pcm, pad=0.04)
+        cbar.set_label("Spectral Amplitude", fontsize=self.settings['fontsize_labels'])
+
+        fig.tight_layout()
+
+        # Use your existing output path choice method
+        self.output_path_choice(fig=fig, outfile_path=outfile_path)
+
+
+    def amplitude_spectrum_distribution(
         self,
         signal_freqs: np.ndarray,
         amp_spectrum: np.ndarray,
@@ -349,6 +352,7 @@ class Plotter:
 
         # Build 2D histogram
         # You can tune bins here for freq and amplitude scale
+        # Implement fridman-diaconis should be more robust
         num_freq_bins = 200
         num_amp_bins = 200
 

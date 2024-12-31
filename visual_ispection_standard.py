@@ -1,16 +1,19 @@
 import time as tm
 
+import scipy.signal
+
 from lab_uw.data_io import UltrasonicDataHandler
 from lab_uw.directory_manager import DirectoryManager
 from lab_uw.signal_processing import SignalProcessor
 from lab_uw.plotting import Plotter
 import numpy as np
 import scipy
+import matplotlib.pyplot as plt
 
 ###### INPUT #######
-machine_name = "Brava_2"
-experiment_name = "s0216suw04anh_50"
-data_type = "data_tsv_files"
+machine_name = "on_bench"
+experiment_name = "STF"
+data_type = "uw_data/data_tsv_files"
 base_dir = "/home/michele/Desktop/Dottorato/active_source_implementation"
 
 ### The plots we want to see for a quick inspection of the experiment ###
@@ -21,12 +24,12 @@ image_types = (
     "example_of_filtered_spectrum",
     "example_of_filtered_waveform",
 )
-remove_initial_samples = 200  # number of samples to be removed at the beginning, to get rid of the noise burst.
+remove_initial_samples = 0  # number of samples to be removed at the beginning, to get rid of the noise burst.
 highlight_start = 0
 highlight_end = 0
-xlim_plot = 50
-ticks_steps_waveforms = 2  # [microseconds] plot ticks
-step_wf_to_plot = 500  # get one waveform each step_wf_to_plot
+xlim_plot = 100
+ticks_steps_waveforms = 5  # [microseconds] plot ticks
+step_wf_to_plot = 1  # get one waveform each step_wf_to_plot
 freq_cut = 6  # [Hz] lowpass frequency threshold
 
 # Create instances of Plotter, DataHandler, and DirectoryManager
@@ -46,9 +49,32 @@ for infile_path in sorted(infile_path_list):
         data_handler = UltrasonicDataHandler.make_UW_data(infile_path)
         data, metadata = data_handler.waveform_data, data_handler.metadata
         data, metadata = signal_processor.remove_starting_noise(data, metadata, remove_initial_samples)
-        data = data - np.mean(data)
-        # data = scipy.signal.detrend(data, axis=-1)
+
+        ## Detrend data. Detrending along acquisition time axis (axis=0) highligh changing in the shape of the waveform during the experiment
+        data= scipy.signal.detrend(data=data, axis=-1)
+        # data = scipy.signal.detrend(data=data, axis=0, type='constant')
+        # data = scipy.signal.detrend(data=data, axis=0, type='linear')
         
+        # Detrend and taper (following McNamara's approach)
+        taper_percent = 0.1  # 10% taper
+        window_scipy = scipy.signal.windows.tukey(metadata['number_of_samples'], alpha=2*taper_percent)
+        data = data * window_scipy
+
+        # if infile_path.name == "width500_volt280_20dB_long_acquisition_p2p.bscan.tsv":
+        #     import matplotlib.colors as mcolors
+        #     fig, ax = plt.subplots()
+        #     f, t, Sxx = scipy.signal.spectrogram(x=data[0,:], nperseg=100, fs=25e6, noverlap=90, scaling="spectrum")
+        #     Sxx = Sxx/np.amax(Sxx)
+        #     pcm = ax.pcolormesh(t, f, Sxx, shading='gouraud', norm=mcolors.LogNorm())
+        #     ax.set_ylim([0, 6e6])
+        #     # ax.set_xlim([100e-6,200e-6])
+        #     cbar = fig.colorbar(pcm, pad=0.04)
+        #     plt.ylabel('Frequency [Hz]')
+        #     plt.xlabel('Time [sec]')
+        #     plt.show()
+        # else:
+        #     continue
+
         # Prepare output file paths
         outfile_name = infile_path
         while outfile_name.suffix:

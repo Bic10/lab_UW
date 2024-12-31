@@ -171,7 +171,7 @@ class SignalProcessor:
         # Apply the mask to the FFT of the data
         fft_data = np.fft.fft(waveform_data, axis=1)
         filtered_fft = fft_data * lowpass_filter
-        
+
         # Inverse FFT to get the filtered signal
         filtered_signal = np.fft.ifft(filtered_fft, axis=1).real
 
@@ -204,6 +204,12 @@ class SignalProcessor:
                                             metadata=metadata,
                                             freq_cut = freq_cut,
                                             outfile_path=outfile_path)
+                
+                plotter.amplitude_spectrum_distribution(signal_freqs=freqs,
+                                            amp_spectrum=filtered_amp_spectrum,
+                                            metadata=metadata,
+                                            freq_cut = freq_cut,
+                                            outfile_path=outfile_path + "_distribution")
 
         return filtered_signal, noise
 
