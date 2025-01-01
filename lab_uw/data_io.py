@@ -17,7 +17,7 @@ class UltrasonicDataHandler:
     """
     Handles ultrasonic data operations such as reading, processing, and saving waveform data.
     """
-    def __init__(self, waveform_data: np.ndarray, metadata: dict):
+    def __init__(self, waveform_data: np.ndarray= np.array([]), metadata: dict={}):
         """
         Initializes the UltrasonicDataHandler.
 
@@ -283,3 +283,67 @@ class DataCouplingHandler:
 
         logger.info("Data successfully aligned using synchronization peaks.")
         return ultrasonic_data, ultrasonic_time_aligned, mechanical_data
+
+class BlockMetadataHandler:
+    """
+    Loads geometry and velocity metadata for blocks (side blocks, central block, etc.)
+    from a JSON file (e.g., blocks_metadata.json).
+    """
+
+    def __init__(self, metadata_dict: dict):
+        """
+        Initialize the BlockMetadataHandler with a dictionary of block metadata.
+
+        Parameters
+        ----------
+        metadata_dict : dict
+            Dictionary loaded from JSON, containing multiple block entries
+            (e.g., 'central_block1', 'mauro_side1', etc.).
+        """
+        self._metadata_dict = metadata_dict
+
+    @classmethod
+    def from_json(cls, config_path: Path) -> "BlockMetadataHandler":
+        """
+        Create a BlockMetadataHandler instance by loading from a JSON file.
+
+        Parameters
+        ----------
+        config_path : Path
+            Path to the blocks_metadata.json file.
+
+        Returns
+        -------
+        BlockMetadataHandler
+            A handler instance containing all blocks' metadata.
+        """
+        try:
+            with config_path.open("r") as f:
+                raw_data = json.load(f)
+            return cls(raw_data)
+        except (json.JSONDecodeError, FileNotFoundError) as e:
+            logger.error(f"Failed to load block metadata from {config_path}: {e}")
+            raise
+
+    def get_block_params(self, block_key: str) -> dict:
+        """
+        Retrieve parameters for a specific block (e.g., 'mauro_side1').
+
+        Parameters
+        ----------
+        block_key : str
+            Key identifying the block in the loaded dictionary (e.g., 'pignalberi_side1').
+
+        Returns
+        -------
+        dict
+            Dictionary of parameters for that block.
+
+        Raises
+        ------
+        KeyError
+            If the specified block_key is not found.
+        """
+        if block_key not in self._metadata_dict:
+            raise KeyError(f"Block '{block_key}' not found in metadata.")
+        return self._metadata_dict[block_key]

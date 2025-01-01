@@ -3,8 +3,9 @@
 # Libraries
 from pathlib import Path
 import pickle
+import pandas as pd
 
-from lab_uw.data_io import UltrasonicDataHandler, MechanicalDataHandler
+from lab_uw.data_io import UltrasonicDataHandler, MechanicalDataHandler, BlockMetadataHandler
 from lab_uw.directory_manager import DirectoryManager
 from lab_uw.signal_processing import SignalProcessor
 from lab_uw.simulation_setup import *
@@ -12,6 +13,188 @@ from lab_uw.forward_modeling import *
 from lab_uw.plotting import InteractivePlotter
 
 # Function Definitions
+def load_blocks_metadata(
+    dir_manager: DirectoryManager,
+    blocks_metadata_name: str,
+    side1_key: str,
+    side2_key: str,
+    central_key: str
+) -> Tuple[dict, dict, dict]:
+    """
+    Loads blocks_metadata.json and retrieves parameters for side1, side2, and central blocks.
+
+    Parameters
+    ----------
+    dir_manager : DirectoryManager
+        Directory manager for building paths.
+    blocks_metadata_name : str
+        Name of the blocks metadata JSON file (e.g. "blocks_metadata.json").
+    side1_key : str
+        Key in the JSON for the first side block (e.g. "mauro_side1").
+    side2_key : str
+        Key in the JSON for the second side block (e.g. "mauro_side2").
+    central_key : str
+        Key in the JSON for the central block (e.g. "central_block1").
+
+    Returns
+    -------
+    Tuple[dict, dict, dict]
+        A tuple of dictionaries: (side1_params, side2_params, central_params),
+        each containing geometry and velocity information for the block.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the specified JSON file is not found.
+    KeyError
+        If any of the specified keys are missing from the metadata.
+    """
+    # Build full path to metadata JSON
+    blocks_metadata_path = dir_manager.base_dir / "metadata" / blocks_metadata_name
+
+    # Create handler from JSON
+    block_handler = BlockMetadataHandler.from_json(blocks_metadata_path)
+
+    # Retrieve block parameters
+    side1_params = block_handler.get_block_params(side1_key)
+    side2_params = block_handler.get_block_params(side2_key)
+    central_params = block_handler.get_block_params(central_key)
+
+    return side1_params, side2_params, central_params
+
+def load_and_process_stf(
+    dir_manager: DirectoryManager,
+    machine_name_stf: str,
+    experiment_name_stf: str,
+    data_type_stf: str,
+    stf_choosen: str,
+    frequency_cutoff: float
+) -> Tuple[np.ndarray, np.ndarray, float]:
+    """
+    Loads and processes a source time function (stf) from a file.
+
+    Parameters
+    ----------
+    dir_manager : DirectoryManager
+        DirectoryManager to locate the stf file path.
+    machine_name_stf : str
+        Machine name used for acquiring the stf.
+    experiment_name_stf : str
+        Experiment name for the stf data.
+    data_type_stf : str
+        Subfolder name indicating where stf data is stored.
+    stf_choosen : str
+        Stem of the stf file (without extension) to be loaded.
+    frequency_cutoff : float
+        Frequency cutoff in MHz for lowpass filtering of the stf.
+
+    Returns
+    -------
+    Tuple[np.ndarray, np.ndarray, float]
+        (stf_waveform, stf_time, stf_duration)
+        stf_waveform : Filtered stf waveform, zeroed at start.
+        stf_time : Corresponding time axis of the waveform.
+        stf_duration : Duration of the stf (stf_time[-1] - stf_time[0]).
+
+    Raises
+    ------
+    FileNotFoundError
+        If no stf file matching stf_choosen is found.
+    """
+    # Locate the stf file
+    infile_path_stf_list = dir_manager.make_infile_path_list(
+        machine_name=machine_name_stf,
+        experiment_name=experiment_name_stf,
+        data_type=data_type_stf
+    )
+
+    chosen_stf_path = None
+    for infile_stf in infile_path_stf_list:
+        if infile_stf.stem == stf_choosen:
+            chosen_stf_path = infile_stf
+            break
+    if chosen_stf_path is None:
+        raise FileNotFoundError(
+            f"No stf file named '{stf_choosen}' found in {data_type_stf} "
+            f"for experiment '{experiment_name_stf}'."
+        )
+
+    # Load stf data (JSON or TSV) using UltrasonicDataHandler
+    stf_handler = UltrasonicDataHandler()
+    stf_waveform_raw, stf_metadata = stf_handler.load_waveform_json(chosen_stf_path)
+
+    stf_time = stf_metadata["time_ax_waveform"]
+    signal_processor = SignalProcessor()
+
+    # Apply lowpass filter
+    stf_waveform_filt, _ = signal_processor.signal2noise_separation_lowpass(
+        waveform_data=stf_waveform_raw,
+        metadata=stf_metadata,
+        freq_cut=frequency_cutoff
+    )
+
+    # Shift waveform to start at zero amplitude
+    stf_waveform = stf_waveform_filt - stf_waveform_filt[0]
+    stf_duration = stf_time[-1] - stf_time[0]
+
+    return stf_waveform, stf_time, stf_duration
+
+
+def load_mechanical_data(
+    dir_manager: DirectoryManager,
+    machine_name: str,
+    experiment_name: str,
+    data_type_mech: str,
+    mech_file_name: str
+) -> Tuple[pd.DataFrame, Optional[np.ndarray], Optional[np.ndarray]]:
+    """
+    Locates and loads mechanical data, returning the DataFrame plus sync_data and sync_peaks.
+
+    Parameters
+    ----------
+    dir_manager : DirectoryManager
+        DirectoryManager instance for building file paths.
+    machine_name : str
+        Machine name used for mechanical data experiment.
+    experiment_name : str
+        Experiment name for mechanical data.
+    data_type_mech : str
+        Subfolder or data type under which mechanical data is stored.
+    mech_file_name : str
+        File name (including extension) for the mechanical data file.
+
+    Returns
+    -------
+    Tuple[pd.DataFrame, Optional[np.ndarray], Optional[np.ndarray]]
+        - mech_data : The loaded mechanical DataFrame.
+        - sync_data : Array of synchronization data, or None if not found.
+        - sync_peaks : Indices of synchronization peaks, or None if not found.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the file named mech_file_name is not found among mechanical data files.
+    """
+    infile_path_list_mech = dir_manager.make_infile_path_list(
+        machine_name, experiment_name, data_type=data_type_mech
+    )
+    mech_data_path = None
+    for infile_path in infile_path_list_mech:
+        if infile_path.name == mech_file_name:
+            mech_data_path = infile_path
+            break
+    if mech_data_path is None:
+        raise FileNotFoundError(f"{mech_file_name} not found in mechanical data.")
+
+    # Create a MechanicalDataHandler from the CSV file
+    mech_handler = MechanicalDataHandler.make_mechanical_data(mech_data_path)
+    mech_data = mech_handler.mech_data
+
+    # Attempt to find synchronization data
+    sync_data, sync_peaks = mech_handler.find_sync_values()
+
+    return mech_data, sync_data, sync_peaks
+
 def prepare_manual_pick_arrival_times(
     dir_manager, machine_name, experiment_name, infile_path_list_uw, start_sample=300
 ):
@@ -59,7 +242,7 @@ def prepare_manual_pick_arrival_times(
 
     return manual_pick_arrival_time_interval_list
 
-def process_uw_file(infile_path, chosen_uw_file, manual_pick_arrival_time_interval,sync_peaks, mech_data, pulse_waveform, pulse_time, pulse_duration, frequency_cutoff, outdir_path_l2norm, params):
+def process_uw_file(infile_path, chosen_uw_file, manual_pick_arrival_time_interval,sync_peaks, mech_data, stf_waveform, stf_time, stf_duration, frequency_cutoff, outdir_path_l2norm, params):
     """
     Process a single UW data file.
     """
@@ -188,9 +371,9 @@ def process_uw_file(infile_path, chosen_uw_file, manual_pick_arrival_time_interv
             thickness_gouge_2=thickness_gouge_2,
             normal_stress=normal_stress,
             shear_stress=shear_stress,
-            pulse_waveform=pulse_waveform,
-            pulse_time=pulse_time,
-            pulse_duration=pulse_duration,
+            stf_waveform=stf_waveform,
+            stf_time=stf_time,
+            stf_duration=stf_duration,
             assembly_travel_time=assembly_travel_time,
             c_step=c_step,
             c_range=c_range,
@@ -263,9 +446,9 @@ def process_waveform(
                      thickness_gouge_2, 
                      normal_stress, 
                      shear_stress, 
-                     pulse_waveform, 
-                     pulse_time, 
-                     pulse_duration, 
+                     stf_waveform, 
+                     stf_time, 
+                     stf_duration, 
                      assembly_travel_time, 
                      c_step, 
                      c_range, 
@@ -337,7 +520,7 @@ def process_waveform(
         # Define evaluation interval for L2 norm of the residuals
         max_travel_time = assembly_travel_time + thickness_gouge_1 / cmin_waveform + thickness_gouge_2 / cmin_waveform + 2 * (2 * h_groove_side + 2 * h_groove_central) / (steel_velocity + cmin_waveform)
         min_travel_time = assembly_travel_time + thickness_gouge_1 / cmax_waveform + thickness_gouge_2 / cmax_waveform + 2 * (2 * h_groove_side + 2 * h_groove_central) / (steel_velocity + cmax_waveform)
-        misfit_interval = np.where((observed_time > min_travel_time) & (observed_time < max_travel_time + pulse_duration))
+        misfit_interval = np.where((observed_time > min_travel_time) & (observed_time < max_travel_time + stf_duration))
 
         sure_noise_interval = np.where(observed_time < min_travel_time)
         good_data_interval = np.where(observed_time > min_travel_time)
@@ -367,7 +550,7 @@ def process_waveform(
         # Define evaluation interval for L2 norm of the residuals
         max_travel_time = assembly_travel_time + thickness_gouge_1 / cmin_waveform + thickness_gouge_2 / cmin_waveform + 2 * (2 * h_groove_side + 2 * h_groove_central) / (steel_velocity + cmin_waveform)
         min_travel_time = assembly_travel_time + thickness_gouge_1 / cmax_waveform + thickness_gouge_2 / cmax_waveform + 2 * (2 * h_groove_side + 2 * h_groove_central) / (steel_velocity + cmax_waveform)
-        misfit_interval = np.where((observed_time > min_travel_time) & (observed_time < max_travel_time + pulse_duration))
+        misfit_interval = np.where((observed_time > min_travel_time) & (observed_time < max_travel_time + stf_duration))
 
     # Create velocity list for this waveform
     gouge_velocity_list_waveform = np.arange(cmin_waveform, cmax_waveform, c_step_waveform)
@@ -385,8 +568,8 @@ def process_waveform(
             thickness_gouge_2,
             misfit_interval,
             observed_time,
-            pulse_time,
-            pulse_waveform,
+            stf_time,
+            stf_waveform,
             transmitter_position,
             params
         )
@@ -438,8 +621,8 @@ def process_waveform(
     synthetic_waveform, _, _ = DDS_UW_simulation(
         observed_time=observed_time,
         observed_waveform=observed_waveform,
-        pulse_time=pulse_time,
-        pulse_waveform=pulse_waveform,
+        stf_time=stf_time,
+        stf_waveform=stf_waveform,
         sample_dimensions=sample_dimensions,
         h_groove_side=h_groove_side,
         h_groove_central=h_groove_central,            
@@ -492,8 +675,8 @@ def process_velocity(args):
         thickness_gouge_2,
         misfit_interval,
         observed_time,
-        pulse_time,
-        pulse_waveform,
+        stf_time,
+        stf_waveform,
         transmitter_position,
         params
     ) = args
@@ -519,8 +702,8 @@ def process_velocity(args):
     synthetic_waveform, _, _ = DDS_UW_simulation(
         observed_time=observed_time,
         observed_waveform=observed_waveform,
-        pulse_time=pulse_time,
-        pulse_waveform=pulse_waveform,
+        stf_time=stf_time,
+        stf_waveform=stf_waveform,
         sample_dimensions=sample_dimensions,
         h_groove_side=h_groove_side,
         h_groove_central=h_groove_central,
@@ -554,114 +737,83 @@ def process_velocity(args):
 # Main Execution
 
 if __name__ == "__main__":
-    # General Parameters and Constants
-    frequency_cutoff = 2  # [MHz] maximum frequency of the data we want to reproduce
-    minimum_SNR = 5       # the minimum signal-to-noise ratio accepted to start computation
 
-    # Constants throughout the entire experiment
-    # # These are the dimensions for Pignalberi side blocks 1 and 2
-    # side_block_1 = 2.93                 # [cm] width of first side block, with grooves
-    # side_block_2 = 2.93                 # [cm] width of second side block with grooves
-    # h_groove_side = 0.059               # [cm] height of side block grooves
-    # pzt_layer_width = 0.1               # [cm] piezoelectric transducer width
-    # pmma_layer_width = 0.0              # [cm] PMMA supporting the PZT (not present in this case)
-    # steel_velocity = 3374 * (1e2 / 1e6) # [cm/μs] steel shear wave velocity
-    # pzt_velocity = 2000 * (1e2 / 1e6)   # [cm/μs] PZT shear wave velocity
-    # pmma_velocity = 1590 * (1e2 / 1e6)  # [cm/μs] PMMA velocity
-    # pzt2grove = 1.71  # [cm] distance between the PZT and the top of the grooves
-    # pzt_depth = side_block_1 - pzt2grove  # [cm] Position of the PZT with respect to the external side of the block
-    # transmitter_position = pzt_depth  # [cm] Position of the transmitter from the beginning of the sample
+    # 1) Initialize directory manager
+    dir_manager = DirectoryManager()
 
-    # This is one of the central block
-    central_block = 4.88                # [cm] width of central block, with grooves
-    h_groove_central = 0.096            # [cm] height of central block grooves
+    # 2) Load block metadata
+    side1_params, side2_params, central_params = load_blocks_metadata(
+        dir_manager=dir_manager,
+        blocks_metadata_name="blocks_metadata.json",
+        side1_key="mauro_side1",
+        side2_key="mauro_side2",
+        central_key="central_block1"
+    )
 
-    # These are the dimensions of Mauro side blocks 1 and 2
-    side_block_1 = 2                 # [cm] width of first side block, with grooves
-    side_block_2 = 2                 # [cm] width of second side block with grooves
-    h_groove_side = 0.059               # [cm] height of side block grooves
-    pzt_layer_width = 0.1               # [cm] piezoelectric transducer width
-    pmma_layer_width = 0.1              # [cm] PMMA supporting the PZT (not present in this case)
-    steel_velocity = 3374 * (1e2 / 1e6) # [cm/μs] steel shear wave velocity
-    pzt_velocity = 2000 * (1e2 / 1e6)   # [cm/μs] PZT shear wave velocity
-    pmma_velocity = 1590 * (1e2 / 1e6)  # [cm/μs] PMMA velocity
-    pzt2grove = 1  # [cm] distance between the PZT and the top of the grooves
-    pzt_depth = side_block_1 - pzt2grove  # [cm] Position of the PZT with respect to the external side of the block
-    transmitter_position = pzt_depth  # [cm] Position of the transmitter from the beginning of the sample
-
-
-    # Fixed travel time through constant sample dimensions
-    assembly_travel_time = (2 * (side_block_1 - transmitter_position) + central_block -
-                         2 * h_groove_side - 2 * h_groove_central) / steel_velocity  # travel time of direct wave into the blocks
-
-
-    # GET OBSERVED DATA
-
-    # DATA FOLDERS INPUT
+    # 3) Basic experiment info
     machine_name = "Brava_2"
     experiment_name = "s0108sw06car102030"
-    data_type_uw = 'uw_data'
-    data_type_mech = 'mechanical_data'
-    mech_file_name = f'{experiment_name}_data_rp'  # Pattern to find specific experiment in mechanical data
+    data_type_uw = "uw_data"
+    data_type_mech = "mechanical_data"
+    mech_file_name = f"{experiment_name}_data_rp"
 
-    # Initialize DirectoryManager and Data Handlers
-    dir_manager = DirectoryManager()
-    
-    # Create output directories
+    # 4) Create output directories
     outdir_path_l2norm = dir_manager.make_data_analysis_folders(
         machine_name=machine_name,
         experiment_name=experiment_name,
         data_types=["global_optimization_velocity"]
     )
-
-    print(f"The misfits calculated will be saved at path:\n\t {outdir_path_l2norm[0]}")
-
     outdir_path_image = dir_manager.make_data_analysis_folders(
         machine_name=machine_name,
         experiment_name=experiment_name,
         data_types=["global_optimization_velocity_images_and_movie"]
     )
+    print(f"The misfits calculated will be saved at path:\n\t {outdir_path_l2norm[0]}")
 
-    ## LOAD SORUCE TIME FUNCTIONS
-    # Load and process the pulse waveform to be used as the time source function.
-    # At the moment, extracted using the notebook "identify_wavelet"
-    # So far it is inconsistent the naming of "wavelet", "pulse" and "source time function" for the same thing.
-    machine_name_pulse = "on_bench"
-    experiment_name_pulse = "glued_pzt"
-    data_type_pulse = "data_analysis/wavelets_from_PIS1_PIS2_glued_250ns"
-    infile_path_list_pulse = dir_manager.make_infile_path_list(machine_name=machine_name_pulse, experiment_name=experiment_name_pulse, data_type=data_type_pulse)
-    pulse_path = sorted(infile_path_list_pulse)[0]
+    # 5) Load the source time function
+    stf_waveform, stf_time, stf_duration = load_and_process_stf(
+        dir_manager=dir_manager,
+        machine_name_stf="on_bench",
+        experiment_name_stf="glued_pzt",
+        data_type_stf="data_analysis/wavelets",
+        stf_choosen="PIS1_PIS2_glued_250ns_wavelet_number_1",
+        frequency_cutoff=2  # Example cutoff
+    )
 
-    data_handler = UltrasonicDataHandler.make_UW_data(pulse_path)
-    signal_processor = SignalProcessor()
+    # 6) Load mechanical data
+    mech_data, sync_data, sync_peaks = load_mechanical_data(
+        dir_manager=dir_manager,
+        machine_name=machine_name,
+        experiment_name=experiment_name,
+        data_type_mech=data_type_mech,
+        mech_file_name=mech_file_name
+    )
 
-    
-    pulse_waveform, pulse_metadata = data_handler.load_waveform_json(pulse_path)
-    pulse_time = pulse_metadata['time_ax_waveform']
-    pulse_waveform, _ = signal_processor.signal2noise_separation_lowpass(pulse_waveform, pulse_metadata, freq_cut=frequency_cutoff)
-    pulse_waveform = (pulse_waveform - pulse_waveform[0])  # Make the pulse start from zero
-    
-    dt_pulse = pulse_time[1] - pulse_time[0]
-    pulse_duration = pulse_time[-1] - pulse_time[0]
-    
-    ## LOAD MECHANICAL DATA
-    infile_path_list_mech = dir_manager.make_infile_path_list(machine_name, experiment_name, data_type=data_type_mech)
-    for infile_path in infile_path_list_mech:
-        if infile_path.name == mech_file_name:
-            mech_data_path = infile_path
+    # 7) Build or compute all needed geometry info / velocity from side1_params, side2_params, central_params
+    side_block_1 = side1_params["z"]
+    side_block_2 = side2_params["z"]
+    central_block = central_params["z"]
+    h_groove_side = side1_params["h_grooves"]
+    h_groove_central = central_params["h_grooves"]
+    steel_velocity = side1_params["steel_velocity"]  # Already cm/μs?
 
-    mech_handler = MechanicalDataHandler.make_mechanical_data(mech_data_path)
-    mech_data = mech_handler.mech_data
-    # Find synchronization values, at least in case it is one of the column of the reduced file, at the moment
-    # Evaluate if integrate reduction script here or moving directly toward the use of Rock_Mechanics_Lab_Database
-    sync_data, sync_peaks = mech_handler.find_sync_values()
+    pzt2grove = side1_params["z_pzt2grove"]
+    pzt_depth = side_block_1 - pzt2grove
+    transmitter_position = pzt_depth
 
-    # MAKE UW PATH LIST 
-    infile_path_list_uw = sorted(dir_manager.make_infile_path_list(machine_name, experiment_name, data_type=data_type_uw))
+    # 8) fixed travel time (example)
+    assembly_travel_time = (
+        2 * (side_block_1 - transmitter_position)
+        + central_block
+        - 2*h_groove_side - 2*h_groove_central
+    ) / steel_velocity
 
+    # 9) Make UW path list
+    infile_path_list_uw = sorted(
+        dir_manager.make_infile_path_list(machine_name, experiment_name, data_type=data_type_uw)
+    )
 
-    # INITIAL VELOCITY GUESS:
-    # 1) extract it from manually picked arrival times on some of the ultrasonic waveform
+    # 10) Prepare manual pick arrival times
     manual_pick_arrival_time_interval_list = prepare_manual_pick_arrival_times(
         dir_manager=dir_manager,
         machine_name=machine_name,
@@ -669,37 +821,39 @@ if __name__ == "__main__":
         infile_path_list_uw=infile_path_list_uw
     )
 
-    # Initial guessed velocity model of the sample: literature range for gouge at atmospheric pressure
+    # 11) Build final parameter dictionary
+    frequency_cutoff = 2
+    minimum_SNR = 5
     c_step = 100 * (1e2 / 1e6)
     c_range = 100 * (1e2 / 1e6)
-    range_scaling_factor = 1  # initial c_range is c_range*range_scaling_factor
+    range_scaling_factor = 1
 
-    # Parameters dictionary to pass around
     params = {
-        'minimum_SNR': minimum_SNR,
-        'assembly_travel_time': assembly_travel_time,
-        'c_step': c_step,
-        'c_range': c_range,
-        'range_scaling_factor': range_scaling_factor,
-        'h_groove_side': h_groove_side,
-        'h_groove_central': h_groove_central,
-        'steel_velocity': steel_velocity,
-        'side_block_1': side_block_1,
-        'central_block': central_block,
-        'side_block_2': side_block_2,
-        'pzt_depth': pzt_depth,
-        'transmitter_position': transmitter_position,
-        'pzt_layer_width': pzt_layer_width,
-        'pmma_layer_width': pmma_layer_width,
-        'pzt_velocity': pzt_velocity,
-        'pmma_velocity': pmma_velocity,
-        'plot_save_interval': 1,  # Save plots every n waveform
-        'movie_save_interval': 100,
-        'l2norm_plot_interval': 5,  # Save L2 norm plots every n waveforms
-        'outdir_path_image': outdir_path_image[0],
-        'frequency_cutoff': frequency_cutoff
+        "minimum_SNR": minimum_SNR,
+        "assembly_travel_time": assembly_travel_time,
+        "c_step": c_step,
+        "c_range": c_range,
+        "range_scaling_factor": range_scaling_factor,
+        "h_groove_side": h_groove_side,
+        "h_groove_central": h_groove_central,
+        "steel_velocity": steel_velocity,
+        "side_block_1": side_block_1,
+        "central_block": central_block,
+        "side_block_2": side_block_2,
+        "pzt_depth": pzt_depth,
+        "transmitter_position": transmitter_position,
+        "pzt_layer_width": side1_params["pzt_layer_width"],
+        "pmma_layer_width": side1_params["pmma_layer_width"],
+        "pzt_velocity": side1_params["pzt_velocity"],
+        "pmma_velocity": side1_params["pmma_velocity"],
+        "plot_save_interval": 1,
+        "movie_save_interval": 100,
+        "l2norm_plot_interval": 5,
+        "outdir_path_image": outdir_path_image[0],
+        "frequency_cutoff": frequency_cutoff
     }
-    
+
+    # 12) Process each UW file
     for chosen_uw_file, infile_path in enumerate(infile_path_list_uw):
         manual_pick_arrival_time_interval = manual_pick_arrival_time_interval_list[chosen_uw_file]
 
@@ -709,10 +863,12 @@ if __name__ == "__main__":
             manual_pick_arrival_time_interval=manual_pick_arrival_time_interval,
             sync_peaks=sync_peaks,
             mech_data=mech_data,
-            pulse_waveform=pulse_waveform,
-            pulse_time=pulse_time,
-            pulse_duration=pulse_duration,
+            stf_waveform=stf_waveform,
+            stf_time=stf_time,
+            stf_duration=stf_duration,
             frequency_cutoff=frequency_cutoff,
             outdir_path_l2norm=outdir_path_l2norm[0],
             params=params
         )
+
+
