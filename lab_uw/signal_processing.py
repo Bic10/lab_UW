@@ -31,7 +31,15 @@ class SignalProcessor:
         k[nx // 2:] = (k[:nx // 2] - kmax)
 
         ff = np.fft.fft(f)
-        ff = (1j * k) ** 2 * ff
+        
+        # Apply the second derivative in Fourier space
+        ff = -(k ** 2) * ff  # Equivalent to (1j * k) ** 2 * ff
+        
+        # Inverse Fourier transform to get back to spatial domain
+        # Apply the second derivative in Fourier space
+        ff = -(k ** 2) * ff  # Equivalent to (1j * k) ** 2 * ff
+        
+        # Inverse Fourier transform to get back to spatial domain
         df_num = np.real(np.fft.ifft(ff))
         return df_num
 
