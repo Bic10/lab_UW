@@ -14,34 +14,43 @@ class SignalProcessor:
     @staticmethod
     def fourier_derivative_2nd(f: np.ndarray, dx: float) -> np.ndarray:
         """
-        Compute the second spatial derivative using the Fourier transform.
+        Compute the second spatial derivative of a 1D function using spectral methods
+        (i.e. the Fourier transform).
 
-        Args:
-            f (np.ndarray): Input function.
-            dx (float): Grid spacing.
+        Parameters
+        ----------
+        f : np.ndarray
+            Input 1D function array of length nx.
+        dx : float
+            Grid spacing in the same units as f's domain.
 
-        Returns:
-            np.ndarray: Second spatial derivative.
+        Returns
+        -------
+        df2_num : np.ndarray
+            Second spatial derivative of f, evaluated at the same points.
+
+        Notes
+        -----
+        This computes:
+            df2/dx2 = IFFT( - (k^2) * FFT(f) )
+        where k = 2π * freq, and freq = fftfreq(nx, d=dx).
         """
         nx = f.size
-        kmax = np.pi / dx
-        dk = kmax / (nx / 2)
-        k = np.arange(nx)
-        k[:nx // 2] *= dk
-        k[nx // 2:] = (k[:nx // 2] - kmax)
+        # Generate wave-number (angular frequency) array:
+        # fftfreq returns frequencies in cycles per unit; multiply by 2π to get angular freq
+        freq = np.fft.fftfreq(nx, d=dx)   # shape (nx,)
+        k = 2.0 * np.pi * freq            # shape (nx,)
 
-        ff = np.fft.fft(f)
-        
-        # Apply the second derivative in Fourier space
-        ff = -(k ** 2) * ff  # Equivalent to (1j * k) ** 2 * ff
-        
-        # Inverse Fourier transform to get back to spatial domain
-        # Apply the second derivative in Fourier space
-        ff = -(k ** 2) * ff  # Equivalent to (1j * k) ** 2 * ff
-        
-        # Inverse Fourier transform to get back to spatial domain
-        df_num = np.real(np.fft.ifft(ff))
-        return df_num
+        # Forward FFT
+        fhat = np.fft.fft(f)
+        # Apply second derivative in frequency domain:
+        # (1j*k)^2 = -k^2, so we multiply by -(k^2)
+        fhat_deriv2 = -(k**2) * fhat
+
+        # Inverse FFT and take real part
+        df2_num = np.fft.ifft(fhat_deriv2).real
+        return df2_num
+
 
     @staticmethod
     def remove_starting_noise(

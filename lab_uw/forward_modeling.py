@@ -25,8 +25,8 @@ class ForwardModeler:
         self,
         observed_time: np.ndarray,
         observed_waveform: np.ndarray,
-        pulse_time: np.ndarray,
-        pulse_waveform: np.ndarray,
+        stf_time: np.ndarray,
+        stf_waveform: np.ndarray,
         sample_dimensions: Tuple[float, float, float],
         h_groove_side: float,
         h_groove_central: float,
@@ -60,8 +60,8 @@ class ForwardModeler:
         Args:
             observed_time (np.ndarray): Time array of the observed waveform.
             observed_waveform (np.ndarray): Observed waveform data.
-            pulse_time (np.ndarray): Time array of the source pulse.
-            pulse_waveform (np.ndarray): Source pulse waveform.
+            stf_time (np.ndarray): Time array of the source stf.
+            stf_waveform (np.ndarray): Source stf waveform.
             sample_dimensions (Tuple[float, float, float]): Dimensions of the sample layers.
             h_groove_side (float): Height of the side grooves.
             h_groove_central (float): Height of the central groove.
@@ -99,12 +99,12 @@ class ForwardModeler:
         # Input validation
         if observed_time.ndim != 1 or observed_waveform.ndim != 1:
             raise ValueError("observed_time and observed_waveform must be 1D numpy arrays.")
-        if pulse_time.ndim != 1 or pulse_waveform.ndim != 1:
-            raise ValueError("pulse_time and pulse_waveform must be 1D numpy arrays.")
+        if stf_time.ndim != 1 or stf_waveform.ndim != 1:
+            raise ValueError("stf_time and stf_waveform must be 1D numpy arrays.")
         if len(observed_time) != len(observed_waveform):
             raise ValueError("observed_time and observed_waveform must have the same length.")
-        if len(pulse_time) != len(pulse_waveform):
-            raise ValueError("pulse_time and pulse_waveform must have the same length.")
+        if len(stf_time) != len(stf_waveform):
+            raise ValueError("stf_time and stf_waveform must have the same length.")
         if misfit_interval.ndim != 1:
             raise ValueError("misfit_interval must be a 1D numpy array of indices.")
 
@@ -137,16 +137,16 @@ class ForwardModeler:
             num_x = grid.total_grid_points
 
             # Prepare the simulation time 
-            sim_time = SimulationTime(
+            sim_time_handler = SimulationTime(
                 observed_time=observed_time,
                 dx=dx,
                 max_velocity=steel_velocity
             )
-            simulation_time = sim_time.simulation_time
-            dt = sim_time.dt
-            num_t = sim_time.num_t
+            simulation_time = sim_time_handler.simulation_time
+            dt = sim_time_handler.dt
+            num_t = sim_time_handler.num_t
 
-            velocity_model, idx_dict = VelocityModel1D().build_velocity_model(
+            velocity_model_handler = VelocityModel1D(              
                 x=spatial_axis,
                 sample_dimensions=sample_dimensions,
                 x_transmitter=transmitter_position,
@@ -159,15 +159,17 @@ class ForwardModeler:
                 gouge_velocity=(gouge_velocity_1, gouge_velocity_2),
                 pzt_velocity=pzt_velocity,
                 pmma_velocity=pmma_velocity,
-                plotting=False
-            )
+                plotting=False)
+
+        velocity_model = velocity_model_handler.values
+        idx_dict = velocity_model_handler.idx_dict
 
         # Initialize Source
         transmitter_position_relative = pzt_layer_width + pmma_layer_width
         radius_transmitter = 2 * len(idx_dict['pzt_1'])
         source = Source1D(
-            pulse_time=pulse_time,
-            pulse_waveform=pulse_waveform,
+            stf_time=stf_time,
+            stf_waveform=stf_waveform,
             position=transmitter_position_relative,
             radius=radius_transmitter
     )        
@@ -265,8 +267,8 @@ class ForwardModeler:
 
                     # Create an adjoint source at the receiver's position
                     adjoint_source = Source1D(
-                        pulse_time=observed_time,
-                        pulse_waveform=adj_src_time_function,
+                        stf_time=observed_time,
+                        stf_waveform=adj_src_time_function,
                         position=receiver.position,  # Use the receiver's position
                         radius=receiver.radius       # Use the receiver's radius
                     )

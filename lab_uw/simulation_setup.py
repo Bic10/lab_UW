@@ -19,7 +19,7 @@ class Grid1D:
         self.grid_len = grid_len
         self.ppt = ppt
         self.spatial_axis = self.make_grid()
-        self.dx = self.spatial_axis[-1] - self.spatial_axis[0]
+        self.dx = self.spatial_axis[1] - self.spatial_axis[0]
         self.total_grid_points = len(self.spatial_axis)
 
     def make_grid(self) -> np.ndarray:
@@ -44,7 +44,7 @@ class Grid1D:
         pass
 
 class SimulationTime:
-    def __init__(self, observed_time: np.ndarray, dx: float, max_velocity: float, cfl_factor: float = 0.5):
+    def __init__(self, observed_time: np.ndarray, dx: float, max_velocity: float, cfl_factor: float = 0.49):
         '''
         Initialize simulation time variables.
 
@@ -59,8 +59,8 @@ class SimulationTime:
         self.max_velocity = max_velocity
         self.cfl_factor = cfl_factor
         self.simulation_time = None
-        self.dt = None
-        self.num_t = None
+        # self.dt = None
+        # self.num_t = None
         self.prepare_time_variables()
 
     def prepare_time_variables(self):
@@ -68,8 +68,7 @@ class SimulationTime:
         Prepare the time variables for the simulation based on the spatial grid and maximum velocity.
         '''
         # Calculate the raw time step based on CFL condition
-        dt_raw = self.cfl_factor * self.dx / self.max_velocity
-
+        dt_raw = (self.cfl_factor * self.dx) / self.max_velocity
         # Extract the data sampling rate from observed_time
         dt_obs = self.observed_time[1] - self.observed_time[0]
 
@@ -78,8 +77,9 @@ class SimulationTime:
 
         # Create the time axis for the simulation
         self.simulation_time = np.arange(0, self.observed_time[-1], self.dt)
+
         self.num_t = len(self.simulation_time)
-        
+
 class VelocityModel1D:
     def __init__(
         self,
@@ -116,7 +116,7 @@ class VelocityModel1D:
 
         self.layer_starts = None
         self.idx_dict = {}
-        self.c = None  # Velocity model array
+        self.values = None  # Velocity model array
 
         self.build_velocity_model()
 
@@ -196,7 +196,7 @@ class VelocityModel1D:
         '''
         Initialize the velocity model with default velocities.
         '''
-        self.c = self.steel_velocity * np.ones_like(self.x)
+        self.values = self.steel_velocity * np.ones_like(self.x)
 
     def assign_velocities(self):
         '''
@@ -225,7 +225,7 @@ class VelocityModel1D:
         Assign a constant velocity to a region.
         '''
         indices = self.idx_dict.get(region_name, [])
-        self.c[indices] = velocity
+        self.values[indices] = velocity
 
     def assign_gouge_velocity(self, region_name: str, gouge_velocity: Union[float, np.ndarray]):
         '''
@@ -237,9 +237,9 @@ class VelocityModel1D:
         if isinstance(gouge_velocity, np.ndarray):
             if len(gouge_velocity) != len(indices):
                 raise ValueError(f"Length of gouge_velocity does not match the size of {region_name} region.")
-            self.c[indices] = gouge_velocity
+            self.values[indices] = gouge_velocity
         else:
-            self.c[indices] = gouge_velocity
+            self.values[indices] = gouge_velocity
 
     def assign_groove_velocity(self, region_name: str, adjacent_velocity: Union[float, np.ndarray], is_start: bool):
         '''
@@ -250,13 +250,13 @@ class VelocityModel1D:
             return
         groove_length = len(indices)
         if groove_length == 1:
-            self.c[indices] = adjacent_velocity[0] if isinstance(adjacent_velocity, np.ndarray) else adjacent_velocity
+            self.values[indices] = adjacent_velocity[0] if isinstance(adjacent_velocity, np.ndarray) else adjacent_velocity
             return
 
         start_vel = self.steel_velocity if is_start else (adjacent_velocity[-1] if isinstance(adjacent_velocity, np.ndarray) else adjacent_velocity)
         end_vel = (adjacent_velocity[0] if isinstance(adjacent_velocity, np.ndarray) else adjacent_velocity) if is_start else self.steel_velocity
 
-        self.c[indices] = np.linspace(start_vel, end_vel, groove_length)
+        self.values[indices] = np.linspace(start_vel, end_vel, groove_length)
 
     def apply_smoothing(self):
         '''
@@ -269,7 +269,7 @@ class VelocityModel1D:
         transmitter_smoothing_end = self.layer_starts[2] + self.pzt_layer_width
         transmitter_indices = np.where((x >= transmitter_smoothing_start) & (x < transmitter_smoothing_end))[0]
         if transmitter_indices.size > 0:
-            self.c[transmitter_indices] = np.linspace(
+            self.values[transmitter_indices] = np.linspace(
                 self.pzt_velocity, self.steel_velocity, len(transmitter_indices))
 
         # Receiver smoothing
@@ -277,7 +277,7 @@ class VelocityModel1D:
         receiver_smoothing_end = self.layer_starts[12] + self.pzt_layer_width  # End of smoothing region
         receiver_indices = np.where((x >= receiver_smoothing_start) & (x < receiver_smoothing_end))[0]
         if receiver_indices.size > 0:
-            self.c[receiver_indices] = np.linspace(
+            self.values[receiver_indices] = np.linspace(
                 self.steel_velocity, self.pzt_velocity, len(receiver_indices))
 
     def plot(self, outfile_path: Optional[str] = None):
@@ -286,7 +286,7 @@ class VelocityModel1D:
         '''
         Plotter().plot_velocity_model(
             x=self.x,
-            c=self.c,
+            c=self.values,
             layer_starts=self.layer_starts,
             pzt_layer_width=self.pzt_layer_width,
             pmma_layer_width=self.pmma_layer_width,
@@ -297,18 +297,18 @@ import numpy as np
 from scipy.signal.windows import kaiser
 
 class Source1D:
-    def __init__(self, pulse_time: np.ndarray, pulse_waveform: np.ndarray, position: float, radius: int):
+    def __init__(self, stf_time: np.ndarray, stf_waveform: np.ndarray, position: float, radius: int):
         '''
         Initialize the 1D source.
 
         Args:
-            pulse_time (np.ndarray): Time array of the source pulse.
-            pulse_waveform (np.ndarray): Source pulse waveform.
+            stf_time (np.ndarray): Time array of the source time function.
+            stf_waveform (np.ndarray): Source time function waveform.
             position (float): Position of the source on the spatial grid.
             radius (int): Radius for the spatial function (number of grid points).
         '''
-        self.pulse_time = pulse_time
-        self.pulse_waveform = pulse_waveform
+        self.stf_time = stf_time
+        self.stf_waveform = stf_waveform
         self.position = position
         self.radius = radius
         self.time_function = None  # Will be set after interpolation
@@ -322,10 +322,10 @@ class Source1D:
             dt (float): Time step size of the simulation.
             simulation_time (np.ndarray): Simulation time array.
         '''
-        interpolated_pulse_time = np.arange(self.pulse_time[0], self.pulse_time[-1], dt)
-        interpolated_pulse = np.interp(interpolated_pulse_time, self.pulse_time, self.pulse_waveform)
+        interpolated_stf_time = np.arange(self.stf_time[0], self.stf_time[-1], dt)
+        interpolated_stf = np.interp(interpolated_stf_time, self.stf_time, self.stf_waveform)
         self.time_function = np.zeros(len(simulation_time))
-        self.time_function[:len(interpolated_pulse)] = interpolated_pulse
+        self.time_function[:len(interpolated_stf)] = interpolated_stf
 
     def create_spatial_function(self, spatial_axis: np.ndarray, dx: float, flip_side: str = None):
         '''

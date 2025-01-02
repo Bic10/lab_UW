@@ -4,6 +4,10 @@
 from pathlib import Path
 import pickle
 import pandas as pd
+import time as tm
+import numpy as np
+from multiprocessing import Pool, cpu_count
+from typing import Any, Dict, List
 
 from lab_uw.data_io import UltrasonicDataHandler, MechanicalDataHandler, BlockMetadataHandler
 from lab_uw.directory_manager import DirectoryManager
@@ -11,6 +15,7 @@ from lab_uw.signal_processing import SignalProcessor
 from lab_uw.simulation_setup import *
 from lab_uw.forward_modeling import *
 from lab_uw.plotting import InteractivePlotter
+from lab_uw.forward_modeling import ForwardModeler
 
 # Function Definitions
 def load_blocks_metadata(
@@ -123,7 +128,7 @@ def load_and_process_stf(
     stf_handler = UltrasonicDataHandler()
     stf_waveform_raw, stf_metadata = stf_handler.load_waveform_json(chosen_stf_path)
 
-    stf_time = stf_metadata["time_ax_waveform"]
+    stf_time = np.array(stf_metadata["time_ax_waveform"])
     signal_processor = SignalProcessor()
 
     # Apply lowpass filter
@@ -242,9 +247,55 @@ def prepare_manual_pick_arrival_times(
 
     return manual_pick_arrival_time_interval_list
 
-def process_uw_file(infile_path, chosen_uw_file, manual_pick_arrival_time_interval,sync_peaks, mech_data, stf_waveform, stf_time, stf_duration, frequency_cutoff, outdir_path_l2norm, params):
+def process_uw_file(
+    infile_path: Path,
+    chosen_uw_file: int,
+    manual_pick_arrival_time_interval: List[Any],
+    sync_peaks: np.ndarray,
+    mech_data: Any,
+    stf_waveform: np.ndarray,
+    stf_time: np.ndarray,
+    stf_duration: float,
+    frequency_cutoff: float,
+    outdir_path_l2norm: Path,
+    params: Dict[str, Any],
+    plotter: Any = None
+) -> None:
     """
     Process a single UW data file.
+
+    Parameters
+    ----------
+    infile_path : Path
+        The path to the ultrasonic waveforms file.
+    chosen_uw_file : int
+        Index of the current UW file in the experiment.
+    manual_pick_arrival_time_interval : list
+        List of manually picked arrival times for some waveforms.
+    sync_peaks : np.ndarray
+        Array of synchronization indices for mechanical data.
+    mech_data : Any
+        Mechanical DataFrame or structure containing mechanical data (stress, displacement).
+    stf_waveform : np.ndarray
+        Source time function waveform (filtered, zeroed).
+    stf_time : np.ndarray
+        Corresponding time axis of the STF waveform.
+    stf_duration : float
+        Duration of the STF waveform.
+    frequency_cutoff : float
+        Maximum frequency to use in lowpass filtering.
+    outdir_path_l2norm : Path
+        Directory path for saving results (L2 norm, velocity picks, etc.).
+    params : Dict[str, Any]
+        Dictionary of parameters (geometry, velocities, etc.) needed for processing.
+    plotter : Any, optional
+        An instance of a Plotter (or InteractivePlotter) class for visualization. 
+        If None, no plots are generated.
+
+    Returns
+    -------
+    None
+        Saves results to disk and optionally creates plots of velocity vs. displacement/stress.
     """
     # Unpack parameters
     minimum_SNR = params['minimum_SNR']
@@ -266,109 +317,115 @@ def process_uw_file(infile_path, chosen_uw_file, manual_pick_arrival_time_interv
     pmma_velocity = params['pmma_velocity']
     outdir_path_image = params['outdir_path_image']
 
-    # Initialize variables to store results
-    velocity_ranges = []          # To store the velocity range used for each waveform
-    L2norm_all_waveforms = []     # To store the misfit values for each waveform
-    estimated_velocities = []     # To store the estimated velocity for each waveform
+    # Initialize results
+    velocity_ranges = []
+    L2norm_all_waveforms = []
+    estimated_velocities = []
 
-    # Initialize lists to store stress and displacement data
+    # Initialize lists for mechanical data
     normal_stress_values = []
     shear_stress_values = []
     ec_disp_mm_values = []
     time_s_values = []
 
-    # CHOOSE OUTFILE_PATH
-    outfile_name = os.path.basename(infile_path).split('.')[0]
-    outfile_path = os.path.join(outdir_path_l2norm[0], outfile_name)
+    # Derive output filenames using pathlib
+    outfile_stem = infile_path.stem  # e.g., "0_compaction_sv1_sh1"
+    outfile_path = outdir_path_l2norm / outfile_stem
+    print(f"PROCESSING UW DATA IN {infile_path}:")
 
-    print('PROCESSING UW DATA IN %s: ' % infile_path)
     start_time = tm.time()
 
-    # LOAD UW DATA
-    observed_waveform_data, metadata = make_UW_data(infile_path)
+    # Load UW data
+    ultrasonic_handler = UltrasonicDataHandler.make_UW_data(infile_path)
+    observed_waveform_data, metadata = ultrasonic_handler.waveform_data, ultrasonic_handler.metadata
     observed_time = metadata['time_ax_waveform']
 
-    # Preprocessing steps:
+    # Preprocessing: remove mean, zero out first N samples
     observed_waveform_data = observed_waveform_data - np.mean(observed_waveform_data)
-    initial_time_removed = 300  # number of samples
+    initial_time_removed = 300
     observed_waveform_data[:, :initial_time_removed] = 0
-    
-    # Frequency low-pass filter
-    observed_waveform_data, _ = signal2noise_separation_lowpass(observed_waveform_data, metadata, freq_cut=frequency_cutoff)
 
-    # simulate a smaller piece of data. Since we are going to evaluate misfit in a smaller interval
-    total_time_to_simulate = int(metadata['number_of_samples'])  
-    # print(f"total time to simulate {total_time_to_simulate}")
-    observed_waveform_data = observed_waveform_data[:,:total_time_to_simulate ]
+    # Lowpass filtering
+    signal_processor = SignalProcessor()
+    observed_waveform_data, _ = signal_processor.signal2noise_separation_lowpass(
+        waveform_data=observed_waveform_data,
+        metadata=metadata,
+        freq_cut=frequency_cutoff
+    )
+
+    # Possibly reduce the number of samples
+    total_time_to_simulate = int(metadata['number_of_samples'])
+    observed_waveform_data = observed_waveform_data[:, :total_time_to_simulate]
     observed_time = observed_time[:total_time_to_simulate]
-    # Downsampling the waveforms
-    # number_of_waveforms_wanted = metadata['number_of_waveforms']
-    number_of_waveforms_wanted = 10 
 
+    # Downsampling waveforms
+    number_of_waveforms_wanted = 10
     downsampling = max(1, round(metadata['number_of_waveforms'] / number_of_waveforms_wanted))
-    print(f"Number of waveforms in the selected subset: {metadata['number_of_waveforms']}")
-    print(f"Number of waveforms wanted: {number_of_waveforms_wanted}")
-    print(f"Downsampling waveforms by a factor: {downsampling}")
+    print(f"Number of waveforms: {metadata['number_of_waveforms']}, wanting {number_of_waveforms_wanted}, downsampling factor: {downsampling}")
 
-    # Extract layer thickness from mechanical data
-    try: 
-        thickness_gouge_1_list = mech_data.rgt_lt_mm[sync_peaks[2 * chosen_uw_file]: sync_peaks[2 * chosen_uw_file + 1]].values / 10  # Convert mm to cm
-        thickness_gouge_2_list = thickness_gouge_1_list  # Assuming both layers have the same thickness
-        normal_stress_list = mech_data.normal_stress_MPa[sync_peaks[2 * chosen_uw_file]: sync_peaks[2 * chosen_uw_file + 1]].values 
-        shear_stress_list = mech_data.shear_stress_MPa[sync_peaks[2 * chosen_uw_file]: sync_peaks[2 * chosen_uw_file + 1]].values 
-
-        # Extract ec_disp_mm and time_s
-        ec_disp_mm_list = mech_data.ec_disp_mm[sync_peaks[2 * chosen_uw_file]: sync_peaks[2 * chosen_uw_file + 1]].values
-        time_s_list = mech_data.time_s[sync_peaks[2 * chosen_uw_file]: sync_peaks[2 * chosen_uw_file + 1]].values
-
+    # Extract thickness & stress from mechanical data
+    try:
+        start_sync = sync_peaks[2 * chosen_uw_file]
+        end_sync = sync_peaks[2 * chosen_uw_file + 1]
     except (TypeError, IndexError):
-        thickness_gouge_1_list = mech_data.rgt_lt_mm[sync_peaks[2 * chosen_uw_file]: metadata['number_of_waveforms']].values / 10  # Convert mm to cm
-        thickness_gouge_2_list = thickness_gouge_1_list  # Assuming both layers have the same thickness
-        normal_stress_list = mech_data.normal_stress_MPa[sync_peaks[2 * chosen_uw_file]: metadata['number_of_waveforms']].values
-        shear_stress_list = mech_data.shear_stress_MPa[sync_peaks[2 * chosen_uw_file]: metadata['number_of_waveforms']].values
+        # fallback if sync_peaks is partial
+        start_sync = sync_peaks[2 * chosen_uw_file]
+        end_sync = metadata['number_of_waveforms']
 
-        # Extract ec_disp_mm and time_s
-        ec_disp_mm_list = mech_data.ec_disp_mm[sync_peaks[2 * chosen_uw_file]: metadata['number_of_waveforms']].values
-        time_s_list = mech_data.time_s[sync_peaks[2 * chosen_uw_file]: metadata['number_of_waveforms']].values
+    # Convert mm -> cm
+    thickness_gouge_1_list = mech_data.rgt_lt_mm[start_sync:end_sync].values / 10.0
+    thickness_gouge_2_list = thickness_gouge_1_list  # same thickness for both layers?
+    normal_stress_list = mech_data.normal_stress_MPa[start_sync:end_sync].values
+    shear_stress_list = mech_data.shear_stress_MPa[start_sync:end_sync].values
+    ec_disp_mm_list = mech_data.ec_disp_mm[start_sync:end_sync].values
+    time_s_list = mech_data.time_s[start_sync:end_sync].values
 
-    # Initialize previous_min_velocity for the first waveform
     previous_min_velocity = None
 
-    # Process each waveform sequentially
-    for idx_waveform, (thickness_gouge_1, thickness_gouge_2, normal_stress, shear_stress, ec_disp_mm, time_s) in enumerate(zip(thickness_gouge_1_list[::downsampling], thickness_gouge_2_list[::downsampling], normal_stress_list[::downsampling], shear_stress_list[::downsampling], ec_disp_mm_list[::downsampling], time_s_list[::downsampling])):
-        idx = idx_waveform * downsampling
-        # THERE IS A SILLY PROBLEM FOR THE CURRENT COMPUTATION OF LAYER THICKNESS: 
-        # IN THE REDUCTION SCRIPT THEY ARE HALF OF THE REAL ONE
-        thickness_gouge_1 *= 2                 
-        thickness_gouge_2 *= 2
-        
-        # print(f"Layer thickness: {thickness_gouge_1}\tNormal_stress: {normal_stress}\tShear_stress: {shear_stress}")
+    # Loop through waveforms
+    for idx_waveform, (
+            thick_g1, thick_g2, normal_stress, shear_stress, ec_disp_mm, time_s
+        ) in enumerate(
+            zip(
+                thickness_gouge_1_list[::downsampling],
+                thickness_gouge_2_list[::downsampling],
+                normal_stress_list[::downsampling],
+                shear_stress_list[::downsampling],
+                ec_disp_mm_list[::downsampling],
+                time_s_list[::downsampling]
+            )
+        ):
+
+        idx_data = idx_waveform * downsampling
+
+        # Adjust thickness (In some of the reduced data are surely wrong
+        # thick_g1 *= 2.0
+        # thick_g2 *= 2.0
 
         try:
-            observed_waveform = observed_waveform_data[idx] 
+            observed_waveform = observed_waveform_data[idx_data]
         except IndexError:
-            break      # exit the loop when there is not waveforms anymore
+            # Out of waveforms, break
+            break
 
-        # Compute the overall index for synchronization
-        overall_index = sync_peaks[2 * chosen_uw_file] + idx
+        overall_index = start_sync + idx_data
 
-        # Append stress and displacement values
         normal_stress_values.append(normal_stress)
         shear_stress_values.append(shear_stress)
         ec_disp_mm_values.append(ec_disp_mm)
         time_s_values.append(time_s)
 
-        # Process the waveform
+        # Process the waveform (assuming process_waveform is defined/imported)
         result = process_waveform(
             manual_pick_arrival_time_interval,
             observed_waveform=observed_waveform,
             observed_time=observed_time,
             idx_waveform=idx_waveform,
             overall_index=overall_index,
-            outfile_name=outfile_name,
+            outfile_name=outfile_stem,
             previous_min_velocity=previous_min_velocity,
-            thickness_gouge_1=thickness_gouge_1,
-            thickness_gouge_2=thickness_gouge_2,
+            thickness_gouge_1=thick_g1,
+            thickness_gouge_2=thick_g2,
             normal_stress=normal_stress,
             shear_stress=shear_stress,
             stf_waveform=stf_waveform,
@@ -381,83 +438,140 @@ def process_uw_file(infile_path, chosen_uw_file, manual_pick_arrival_time_interv
             params=params
         )
 
-        # Update previous_min_velocity based on result
         previous_min_velocity = result['previous_min_velocity']
-
-        # Append results to lists
         velocity_ranges.append(result['gouge_velocity_list_waveform'])
         L2norm_all_waveforms.append(result['L2norm_waveform'])
         estimated_velocities.append(result['best_gouge_velocity'])
 
-    # After processing all waveforms, save the results
-    with open(outfile_path + '_results.pkl', 'wb') as f:
+    # Save results to a pickle
+    results_pkl = outfile_path.with_suffix(".pkl")  # e.g. path/to/l2norm/filename.pkl
+    with open(results_pkl, 'wb') as f:
         pickle.dump({
             'L2norm_all_waveforms': L2norm_all_waveforms,
             'velocity_ranges': velocity_ranges,
             'estimated_velocities': estimated_velocities
         }, f)
 
-    # Define plot path
-    plot_name = f"{outfile_name}_velocity_stress_vs_ec_disp"
-    plot_path = os.path.join(outdir_path_image[0], plot_name)
+    # Now do the final plots
+    # Build a Plotter if none was passed
+    if plotter is None:
+        from lab_uw.plotting import Plotter
+        plotter = Plotter()
 
-    # Call the plotting function
-    plot_velocity_and_stresses(
-        x_values=ec_disp_mm_values,
-        velocities=estimated_velocities,
-        normal_stress=normal_stress_values,
-        shear_stress=shear_stress_values,
+    # 1) Velocity and stress vs ec_disp_mm
+    plot_name_ec_disp = f"{outfile_stem}_velocity_stress_vs_ec_disp"
+    plot_path_ec_disp = Path(outdir_path_image) / plot_name_ec_disp  # outdir_path_image is in params
+
+    plotter.plot_velocity_and_stresses(
+        x_values=np.array(ec_disp_mm_values),
+        velocities=np.array(estimated_velocities),
+        normal_stress=np.array(normal_stress_values),
+        shear_stress=np.array(shear_stress_values),
         x_label='ec_disp_mm',
         velocity_label='Gouge Velocity (cm/μs)',
         stress_labels=('Normal Stress (MPa)', 'Shear Stress (MPa)'),
         title='Gouge Velocity and Stress vs ec_disp_mm',
-        outfile_path=plot_path,
-        )
+        outfile_path=plot_path_ec_disp
+    )
 
-    # Define plot path
-    plot_name = f"{outfile_name}_velocity_stress_vs_time"
-    plot_path = os.path.join(outdir_path_image[0], plot_name)
+    # 2) Velocity and stress vs time_s
+    plot_name_time = f"{outfile_stem}_velocity_stress_vs_time"
+    plot_path_time = Path(outdir_path_image) / plot_name_time
 
-    # Call the plotting function
-    plot_velocity_and_stresses(
-        x_values=time_s_values,
-        velocities=estimated_velocities,
-        normal_stress=normal_stress_values,
-        shear_stress=shear_stress_values,
+    plotter.plot_velocity_and_stresses(
+        x_values=np.array(time_s_values),
+        velocities=np.array(estimated_velocities),
+        normal_stress=np.array(normal_stress_values),
+        shear_stress=np.array(shear_stress_values),
         x_label='time_s',
         velocity_label='Gouge Velocity (cm/μs)',
         stress_labels=('Normal Stress (MPa)', 'Shear Stress (MPa)'),
         title='Gouge Velocity and Stress vs time_s',
-        outfile_path=plot_path,
-        )
+        outfile_path=plot_path_time
+    )
 
-
-    print("--- %s seconds for processing %s ---" % (tm.time() - start_time, outfile_name))
+    print(f"--- {tm.time() - start_time:.2f} seconds for processing {infile_path.name} ---")
 
 def process_waveform(
-                     manual_pick_arrival_time_interval, 
-                     observed_waveform, 
-                     observed_time, 
-                     idx_waveform, 
-                     overall_index, 
-                     outfile_name, 
-                     previous_min_velocity, 
-                     thickness_gouge_1, 
-                     thickness_gouge_2, 
-                     normal_stress, 
-                     shear_stress, 
-                     stf_waveform, 
-                     stf_time, 
-                     stf_duration, 
-                     assembly_travel_time, 
-                     c_step, 
-                     c_range, 
-                     frequency_cutoff, 
-                     params):
+    manual_pick_arrival_time_interval: List[float],
+    observed_waveform: np.ndarray,
+    observed_time: np.ndarray,
+    idx_waveform: int,
+    overall_index: int,
+    outfile_name: str,
+    previous_min_velocity: Optional[float],
+    thickness_gouge_1: float,
+    thickness_gouge_2: float,
+    normal_stress: float,
+    shear_stress: float,
+    stf_waveform: np.ndarray,
+    stf_time: np.ndarray,
+    stf_duration: float,
+    assembly_travel_time: float,
+    c_step: float,
+    c_range: float,
+    frequency_cutoff: float,
+    params: Dict[str, Any],
+    plotter: Optional[Any] = None
+) -> Dict[str, Union[float, np.ndarray, None]]:
     """
-    Process a single waveform.
+    Process a single waveform by scanning possible gouge velocities, computing misfit,
+    and simulating a synthetic waveform at the best velocity.
+
+    Parameters
+    ----------
+    manual_pick_arrival_time_interval : list of float
+        List of manually picked arrival times.
+    observed_waveform : np.ndarray
+        The actual observed waveform for this iteration (1D array).
+    observed_time : np.ndarray
+        Time axis for the observed waveform.
+    idx_waveform : int
+        Index of this waveform in the entire experiment's waveforms.
+    overall_index : int
+        Overall index in the mechanical data synchronization.
+    outfile_name : str
+        Stem for output filenames.
+    previous_min_velocity : float or None
+        Best velocity from the previous waveform, or None if this is the first.
+    thickness_gouge_1 : float
+        Thickness of gouge layer 1 [cm].
+    thickness_gouge_2 : float
+        Thickness of gouge layer 2 [cm].
+    normal_stress : float
+        Normal stress [MPa].
+    shear_stress : float
+        Shear stress [MPa].
+    stf_waveform : np.ndarray
+        Source time function waveform (filtered, zero-started).
+    stf_time : np.ndarray
+        Corresponding time axis of the STF.
+    stf_duration : float
+        Duration of the STF waveform.
+    assembly_travel_time : float
+        Time needed for wave to travel through the steel assembly, excluding gouge.
+    c_step : float
+        Step size for scanning gouge velocities [cm/μs].
+    c_range : float
+        Half-range for scanning velocities (in subsequent waveforms).
+    frequency_cutoff : float
+        Frequency cutoff for simulating or filtering waveforms.
+    params : dict
+        Dictionary containing relevant geometry, velocity, and plotting parameters.
+    plotter : Plotter, optional
+        An instance of Plotter for generating plots. If None, a local Plotter is created.
+
+    Returns
+    -------
+    dict
+        A dictionary with:
+            'previous_min_velocity': Updated best velocity for the next iteration,
+            'gouge_velocity_list_waveform': The array of tested velocities,
+            'L2norm_waveform': The computed L2 norms for each velocity,
+            'best_gouge_velocity': The best-fit velocity,
+            'range_factor': Possibly updated range scaling factor if min was at boundary.
     """
-    # Unpack parameters
+    # Unpack additional parameters
     minimum_SNR = params['minimum_SNR']
     h_groove_side = params['h_groove_side']
     h_groove_central = params['h_groove_central']
@@ -474,95 +588,120 @@ def process_waveform(
     plot_save_interval = params['plot_save_interval']
     movie_save_interval = params['movie_save_interval']
     l2norm_plot_interval = params['l2norm_plot_interval']
-    outdir_path_image = params['outdir_path_image'][0]  # Since it's a list
+    outdir_path_image_list = params['outdir_path_image']
     range_scaling_factor = params['range_scaling_factor']
 
-    if previous_min_velocity is None:
+    # Convert outdir_path_image_list[0] to a Path
+    outdir_path_image = Path(outdir_path_image_list) if isinstance(outdir_path_image_list, str) else outdir_path_image_list
+    if isinstance(outdir_path_image, list):
+        outdir_path_image = Path(outdir_path_image[0])
 
+    # Ensure we have a Plotter instance
+    if plotter is None:
+        from lab_uw.plotting import Plotter
+        plotter = Plotter()
+
+    # ------------------------------------------
+    # 1) INITIAL VELOCITY ESTIMATION
+    # ------------------------------------------
+    if previous_min_velocity is None:
+        # Attempt velocity from manual picks
         try:
             estimated_velocities = []
-
             for picked_time in manual_pick_arrival_time_interval:
-                # Derived parameters
                 Delta_t = picked_time - assembly_travel_time
                 L_g = thickness_gouge_1 + thickness_gouge_2
                 L_h = 2 * h_groove_side + 2 * h_groove_central
 
-                # Coefficients for the quadratic equation
-                A = Delta_t * 0.5
-                B = Delta_t * 0.5 * steel_velocity - L_g * 0.5 - L_h
-                C = -L_g * 0.5 * steel_velocity
+                # Quadratic eq: A*c^2 + B*c + C = 0
+                A = 0.5 * Delta_t
+                B = 0.5 * Delta_t * steel_velocity - 0.5 * L_g - L_h
+                C = -0.5 * L_g * steel_velocity
 
-                # Solve the quadratic equation
-                discriminant = B**2 - 4 * A * C
-
+                discriminant = B**2 - 4*A*C
                 if discriminant >= 0:
-                    # Two possible solutions for cmin_waveform
-                    estimated_velocity_1 = (-B + np.sqrt(discriminant)) / (2 * A)
-                    estimated_velocity_2 = (-B - np.sqrt(discriminant)) / (2 * A)
-                    estimated_velocities.append(estimated_velocity_1)
+                    # Keep the positive root
+                    est_vel1 = (-B + np.sqrt(discriminant)) / (2*A)
+                    est_vel2 = (-B - np.sqrt(discriminant)) / (2*A)
+                    # Usually one is negative or not physically relevant, so pick positive
+                    estimated_velocities.append(est_vel1)
                 else:
-                    print("No real solution exists for cmin_waveform.")
+                    print("No real solution for cmin_waveform from manual picks.")
 
-            cmin_waveform = min(estimated_velocities)
-            cmax_waveform = max(estimated_velocities)
+            cmin_waveform = min(estimated_velocities) if estimated_velocities else None
+            cmax_waveform = max(estimated_velocities) if estimated_velocities else None
 
-            print(f"Loaded manually picked velocity: cmin={cmin_waveform:.4f}, cmax={cmax_waveform:.4f}")
+            if cmin_waveform is None:
+                raise ValueError("Manual picks gave no valid solutions.")
+            
+            print(f"Manual picks -> cmin={cmin_waveform:.4f}, cmax={cmax_waveform:.4f}")
 
         except:
-            # If no manual estimates are found, revert to default initial estimates
+            # Fallback if no manual picks are valid
             cmin_waveform = 0.035 * (normal_stress**0.25)
             cmax_waveform = 0.055 * (normal_stress**0.25)
-            print(f"No manual estimates found. Using default estimates: cmin={cmin_waveform:.4f}, cmax={cmax_waveform:.4f}")
+            print(f"No manual velocity estimates found. Using fallback cmin={cmin_waveform:.4f}, cmax={cmax_waveform:.4f}")
 
-        c_step_waveform = c_step  # Use the defined step size
+        c_step_waveform = c_step
 
-        # Define evaluation interval for L2 norm of the residuals
-        max_travel_time = assembly_travel_time + thickness_gouge_1 / cmin_waveform + thickness_gouge_2 / cmin_waveform + 2 * (2 * h_groove_side + 2 * h_groove_central) / (steel_velocity + cmin_waveform)
-        min_travel_time = assembly_travel_time + thickness_gouge_1 / cmax_waveform + thickness_gouge_2 / cmax_waveform + 2 * (2 * h_groove_side + 2 * h_groove_central) / (steel_velocity + cmax_waveform)
-        misfit_interval = np.where((observed_time > min_travel_time) & (observed_time < max_travel_time + stf_duration))
+        # Evaluate SNR in a smaller time window
+        max_travel_time = (assembly_travel_time
+                           + thickness_gouge_1 / cmin_waveform
+                           + thickness_gouge_2 / cmin_waveform
+                           + 2*(2 * h_groove_side + 2*h_groove_central)/(steel_velocity + cmin_waveform))
+        min_travel_time = (assembly_travel_time
+                           + thickness_gouge_1 / cmax_waveform
+                           + thickness_gouge_2 / cmax_waveform
+                           + 2*(2 * h_groove_side + 2*h_groove_central)/(steel_velocity + cmax_waveform))
+        misfit_interval = np.where((observed_time > min_travel_time) & (observed_time < max_travel_time + stf_duration))[0]
 
+        # Evaluate SNR
         sure_noise_interval = np.where(observed_time < min_travel_time)
         good_data_interval = np.where(observed_time > min_travel_time)
-        max_signal = np.amax(observed_waveform[good_data_interval])
-        max_noise = np.amax(observed_waveform[sure_noise_interval])
-        if max_signal / max_noise < minimum_SNR:
-            print(f"Signal to Noise ratio for waveform {idx_waveform} = {max_signal / max_noise}. Skipped computation")
-            return {'previous_min_velocity': None,
-                    'gouge_velocity_list_waveform': None,
-                    'L2norm_waveform': None,
-                    'best_gouge_velocity': None,
-                    'range_scaling_factor': None
-                    }
-        
-        else: 
-            is_the_first_evaluated_waveform = True
+        max_signal = np.amax(observed_waveform[good_data_interval]) if good_data_interval[0].size else 1
+        max_noise = np.amax(observed_waveform[sure_noise_interval]) if sure_noise_interval[0].size else 1
 
+        if max_signal / max_noise < minimum_SNR:
+            print(f"SNR {max_signal / max_noise:.2f} < {minimum_SNR}. Skipping waveform {idx_waveform}.")
+            return {
+                'previous_min_velocity': None,
+                'gouge_velocity_list_waveform': None,
+                'L2norm_waveform': None,
+                'best_gouge_velocity': None,
+                'range_factor': None
+            }
+
+        is_first_waveform = True
 
     else:
-        is_the_first_evaluated_waveform = False
-        # For subsequent waveforms, center around previous min velocity
-        c_range_waveform = range_scaling_factor * c_range # [cm/μs], adjust as needed
+        # For subsequent waveforms, search around previous velocity
+        is_first_waveform = False
+        c_range_waveform = range_scaling_factor * c_range
         cmin_waveform = previous_min_velocity - c_range_waveform
         cmax_waveform = previous_min_velocity + c_range_waveform
         c_step_waveform = c_step
 
-        # Define evaluation interval for L2 norm of the residuals
-        max_travel_time = assembly_travel_time + thickness_gouge_1 / cmin_waveform + thickness_gouge_2 / cmin_waveform + 2 * (2 * h_groove_side + 2 * h_groove_central) / (steel_velocity + cmin_waveform)
-        min_travel_time = assembly_travel_time + thickness_gouge_1 / cmax_waveform + thickness_gouge_2 / cmax_waveform + 2 * (2 * h_groove_side + 2 * h_groove_central) / (steel_velocity + cmax_waveform)
-        misfit_interval = np.where((observed_time > min_travel_time) & (observed_time < max_travel_time + stf_duration))
+        max_travel_time = (assembly_travel_time
+                           + thickness_gouge_1 / cmin_waveform
+                           + thickness_gouge_2 / cmin_waveform
+                           + 2*(2*h_groove_side + 2*h_groove_central)/(steel_velocity + cmin_waveform))
+        min_travel_time = (assembly_travel_time
+                           + thickness_gouge_1 / cmax_waveform
+                           + thickness_gouge_2 / cmax_waveform
+                           + 2*(2*h_groove_side + 2*h_groove_central)/(steel_velocity + cmax_waveform))
+        misfit_interval = np.where((observed_time > min_travel_time) & (observed_time < max_travel_time + stf_duration))[0]
 
-    # Create velocity list for this waveform
+    # Generate velocity array
     gouge_velocity_list_waveform = np.arange(cmin_waveform, cmax_waveform, c_step_waveform)
+    print(f"Velocity range = [{cmin_waveform:.4f}, {cmax_waveform:.4f}] with step={c_step_waveform:.4f}")
 
-    print(f"Evaluating velocity in the interval: {cmin_waveform:.4f}-{cmax_waveform:.4f}, with steo of {c_step:.4f}")
+    # Prepare arguments for multiprocessing
+    num_processes = cpu_count()
 
-    # Prepare arguments for multiprocessing over velocities
-    args_list = []
-    for gouge_velocity in gouge_velocity_list_waveform:
-        gouge_velocity_tuple = (gouge_velocity, gouge_velocity)  # Use the same velocity for both layers
-        args = (
-            gouge_velocity_tuple,
+    def _build_args(gouge_velocity: float):
+        # The process_velocity call expects a tuple: (gouge_velocity, observed_waveform, thickness_g1, thickness_g2, misfit_interval, observed_time, stf_time, stf_waveform, transmitter_position, params)
+        return (
+            (gouge_velocity, gouge_velocity),  # same velocity for both layers
             observed_waveform,
             thickness_gouge_1,
             thickness_gouge_2,
@@ -573,66 +712,74 @@ def process_waveform(
             transmitter_position,
             params
         )
-        args_list.append(args)
 
-    # Set up multiprocessing over velocities
-    num_processes = cpu_count()
+    args_list = [_build_args(gv) for gv in gouge_velocity_list_waveform]
+
+    # Multiprocessing over velocities
     with Pool(processes=num_processes) as pool:
         results = pool.map(process_velocity, args_list)
 
-    # Collect results
-    results.sort(key=lambda x: x[0])  # Sort by gouge_velocity_scalar
-    gouge_velocity_list_waveform = np.array([result[0] for result in results])
-    L2norm_waveform = np.array([result[1] for result in results])
+    # results is a list of (gouge_velocity_scalar, L2norm) sorted by scalar? We sort by velocity
+    results_sorted = sorted(results, key=lambda x: x[0])
+    gouge_velocity_list_waveform = np.array([res[0] for res in results_sorted])
+    L2norm_waveform = np.array([res[1] for res in results_sorted])
 
-    # Find the gouge_velocity with minimum misfit
+    # Find min misfit
     min_idx = np.argmin(L2norm_waveform)
-    if min_idx in (0,-1):
-        print(f"Mimimum of the misfit at the border of the velocity evaluaated: doubling the next interval")
-        range_scaling_factor = 2
+    best_gouge_velocity = gouge_velocity_list_waveform[min_idx]
+    print(f"Waveform {idx_waveform}: min misfit at velocity = {best_gouge_velocity:.4f} cm/μs")
 
-    previous_min_velocity = gouge_velocity_list_waveform[min_idx]
-    print(f"Waveform {idx_waveform}: Minimum misfit at gouge_velocity = {previous_min_velocity:.4f} cm/μs")
+    # Check boundary
+    if min_idx in (0, len(L2norm_waveform) - 1):
+        print(f"Minimum misfit is on the boundary, doubling next search range.")
+        range_scaling_factor = 2.0
 
-    # After finding the best-fit velocity, generate and plot the synthetic waveform
-    best_gouge_velocity = previous_min_velocity
+    previous_min_velocity = best_gouge_velocity
 
-    # Use the same sample_dimensions and positions as before
-    sample_dimensions = [side_block_1, thickness_gouge_1, central_block, thickness_gouge_2, side_block_2]
-    receiver_position = pzt_depth  # [cm] Receiver is in the side_block_2
+    # Simulate synthetic waveform at best velocity
+    # Build sample_dimensions. Observing code, it's [side_block_1, thickness_g1, central_block, thickness_g2, side_block_2]
+    sample_dimensions = [
+        side_block_1,
+        thickness_gouge_1,
+        central_block,
+        thickness_gouge_2,
+        side_block_2
+    ]
+    receiver_position = pzt_depth  # or wherever the receiver is placed
 
-    # Decide whether to save plots and movies
-    save_plot = idx_waveform % plot_save_interval == 0
-    save_movie = idx_waveform % movie_save_interval == 0
+    # Determine if we save plots or movies
+    save_plot = (idx_waveform % plot_save_interval == 0) or is_first_waveform
+    save_movie = (idx_waveform % movie_save_interval == 0)
 
-    if save_plot or is_the_first_evaluated_waveform:
-        plot_output_name = f"{outfile_name}_waveform_{overall_index}_velocity_{best_gouge_velocity:.4f}"
-        plot_output_path = os.path.join(outdir_path_image, plot_output_name)
+    # Construct output paths
+    outdir_path_image = Path(outdir_path_image)
+    if save_plot:
+        plot_output_name = f"{outfile_name}_waveform_{overall_index}_vel_{best_gouge_velocity:.4f}"
+        plot_output_path = outdir_path_image / plot_output_name
     else:
         plot_output_path = None
 
     if save_movie:
-        movie_output_name = f"{outfile_name}_waveform_{overall_index}_velocity_{best_gouge_velocity:.4f}.mp4"
-        movie_output_path = os.path.join(outdir_path_image, movie_output_name)
+        movie_output_name = f"{outfile_name}_waveform_{overall_index}_vel_{best_gouge_velocity:.4f}.mp4"
+        movie_output_path = outdir_path_image / movie_output_name
     else:
         movie_output_path = None
 
-    # Call DDS_UW_simulation with gouge_velocity as a tuple
-    synthetic_waveform, _, _ = DDS_UW_simulation(
+    synthetic_waveform, _, _ = ForwardModeler().DDS_UW_simulation(
         observed_time=observed_time,
         observed_waveform=observed_waveform,
         stf_time=stf_time,
         stf_waveform=stf_waveform,
         sample_dimensions=sample_dimensions,
         h_groove_side=h_groove_side,
-        h_groove_central=h_groove_central,            
+        h_groove_central=h_groove_central,
         frequency_cutoff=frequency_cutoff,
         transmitter_position=transmitter_position,
         receiver_position=receiver_position,
         pzt_layer_width=pzt_layer_width,
         pmma_layer_width=pmma_layer_width,
         steel_velocity=steel_velocity,
-        gouge_velocity=(best_gouge_velocity, best_gouge_velocity),  # Pass as tuple
+        gouge_velocity=(best_gouge_velocity, best_gouge_velocity),
         pzt_velocity=pzt_velocity,
         pmma_velocity=pmma_velocity,
         misfit_interval=misfit_interval,
@@ -640,22 +787,22 @@ def process_waveform(
         normalize_waveform=True,
         enable_plotting=save_plot,
         make_movie=save_movie,
-        plot_output_path=plot_output_path,
-        movie_output_path=movie_output_path
+        plot_output_path=str(plot_output_path) if plot_output_path else None,
+        movie_output_path=str(movie_output_path) if movie_output_path else None
     )
 
-    save_l2norm_plot =idx_waveform % l2norm_plot_interval == 0
-    if save_l2norm_plot or is_the_first_evaluated_waveform:               # I want to save the first one alway, cause is the one with the bigger range
+    # Possibly plot L2 norm vs. velocity
+    save_l2norm_plot = (idx_waveform % l2norm_plot_interval == 0) or is_first_waveform
+    if save_l2norm_plot:
         l2norm_plot_name = f"{outfile_name}_L2norm_waveform_{overall_index}"
-        l2norm_plot_path = os.path.join(outdir_path_image, l2norm_plot_name)
-        plot_l2_norm_vs_velocity(
-            gouge_velocity = gouge_velocity_list_waveform,
-            L2norm = L2norm_waveform,
-            overall_index= overall_index,
-            outfile_path =l2norm_plot_path
-        ) 
-    
-    # Return results
+        l2norm_plot_path = outdir_path_image / l2norm_plot_name
+        plotter.plot_l2_norm_vs_velocity(
+            gouge_velocity=gouge_velocity_list_waveform,
+            L2norm=L2norm_waveform,
+            overall_index=overall_index,
+            outfile_path=l2norm_plot_path
+        )
+
     return {
         'previous_min_velocity': previous_min_velocity,
         'gouge_velocity_list_waveform': gouge_velocity_list_waveform,
@@ -699,7 +846,7 @@ def process_velocity(args):
     receiver_position = pzt_depth  # [cm] Receiver is in the side_block_2
 
     # Call DDS_UW_simulation with gouge_velocity_tuple
-    synthetic_waveform, _, _ = DDS_UW_simulation(
+    synthetic_waveform, _, _ = ForwardModeler().DDS_UW_simulation(
         observed_time=observed_time,
         observed_waveform=observed_waveform,
         stf_time=stf_time,
@@ -745,8 +892,8 @@ if __name__ == "__main__":
     side1_params, side2_params, central_params = load_blocks_metadata(
         dir_manager=dir_manager,
         blocks_metadata_name="blocks_metadata.json",
-        side1_key="mauro_side1",
-        side2_key="mauro_side2",
+        side1_key="mauro_old_side1",
+        side2_key="mauro_old_side2",
         central_key="central_block1"
     )
 
@@ -813,7 +960,7 @@ if __name__ == "__main__":
         dir_manager.make_infile_path_list(machine_name, experiment_name, data_type=data_type_uw)
     )
 
-    # 10) Prepare manual pick arrival times
+    # 10) Prepare manual pick arrival times for first guess velocities
     manual_pick_arrival_time_interval_list = prepare_manual_pick_arrival_times(
         dir_manager=dir_manager,
         machine_name=machine_name,
