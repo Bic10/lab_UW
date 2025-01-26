@@ -5,7 +5,7 @@ import json
 import pandas as pd
 from scipy.signal import find_peaks
 import logging
-from typing import Tuple, Dict, Optional, List, TextIO
+from typing import Tuple, Dict, Optional, List, TextIO, Any
 import re
 from pathlib import Path
 
@@ -85,7 +85,7 @@ class UltrasonicDataHandler:
         return acquisition_info, time_info
 
     @staticmethod
-    def read_waveforms(infile: TextIO) -> List[np.ndarray]: 
+    def read_waveforms(infile: TextIO) -> List[List[float]]: 
         """
         Reads waveform data from the body of a TSV file.
         """
@@ -163,7 +163,6 @@ class UltrasonicDataHandler:
         elif isinstance(value, np.str_):
             return str(value)
         return value
-
 
 
 # Class 2: Mechanical Data Handler
@@ -347,3 +346,39 @@ class BlockMetadataHandler:
         if block_key not in self._metadata_dict:
             raise KeyError(f"Block '{block_key}' not found in metadata.")
         return self._metadata_dict[block_key]
+    
+    @classmethod
+    def load_blocks_metadata(
+        cls,
+        dir_manager: Any,
+        blocks_metadata_name: str,
+        block_keys: Tuple[str, ...]
+        ) -> Tuple[dict, ...]:
+        """
+        Class method that:
+          1) Builds the path from a DirectoryManager + blocks_metadata_name
+          2) Loads the JSON into a BlockMetadataHandler
+          3) Retrieves a tuple of block dictionaries for the given 'block_keys'
+
+        Parameters
+        ----------
+        dir_manager : DirectoryManager
+            Directory manager for building paths.
+        blocks_metadata_name : str
+            Name of the blocks metadata JSON file (e.g. "blocks_metadata.json").
+        block_keys : Tuple[str, ...]
+            Keys in the JSON for the blocks (e.g. ("mauro_side1", "central_block1"))
+
+        Returns
+        -------
+        Tuple[dict, ...]
+            A tuple of dictionaries for each block key.
+        """
+        blocks_metadata_path = dir_manager.base_dir / "metadata" / blocks_metadata_name
+        block_handler = cls.from_json(blocks_metadata_path)
+
+        results = []
+        for bk in block_keys:
+            results.append(block_handler.get_block_params(bk))
+
+        return tuple(results)

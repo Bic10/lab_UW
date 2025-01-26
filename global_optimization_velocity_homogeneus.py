@@ -18,55 +18,6 @@ from lab_uw.plotting import InteractivePlotter
 from lab_uw.forward_modeling import ForwardModeler
 
 # Function Definitions
-def load_blocks_metadata(
-    dir_manager: DirectoryManager,
-    blocks_metadata_name: str,
-    side1_key: str,
-    side2_key: str,
-    central_key: str
-) -> Tuple[dict, dict, dict]:
-    """
-    Loads blocks_metadata.json and retrieves parameters for side1, side2, and central blocks.
-
-    Parameters
-    ----------
-    dir_manager : DirectoryManager
-        Directory manager for building paths.
-    blocks_metadata_name : str
-        Name of the blocks metadata JSON file (e.g. "blocks_metadata.json").
-    side1_key : str
-        Key in the JSON for the first side block (e.g. "mauro_side1").
-    side2_key : str
-        Key in the JSON for the second side block (e.g. "mauro_side2").
-    central_key : str
-        Key in the JSON for the central block (e.g. "central_block1").
-
-    Returns
-    -------
-    Tuple[dict, dict, dict]
-        A tuple of dictionaries: (side1_params, side2_params, central_params),
-        each containing geometry and velocity information for the block.
-
-    Raises
-    ------
-    FileNotFoundError
-        If the specified JSON file is not found.
-    KeyError
-        If any of the specified keys are missing from the metadata.
-    """
-    # Build full path to metadata JSON
-    blocks_metadata_path = dir_manager.base_dir / "metadata" / blocks_metadata_name
-
-    # Create handler from JSON
-    block_handler = BlockMetadataHandler.from_json(blocks_metadata_path)
-
-    # Retrieve block parameters
-    side1_params = block_handler.get_block_params(side1_key)
-    side2_params = block_handler.get_block_params(side2_key)
-    central_params = block_handler.get_block_params(central_key)
-
-    return side1_params, side2_params, central_params
-
 def load_and_process_stf(
     dir_manager: DirectoryManager,
     machine_name_stf: str,
@@ -201,7 +152,7 @@ def load_mechanical_data(
     return mech_data, sync_data, sync_peaks
 
 def prepare_manual_pick_arrival_times(
-    dir_manager, machine_name, experiment_name, infile_path_list_uw, start_sample=300
+    dir_manager, machine_name, experiment_name, infile_path_list_uw, start_time=0
 ):
     """
     Prepare manual pick arrival times by processing UW files.
@@ -211,7 +162,7 @@ def prepare_manual_pick_arrival_times(
         machine_name (str): Name of the machine used for the experiment.
         experiment_name (str): Name of the experiment.
         infile_path_list_uw (list[Path]): List of paths to ultrasonic waveform files.
-        start_sample (int, optional): Starting sample for processing. Defaults to 300.
+        start_time (float, optional): Starting time for processing. Defaults to 0s.
 
     Returns:
         list: A list of manual pick arrival time intervals.
@@ -222,7 +173,6 @@ def prepare_manual_pick_arrival_times(
     picked_travel_times_dir.mkdir(parents=True, exist_ok=True)
 
     manual_pick_arrival_time_interval_list = []
-
     for infile_path_uw in infile_path_list_uw:
         stem = Path(infile_path_uw.stem).stem  # Get file stem
         new_file_name = f"{stem}.pkl"
@@ -232,15 +182,18 @@ def prepare_manual_pick_arrival_times(
             with open(infile_path_travel_times, 'rb') as f:
                 manual_pick_arrival_time_interval_list.append(pickle.load(f))
         except FileNotFoundError:
+            waveform_choosed = 0
+            
             # Instantiate UltrasonicDataHandler using the Path object
             ultrasonic_handler = UltrasonicDataHandler.make_UW_data(infile_path_uw)
             observed_waveform_data, metadata = ultrasonic_handler.waveform_data, ultrasonic_handler.metadata
-            observed_waveform = observed_waveform_data[0, start_sample:]
-            observed_time = metadata['time_ax_waveform'][start_sample:]
+            observed_waveform = observed_waveform_data[waveform_choosed]
+            observed_time = metadata['time_ax_waveform']
 
-            picked_times = InteractivePlotter.manual_pick_arrival_times(
+            picked_times = InteractivePlotter().manual_pick_arrival_times(
                 observed_time=observed_time,
                 observed_waveform=observed_waveform,
+                start_time=start_time,
                 outfile_path=infile_path_travel_times
             )
             manual_pick_arrival_time_interval_list.append(picked_times)
@@ -316,6 +269,8 @@ def process_uw_file(
     pzt_velocity = params['pzt_velocity']
     pmma_velocity = params['pmma_velocity']
     outdir_path_image = params['outdir_path_image']
+    number_of_waveforms2process = params["number_of_waveforms2process"]
+
 
     # Initialize results
     velocity_ranges = []
@@ -359,9 +314,8 @@ def process_uw_file(
     observed_time = observed_time[:total_time_to_simulate]
 
     # Downsampling waveforms
-    number_of_waveforms_wanted = 10
-    downsampling = max(1, round(metadata['number_of_waveforms'] / number_of_waveforms_wanted))
-    print(f"Number of waveforms: {metadata['number_of_waveforms']}, wanting {number_of_waveforms_wanted}, downsampling factor: {downsampling}")
+    downsampling = max(1, round(metadata['number_of_waveforms'] / number_of_waveforms2process))
+    print(f"Number of waveforms: {metadata['number_of_waveforms']}, wanting {number_of_waveforms2process}, downsampling factor: {downsampling}")
 
     # Extract thickness & stress from mechanical data
     try:
@@ -625,6 +579,7 @@ def process_waveform(
                     est_vel2 = (-B - np.sqrt(discriminant)) / (2*A)
                     # Usually one is negative or not physically relevant, so pick positive
                     estimated_velocities.append(est_vel1)
+                    print(f"Estimated velocitiy: {est_vel1}")
                 else:
                     print("No real solution for cmin_waveform from manual picks.")
 
@@ -637,7 +592,8 @@ def process_waveform(
             print(f"Manual picks -> cmin={cmin_waveform:.4f}, cmax={cmax_waveform:.4f}")
 
         except:
-            # Fallback if no manual picks are valid
+            # Fallback if no manual picks are valid: empirical estimate of granular material velocity from literature
+            # Problem: this should be material-dependent
             cmin_waveform = 0.035 * (normal_stress**0.25)
             cmax_waveform = 0.055 * (normal_stress**0.25)
             print(f"No manual velocity estimates found. Using fallback cmin={cmin_waveform:.4f}, cmax={cmax_waveform:.4f}")
@@ -889,18 +845,16 @@ if __name__ == "__main__":
     dir_manager = DirectoryManager()
 
     # 2) Load block metadata
-    side1_params, side2_params, central_params = load_blocks_metadata(
+    side1_params, side2_params, central_params = BlockMetadataHandler.load_blocks_metadata(
         dir_manager=dir_manager,
         blocks_metadata_name="blocks_metadata.json",
-        side1_key="mauro_old_side1",
-        side2_key="mauro_old_side2",
-        central_key="central_block1"
+        block_keys=("mauro_side1","mauro_side2","central_block1")
     )
-
+    
     # 3) Basic experiment info
     machine_name = "Brava_2"
-    experiment_name = "s0108sw06car102030"
-    data_type_uw = "uw_data"
+    experiment_name = "s0216suw04anh_50"
+    data_type_uw = "uw_data/data_tsv_files_S"
     data_type_mech = "mechanical_data"
     mech_file_name = f"{experiment_name}_data_rp"
 
@@ -921,11 +875,15 @@ if __name__ == "__main__":
     stf_waveform, stf_time, stf_duration = load_and_process_stf(
         dir_manager=dir_manager,
         machine_name_stf="on_bench",
-        experiment_name_stf="glued_pzt",
+        experiment_name_stf="STF",
         data_type_stf="data_analysis/wavelets",
-        stf_choosen="PIS1_PIS2_glued_250ns_wavelet_number_1",
-        frequency_cutoff=2  # Example cutoff
+        stf_choosen="width500_volt200_s2s_wavelet_number_1",
+        frequency_cutoff=4  # Example cutoff
     )
+
+    import matplotlib.pyplot as plt
+    plt.plot(stf_waveform)
+    plt.show()
 
     # 6) Load mechanical data
     mech_data, sync_data, sync_peaks = load_mechanical_data(
@@ -948,12 +906,14 @@ if __name__ == "__main__":
     pzt_depth = side_block_1 - pzt2grove
     transmitter_position = pzt_depth
 
-    # 8) fixed travel time (example)
+    # 8) fixed travel time in the assembly, without gouge. It is the lower bound for signal detection
     assembly_travel_time = (
         2 * (side_block_1 - transmitter_position)
         + central_block
         - 2*h_groove_side - 2*h_groove_central
     ) / steel_velocity
+
+    print(f"Travel time assembly: {assembly_travel_time}")
 
     # 9) Make UW path list
     infile_path_list_uw = sorted(
@@ -965,13 +925,14 @@ if __name__ == "__main__":
         dir_manager=dir_manager,
         machine_name=machine_name,
         experiment_name=experiment_name,
-        infile_path_list_uw=infile_path_list_uw
+        infile_path_list_uw=infile_path_list_uw,
+        start_time= assembly_travel_time
     )
 
     # 11) Build final parameter dictionary
-    frequency_cutoff = 2
+    frequency_cutoff = 4
     minimum_SNR = 5
-    c_step = 100 * (1e2 / 1e6)
+    c_step = 10 * (1e2 / 1e6)
     c_range = 100 * (1e2 / 1e6)
     range_scaling_factor = 1
 
@@ -997,7 +958,8 @@ if __name__ == "__main__":
         "movie_save_interval": 100,
         "l2norm_plot_interval": 5,
         "outdir_path_image": outdir_path_image[0],
-        "frequency_cutoff": frequency_cutoff
+        "frequency_cutoff": frequency_cutoff,
+        "number_of_waveforms2process": 10
     }
 
     # 12) Process each UW file

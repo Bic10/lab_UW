@@ -8,6 +8,7 @@ import matplotlib.colors as mcolors
 from matplotlib.patches import Rectangle
 import matplotlib.animation as animation
 from typing import Optional, Dict, Tuple, List, Union
+from matplotlib.widgets import Button
 
 class Plotter:
     """
@@ -38,8 +39,9 @@ class Plotter:
     DEFAULT_SETTINGS = {
         'colors': COLORS,
         'fontsize_title': FONT_SIZE,
+        'fontsize_subplot_title': int(0.7 * FONT_SIZE),
         'fontsize_labels': int(0.7 * FONT_SIZE),
-        'fontsize_ticks': int(0.7 * FONT_SIZE),
+        'fontsize_ticks': int(0.5 * FONT_SIZE),
         'line_width': 1.0,
         'figure_size': FIGURE_SIZE,
         'format': FORMAT,
@@ -80,20 +82,13 @@ class Plotter:
 
             # Get the filename from the outfile_path
             outfile_name = outfile_path.name
-
-            # Update the plot title to include the filename
-            current_title = fig.axes[0].get_title()
-            fig.axes[0].set_title(f"{current_title} {outfile_name}")
-
-            # Ensure the outfile_path has the correct extension
+            
             if outfile_path.suffix != format:
                 outfile_path = outfile_path.with_suffix(format)
 
-            # Save the figure to the specified path
             fig.savefig(outfile_path, dpi=300)
-            plt.close(fig)  # Close the figure to prevent it from being displayed
+            plt.close(fig)
         else:
-            # Display the plot if no outfile_path is provided
             plt.show()
 
     def uw_all_plot(self,
@@ -925,39 +920,208 @@ class Plotter:
         
         self.output_path_choice(fig=fig, outfile_path=outfile_path)
        
-class InteractivePlotter:
-    """
-    Class for plotting waveforms and handling interactive user inputs.
-    """
 
-    @staticmethod
-    def manual_pick_arrival_times(
-        observed_time: np.ndarray,
-        observed_waveform: np.ndarray,
-        outfile_path: Optional[Path] = None
-    ) -> List[float]:
+    def plot_direct_and_reflections(
+        self,
+        direct_wave_time: np.ndarray,
+        direct_wave_data: np.ndarray,
+        reflection_info_list: list[dict],
+        outfile_path: Optional[str] = None
+    ) -> None:
         """
-        Manually pick arrival times from waveform data to estimate initial velocities.
+        Plots the direct wave snippet and each reflection wave snippet,
+        showing correlation in the title.
+
+        Parameters
+        ----------
+        direct_wave_time : np.ndarray
+            Time axis for the direct wave snippet (1D).
+        direct_wave_data : np.ndarray
+            Waveform snippet for the direct wave (1D).
+        reflection_info_list : list of dict
+            Output from 'compute_reflections_correlation'. Each dict has:
+            {
+                'arrival_time': float,
+                'reflection_time': np.ndarray,
+                'reflection_data': np.ndarray,
+                'corr_coeff': float,
+            }
+        outfile_path : str, optional
+            If given, the figure is saved to this path; else displayed.
+
+        Notes
+        -----
+        - The direct wave is plotted first, with time shifted to zero.
+        - Each reflection is overlaid (also zero-based in time) and amplitude-scaled
+        to match the direct wave’s maximum for easier visual comparison.
+        - The correlation coefficient is displayed in the title for each subplot.
+        """
+        # Number of reflections
+        n_reflections = len(reflection_info_list)
+
+        # Create subplots: one for direct wave, plus one per reflection
+        fig, axs = plt.subplots(
+            nrows=n_reflections,
+            figsize=self.settings['figure_size']
+        )
+        # If there's only 1 reflection, axs might not be a list
+        if n_reflections  == 1:
+            axs = [axs]
+
+        # For each reflection
+        for i, info in enumerate(reflection_info_list):
+            reflection_time = info['reflection_time']
+            reflection_data = info['reflection_data']
+            arr_time        = info['arrival_time']
+            corr_coeff      = info['corr_coeff']
+
+            # Shift reflection time to start at 0
+            overlay_time = reflection_time - reflection_time[0]
+
+            # Amplitude scale reflection to match direct wave peak
+            max_ref = np.max(reflection_data) if reflection_data.size else 1.0
+            scale_factor = (np.max(direct_wave_data) / max_ref) if max_ref != 0 else 1.0
+
+            axs[i].plot(
+                overlay_time,
+                direct_wave_data,
+                label="Direct",
+                linewidth=self.settings['line_width']
+            )
+            axs[i].plot(
+                overlay_time,
+                scale_factor * reflection_data,
+                label="Reflection scaled",
+                alpha=0.7,
+                linewidth=self.settings['line_width']
+            )
+
+            title_str = f"Direct vs Reflection at {arr_time:.2f} μs, corr={corr_coeff:.3f}"
+            axs[i].set_title(title_str,
+                            fontsize=self.settings['fontsize_subplot_title'],
+                            fontname=self.FONT_TYPE)
+            axs[i].grid(True)
+            axs[i].tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
+
+        fig.tight_layout()
+
+        # Use the Plotter's output_path_choice method to save or show
+        self.output_path_choice(fig=fig, outfile_path=outfile_path)
+
+    def plot_reflection_windows(
+        self,
+        observed_time: np.ndarray,
+        waveform: np.ndarray,
+        t_start_direct: float,
+        t_end_direct: float,
+        reflection_info_list: list[dict],
+        idx_Dstart: int,
+        idx_Dend: int,
+        title: str = "Reflections highlighted",
+        x_label: str = "Time (μs)",
+        y_label: str = "Amplitude",
+        outfile_path: Optional[str] = None
+    ) -> None:
+        """
+        Plots the main waveform and highlights the direct wave arrival window,
+        plus each reflection window.
 
         Parameters
         ----------
         observed_time : np.ndarray
-            Array of time values corresponding to the observed waveform.
-        observed_waveform : np.ndarray
-            The observed waveform data.
-        outfile_path : Optional[Path]
-            Path to save the picked arrival times. If None, the picked times are not saved to a file.
+            The full time axis of the waveform.
+        waveform : np.ndarray
+            1D array of the full waveform.
+        t_start_direct : float
+            The picked start time (in the same units as observed_time) for the direct arrival.
+        t_end_direct : float
+            The picked end time for the direct arrival.
+        reflection_info_list : list of dict
+            Output from 'compute_reflections_correlation'. Each dict has:
+            {
+                'arrival_time': float,
+                'reflection_time': np.ndarray,
+                'reflection_data': np.ndarray,
+                'corr_coeff': float,
+            }
+        idx_Dstart : int
+            Index in observed_time corresponding to t_start_direct.
+        idx_Dend : int
+            Index in observed_time corresponding to t_end_direct.
+        title : str, optional
+            Plot title. Default "Reflections highlighted".
+        x_label : str, optional
+            X-axis label. Default "Time (μs)".
+        y_label : str, optional
+            Y-axis label. Default "Amplitude".
+        outfile_path : str, optional
+            If given, the figure is saved at this path; else displayed interactively.
 
         Returns
         -------
-        picked_times : List[float]
-            List of picked arrival times in seconds.
+        None
+            The function produces a plot, either saving or displaying it.
+        """
 
-        Notes
-        -----
-        - Left-click on the plot to pick arrival times.
-        - Close the plot window to finish picking.
-        - Picked times will be displayed and optionally saved to `outfile_path`.
+        # 1) Create figure/axis using class settings
+        fig, ax = plt.subplots(figsize=self.settings['figure_size'])
+
+        # 2) Plot the main waveform
+        ax.plot(observed_time, waveform, label="Waveform", linewidth=self.settings['line_width'])
+
+        # 3) Highlight the direct arrival region
+        ax.axvspan(t_start_direct, t_end_direct, facecolor='r', alpha=0.2, label="Direct Arrival")
+
+        # 4) Basic labeling & grid
+        ax.set_xlabel(x_label, fontsize=self.settings['fontsize_labels'])
+        ax.set_ylabel(y_label, fontsize=self.settings['fontsize_labels'])
+        ax.set_title(
+            title,
+            fontsize=self.settings['fontsize_title'],
+            fontname=self.FONT_TYPE
+        )
+        ax.grid(True)
+        ax.tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
+
+        # 5) For reflection i, snippet is from arr_time to arr_time + direct_arrival_span
+        direct_arrival_span = idx_Dend - idx_Dstart
+        for i, reflection_info in enumerate(reflection_info_list, start=1):
+            arr_time = reflection_info['arrival_time']
+            ref_start_idx = np.searchsorted(observed_time, arr_time)
+            ref_end_idx   = ref_start_idx + direct_arrival_span
+            if ref_end_idx > len(observed_time):
+                break
+
+            ax.axvspan(
+                observed_time[ref_start_idx],
+                observed_time[ref_end_idx - 1],
+                facecolor='g',
+                alpha=0.2,
+                label="Reflection windows" if i == 1 else None
+            )
+
+        ax.legend(fontsize=self.settings['fontsize_ticks'])
+
+        # 6) Adjust layout and let the class method handle saving/showing
+        fig.tight_layout()
+        self.output_path_choice(fig=fig, outfile_path=outfile_path)
+
+class InteractivePlotter(Plotter):
+    """
+    A specialized Plotter class that provides interactive methods for human-needed operations.
+    Inherits from Plotter so it has self.settings, etc.
+    """
+
+    def manual_pick_arrival_times(
+        self,
+        observed_time: np.ndarray,
+        observed_waveform: np.ndarray,
+        start_time: Optional[float]= 0,
+        outfile_path: Optional[Path] = None
+    ) -> List[float]:
+        """
+        Manually pick arrival times from waveform data to estimate initial velocities.
+        Uses the same self.settings as other plotting methods in this class.
         """
         # Validate inputs
         if observed_time.ndim != 1 or observed_waveform.ndim != 1:
@@ -965,48 +1129,72 @@ class InteractivePlotter:
         if len(observed_time) != len(observed_waveform):
             raise ValueError("observed_time and observed_waveform must have the same length.")
 
-        # Initialize a list to store picked arrival times
-        picked_times = []
+        picked_times: List[float] = []
+        picking_mode = [False]  # store in mutable for closure
 
-        # Function to handle mouse clicks
         def onclick(event):
-            if event.button == 1 and event.inaxes:  # Left click within axes
+            """
+            Only pick if in picking mode. Otherwise, let zoom/pan do its job.
+            """
+
+            if picking_mode[0] and event.button == 1 and event.inaxes:
+                picking_mode[0] = not picking_mode[0]
+                print(f"Picking mode = {picking_mode[0]}")
                 picked_time = event.xdata
                 picked_times.append(picked_time)
-                print(f"Picked time: {picked_time:.6f} seconds")
-
-                # Mark the picked time on the plot
+                print(f"Picked time: {picked_time:.6f}")
                 event.inaxes.axvline(x=picked_time, color='r', linestyle='--')
                 plt.draw()
 
-        # Plot the waveform data
-        fig, ax = plt.subplots()
+        def start_picking_callback(event):
+            """
+            Button callback to enable picking mode.
+            """
+            picking_mode[0] = True
+            print("Picking mode enabled. Left-click to pick arrival times.")
+
+        # 1. Create figure/axes
+        fig, ax = plt.subplots(figsize=self.settings['figure_size'])
+        plt.subplots_adjust(bottom=0.2)  # leave room for button
+
+        # 2. Plot the waveform
         ax.plot(observed_time, observed_waveform, label='Waveform')
-        ax.set_xlabel('Time (seconds)')
-        ax.set_ylabel('Amplitude')
-        ax.set_title('Pick Arrival Times by Clicking')
+        ax.set_xlabel('Time [$\\mu s$]', fontsize=self.settings['fontsize_labels'])
+        ax.set_ylabel('Amplitude', fontsize=self.settings['fontsize_labels'])
+        if outfile_path is not None:
+            title_str = f"File: {outfile_path.name}"
+        else:
+            title_str = "Pick Arrival Times"
+        ax.set_title(title_str, fontsize=self.settings['fontsize_title'])
+        ax.set_xlim([observed_time[0], observed_time[-1]])
+        ax.set_ylim([np.amin(observed_waveform), np.amax(observed_waveform)])
         ax.legend()
         ax.grid(True)
 
-        # Connect the click event to the onclick function
-        cid = fig.canvas.mpl_connect('button_press_event', onclick)
+        # Visual reference up to start_time
+        ax.axvspan(0, start_time, facecolor='0.2', alpha=0.3)
+        ax.vlines(x=start_time, ymin=np.amin(observed_waveform), ymax=np.amax(observed_waveform), colors="k")
 
-        # Show the plot and allow picking
+        # 3. Create a "Start Picking" button
+        ax_button = plt.axes([0.7, 0.05, 0.2, 0.075])  # [left, bottom, width, height]
+        pick_button = Button(ax_button, "Click to Allow Picking")
+
+        # 4. Connect callbacks
+        cid = fig.canvas.mpl_connect('button_press_event', onclick)
+        pick_button.on_clicked(start_picking_callback)
+
+        # 5. Show the plot and wait for user interaction
         plt.show()
 
-        # Disconnect the event handler
+        # After the figure is closed, disable picking
         fig.canvas.mpl_disconnect(cid)
 
-        # Save picked times to file if outfile_path is provided
+        # 6. Save the picked times if desired
         if outfile_path:
-            # Ensure outfile_path is a Path object
-            outfile_path = Path(outfile_path)
-
-            # Create parent directories if they don't exist
             outfile_path.parent.mkdir(parents=True, exist_ok=True)
-
             with open(outfile_path, "wb") as f:
                 pickle.dump(picked_times, f)
             print(f"Picked times saved to {outfile_path}")
 
         return picked_times
+
