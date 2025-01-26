@@ -6,32 +6,6 @@ from lab_uw.directory_manager import DirectoryManager
 from lab_uw.data_io import UltrasonicDataHandler, BlockMetadataHandler
 from lab_uw.plotting import InteractivePlotter, Plotter
 
-def load_data(
-    infile_path: Path
-) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Loads the uw file, returns a single-averaged waveform and time axis.
-
-    Parameters
-    ----------
-    infile_path: Path
-        The file where the ultrasonic waveforms are stored
-    Returns
-    -------
-    (observed_time, waveform) : (np.ndarray, np.ndarray)
-        The time axis and the single averaged waveform from the file.
-    """
-
-    ultrasonic_handler = UltrasonicDataHandler.make_UW_data(infile_path)
-    data, metadata = ultrasonic_handler.waveform_data, ultrasonic_handler.metadata
-    observed_time = metadata['time_ax_waveform']
-
-    # Average all waveforms in that file
-    waveform = np.mean(data, axis=0)
-
-    return observed_time, waveform
-
-
 def pick_direct_arrival(
     observed_time: np.ndarray,
     waveform: np.ndarray
@@ -289,6 +263,7 @@ def main():
     machine_name = "on_bench"
     experiment_name = "STF"
     data_type = "uw_data/data_tsv_files"
+    wave_tipe = "_p"
     block_metadata_filename = "blocks_metadata.json"
     block_id = "on_bench_STF2"
     # Guess or define a margin, step_size
@@ -296,77 +271,108 @@ def main():
     step_size = 0.01     # [mus] increments step. At best should be the sampling frequency
 
     dir_manager = DirectoryManager(base_dir=base_dir)
-
-    # 1) Load block thickness
+    # Load block thickness
     block_params, = BlockMetadataHandler.load_blocks_metadata(
         dir_manager=dir_manager,
         blocks_metadata_name=block_metadata_filename,
         block_keys=(block_id,)
     )
-    block_thickness_cm = block_params["z"]
-
     infile_path_list = sorted(dir_manager.make_infile_path_list(
-        machine_name, experiment_name, data_type=data_type
+        machine_name, experiment_name, data_type=data_type + wave_tipe
     ))
 
-    infile_path = infile_path_list[20]
-    # 2) Load the single file and get the wave/time
-    observed_time, waveform = load_data(
-        infile_path= infile_path
-    )
+    # Use only one file for manual picking, then the same guess will be used for all the others
+    file_manual_pick = np.random.choice(len(infile_path_list))
 
-    # 3) Pick direct arrival times
-    t_start_direct_picked, t_end_direct_picked = pick_direct_arrival(observed_time, waveform)
-    direct_arrival_span = t_end_direct_picked - t_start_direct_picked
-    print(f"Picked direct arrival: start={t_start_direct_picked:.2f}, end={t_end_direct_picked:.2f}")
+    for infile_path in infile_path_list:
+        # Load the single file and get the wave/time
+        ultrasonic_handler = UltrasonicDataHandler.make_UW_data(infile_path)
+        data, metadata = ultrasonic_handler.waveform_data, ultrasonic_handler.metadata
+        observed_time = metadata['time_ax_waveform']
+        # Average all waveforms in that file
+        waveform = np.mean(data, axis=0)
 
-    results = iterate_direct_arrival_times(
-        observed_time=observed_time,
-        waveform=waveform,
-        t_start_nominal=t_start_direct_picked,
-        direct_arrival_span=direct_arrival_span,
-        search_margin=search_margin,
-        step_size=step_size,
-        max_time=observed_time[-1]
-    )
+        # Pick direct arrival times
+        if file_manual_pick:
+            t_start_direct_picked, t_end_direct_picked = pick_direct_arrival(observed_time, waveform)
+            direct_arrival_span = t_end_direct_picked - t_start_direct_picked
+            print(f"Picked direct arrival: start={t_start_direct_picked:.2f}, end={t_end_direct_picked:.2f}")
+            file_manual_pick = None
 
-    best_t_start = results["best_t_start"]
-    best_reflection_info_list = results["best_reflection_info_list"]
-    best_corr_score = results["best_corr_score"]
+        results = iterate_direct_arrival_times(
+            observed_time=observed_time,
+            waveform=waveform,
+            t_start_nominal=t_start_direct_picked,
+            direct_arrival_span=direct_arrival_span,
+            search_margin=search_margin,
+            step_size=step_size,
+            max_time=observed_time[-1]
+        )
 
-    print(f"Best t_start = {best_t_start:.3f} %\\mu%s")
-    print(f"Best correlation score =\n{best_corr_score}")
-    print(f"Lenght of best refleciton list = {len(best_reflection_info_list)}")
+        best_t_start = results["best_t_start"]
+        best_reflection_info_list = results["best_reflection_info_list"]
+        best_corr_score = results["best_corr_score"]
 
-    #  best snippet => direct wave snippet
-    final_idx_Dstart = np.searchsorted(observed_time, best_t_start)
-    final_idx_Dend   = np.searchsorted(observed_time, best_t_start+direct_arrival_span)
-    direct_wave_data = waveform[final_idx_Dstart:final_idx_Dend]
-    direct_wave_time = observed_time[final_idx_Dstart:final_idx_Dend]
+        print(f"Best t_start = {best_t_start:.3f} %\\mu%s")
+        print(f"Best correlation score =\n{best_corr_score}")
 
-    # Then plot final reflection windows
-    plotter = Plotter()
-    plotter.plot_reflection_windows(
-        observed_time=observed_time,
-        waveform=waveform,
-        t_start_direct=best_t_start,
-        t_end_direct=best_t_start + direct_arrival_span,
-        reflection_info_list=best_reflection_info_list,
-        idx_Dstart=final_idx_Dstart,
-        idx_Dend=final_idx_Dend,
-        title="Reflection windows for best t_start",
-    )
+        #  best snippet => direct wave snippet
+        final_idx_Dstart = np.searchsorted(observed_time, best_t_start)
+        final_idx_Dend   = np.searchsorted(observed_time, best_t_start+direct_arrival_span)
+        direct_wave_data = waveform[final_idx_Dstart:final_idx_Dend]
+        direct_wave_time = observed_time[final_idx_Dstart:final_idx_Dend]
 
-    # Also overlay the final correlations:
-    plotter.plot_direct_and_reflections(
-        direct_wave_time=direct_wave_time,
-        direct_wave_data=direct_wave_data,
-        reflection_info_list=best_reflection_info_list,
-    )
+        # SAVE STFs AND THEIR METADATA 
+        data_types_output = ["source_time_functions"+wave_tipe,"stf_images_reflection_windows"+wave_tipe,"stf_images_direct-reflections_correlation"+wave_tipe]
+        outdir_path_data = dir_manager.make_data_analysis_folders(machine_name = machine_name, experiment_name=experiment_name, data_types=data_types_output)
 
-    # 8) Compute velocity
-    velocity_estimate = block_thickness_cm / best_t_start
-    print(f"Estimated velocity = {velocity_estimate:.4f} cm/us (assuming t_start is one-way travel)")
+        infile_path = Path(infile_path)  # Convert to Path object
+        while infile_path.suffix:
+            infile_path = infile_path.with_suffix('')
+        infile_name = infile_path.stem
+        outfile_name = infile_name 
+
+        stf_data = direct_wave_data
+        # HEREDITATE METADATA AND UPDATE IT
+        stf_metadata = metadata.copy()         # copy is needed, otherwise both will point to the same memory!!!
+        stf_metadata['number_of_samples'] = len(stf_data)
+        stf_metadata['number_of_waveforms'] = 1
+        stf_metadata['time_ax_waveform'] = metadata['time_ax_waveform'][final_idx_Dstart:final_idx_Dend]
+        ultrasonic_handler.save_waveform_json(data = stf_data, 
+                                            metadata = stf_metadata, 
+                                            outfile_path = Path(outdir_path_data[0]) / outfile_name)
+
+        # Plot final reflection windows
+        plotter = Plotter()
+        try: 
+            plotter.plot_reflection_windows(
+                observed_time=observed_time,
+                waveform=waveform,
+                t_start_direct=best_t_start,
+                t_end_direct=best_t_start + direct_arrival_span,
+                reflection_info_list=best_reflection_info_list,
+                idx_Dstart=final_idx_Dstart,
+                idx_Dend=final_idx_Dend,
+                title="Reflection windows for best t_start",
+                outfile_path= Path(outdir_path_data[1]) / outfile_name
+            )
+
+        except:
+            print(observed_time.size)
+            print(waveform.size)
+
+        # Also overlay the final correlations:
+        plotter.plot_direct_and_reflections(
+            direct_wave_time=direct_wave_time,
+            direct_wave_data=direct_wave_data,
+            reflection_info_list=best_reflection_info_list,
+            outfile_path= Path(outdir_path_data[2]) / outfile_name 
+        )
+
+        # Compute velocity
+        block_thickness_cm = block_params["z"]
+        velocity_estimate = block_thickness_cm / best_t_start
+        print(f"Estimated velocity = {velocity_estimate:.4f} cm/us (assuming t_start is one-way travel)")
 
 if __name__ == "__main__":
     main()
