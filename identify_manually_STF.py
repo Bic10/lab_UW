@@ -263,7 +263,7 @@ def main():
     machine_name = "on_bench"
     experiment_name = "STF"
     data_type = "uw_data/data_tsv_files"
-    wave_tipe = "_p"
+    wave_tipe = "_s"
     block_metadata_filename = "blocks_metadata.json"
     block_id = "on_bench_STF2"
     # Guess or define a margin, step_size

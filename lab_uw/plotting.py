@@ -713,7 +713,7 @@ class Plotter:
                             c: np.ndarray,
                             layer_starts: np.ndarray,
                             pzt_layer_width: float,
-                            pmma_layer_width: float,
+                            pla_layer_width: float,
                             outfile_path: Optional[str] = None) -> None:
         """
         Plot the velocity model with layers and smoothing.
@@ -723,7 +723,7 @@ class Plotter:
             c (np.ndarray): Velocity model array.
             layer_starts (np.ndarray): Cumulative positions along the sample.
             pzt_layer_width (float): Width of the PZT layer.
-            pmma_layer_width (float): Width of the PMMA layer.
+            pla_layer_width (float): Width of the pla layer.
             outfile_path (str, optional): Path to save the plot.
 
         Raises:
@@ -740,7 +740,7 @@ class Plotter:
         ax.plot(x, c, label='Velocity Model', color='black', linewidth=self.settings['line_width'])
 
         layers = [
-            {'name': 'PMMA Layer 1', 'start': layer_starts[0], 'end': layer_starts[1], 'color': self.settings['colors']['platinum']},
+            {'name': 'pla Layer 1', 'start': layer_starts[0], 'end': layer_starts[1], 'color': self.settings['colors']['platinum']},
             {'name': 'PZT Layer 1', 'start': layer_starts[1], 'end': layer_starts[2], 'color': self.settings['colors']['indianred']},
             {'name': 'Side Block 1', 'start': layer_starts[2], 'end': layer_starts[3], 'color': self.settings['colors']['lightsteelblue']},
             {'name': 'Groove SB1', 'start': layer_starts[3], 'end': layer_starts[4], 'color': self.settings['colors']['lightgrey']},
@@ -752,7 +752,7 @@ class Plotter:
             {'name': 'Groove SB2', 'start': layer_starts[9], 'end': layer_starts[10], 'color': self.settings['colors']['lightgrey']},
             {'name': 'Side Block 2', 'start': layer_starts[10], 'end': layer_starts[11], 'color': self.settings['colors']['lightsteelblue']},
             {'name': 'PZT Layer 2', 'start': layer_starts[11], 'end': layer_starts[12], 'color': self.settings['colors']['indianred']},
-            {'name': 'PMMA Layer 2', 'start': layer_starts[12], 'end': layer_starts[13], 'color': self.settings['colors']['platinum']},
+            {'name': 'pla Layer 2', 'start': layer_starts[12], 'end': layer_starts[13], 'color': self.settings['colors']['platinum']},
         ]
 
         labels_used = set()
@@ -763,8 +763,8 @@ class Plotter:
             ax.axvspan(layer['start'], layer['end'], color=layer['color'], alpha=0.3, label=label)
 
         # Plot transmitter and receiver positions
-        transmitter_pos = pzt_layer_width + pmma_layer_width
-        receiver_pos = x[-1] - pzt_layer_width - pmma_layer_width
+        transmitter_pos = pzt_layer_width + pla_layer_width
+        receiver_pos = x[-1] - pzt_layer_width - pla_layer_width
         ax.axvline(transmitter_pos, color="red", linestyle='-', label='Transmitter')
         ax.axvline(receiver_pos, color="green", linestyle='-', label='Receiver')
 

@@ -14,7 +14,7 @@ from lab_uw.directory_manager import DirectoryManager
 from lab_uw.signal_processing import SignalProcessor
 from lab_uw.simulation_setup import *
 from lab_uw.forward_modeling import *
-from lab_uw.plotting import InteractivePlotter
+from lab_uw.plotting import InteractivePlotter, Plotter
 from lab_uw.forward_modeling import ForwardModeler
 
 # Function Definitions
@@ -24,7 +24,7 @@ def load_and_process_stf(
     experiment_name_stf: str,
     data_type_stf: str,
     stf_choosen: str,
-    frequency_cutoff: float
+    frequency_cutoff_MHz: float
 ) -> Tuple[np.ndarray, np.ndarray, float]:
     """
     Loads and processes a source time function (stf) from a file.
@@ -41,7 +41,7 @@ def load_and_process_stf(
         Subfolder name indicating where stf data is stored.
     stf_choosen : str
         Stem of the stf file (without extension) to be loaded.
-    frequency_cutoff : float
+    frequency_cutoff_MHz : float
         Frequency cutoff in MHz for lowpass filtering of the stf.
 
     Returns
@@ -86,7 +86,7 @@ def load_and_process_stf(
     stf_waveform_filt, _ = signal_processor.signal2noise_separation_lowpass(
         waveform_data=stf_waveform_raw,
         metadata=stf_metadata,
-        freq_cut=frequency_cutoff
+        freq_cut=frequency_cutoff_MHz
     )
 
     # Shift waveform to start at zero amplitude
@@ -209,10 +209,8 @@ def process_uw_file(
     stf_waveform: np.ndarray,
     stf_time: np.ndarray,
     stf_duration: float,
-    frequency_cutoff: float,
-    outdir_path_l2norm: Path,
     params: Dict[str, Any],
-    plotter: Any = None
+    geometry: List[Dict],
 ) -> None:
     """
     Process a single UW data file.
@@ -235,42 +233,23 @@ def process_uw_file(
         Corresponding time axis of the STF waveform.
     stf_duration : float
         Duration of the STF waveform.
-    frequency_cutoff : float
-        Maximum frequency to use in lowpass filtering.
-    outdir_path_l2norm : Path
-        Directory path for saving results (L2 norm, velocity picks, etc.).
     params : Dict[str, Any]
-        Dictionary of parameters (geometry, velocities, etc.) needed for processing.
-    plotter : Any, optional
-        An instance of a Plotter (or InteractivePlotter) class for visualization. 
-        If None, no plots are generated.
+        Dictionary of parameters needed for processing.
+    geometry : List[Dict]
+        List of material and dimensions for the experiment
 
     Returns
     -------
     None
         Saves results to disk and optionally creates plots of velocity vs. displacement/stress.
     """
-    # Unpack parameters
-    minimum_SNR = params['minimum_SNR']
-    assembly_travel_time = params['assembly_travel_time']
-    c_step = params['c_step']
-    c_range = params['c_range']
-    range_scaling_factor = params['range_scaling_factor']
-    h_groove_side = params['h_groove_side']
-    h_groove_central = params['h_groove_central']
-    steel_velocity = params['steel_velocity']
-    side_block_1 = params['side_block_1']
-    central_block = params['central_block']
-    side_block_2 = params['side_block_2']
-    pzt_depth = params['pzt_depth']
-    transmitter_position = params['transmitter_position']
-    pzt_layer_width = params['pzt_layer_width']
-    pmma_layer_width = params['pmma_layer_width']
-    pzt_velocity = params['pzt_velocity']
-    pmma_velocity = params['pmma_velocity']
-    outdir_path_image = params['outdir_path_image']
-    number_of_waveforms2process = params["number_of_waveforms2process"]
+    print(f"PROCESSING UW DATA IN {infile_path}:")
 
+    # Unpack parameters
+    frequency_cutoff_MHz = params['frequency_cutoff_MHz']
+    number_of_waveforms2process = params["number_of_waveforms2process"]
+    outdir_path_l2norm = params['outdir_path_l2norm']
+    outdir_path_image = params['outdir_path_image']
 
     # Initialize results
     velocity_ranges = []
@@ -284,9 +263,8 @@ def process_uw_file(
     time_s_values = []
 
     # Derive output filenames using pathlib
-    outfile_stem = infile_path.stem  # e.g., "0_compaction_sv1_sh1"
-    outfile_path = outdir_path_l2norm / outfile_stem
-    print(f"PROCESSING UW DATA IN {infile_path}:")
+    outfile_name = infile_path.name.split(".")[0]  
+    outfile_path = outdir_path_l2norm / outfile_name
 
     start_time = tm.time()
 
@@ -305,7 +283,7 @@ def process_uw_file(
     observed_waveform_data, _ = signal_processor.signal2noise_separation_lowpass(
         waveform_data=observed_waveform_data,
         metadata=metadata,
-        freq_cut=frequency_cutoff
+        freq_cut=frequency_cutoff_MHz
     )
 
     # Possibly reduce the number of samples
@@ -376,7 +354,7 @@ def process_uw_file(
             observed_time=observed_time,
             idx_waveform=idx_waveform,
             overall_index=overall_index,
-            outfile_name=outfile_stem,
+            outfile_name=outfile_name,
             previous_min_velocity=previous_min_velocity,
             thickness_gouge_1=thick_g1,
             thickness_gouge_2=thick_g2,
@@ -385,11 +363,8 @@ def process_uw_file(
             stf_waveform=stf_waveform,
             stf_time=stf_time,
             stf_duration=stf_duration,
-            assembly_travel_time=assembly_travel_time,
-            c_step=c_step,
-            c_range=c_range,
-            frequency_cutoff=frequency_cutoff,
-            params=params
+            params=params,
+            geometry=geometry
         )
 
         previous_min_velocity = result['previous_min_velocity']
@@ -406,14 +381,9 @@ def process_uw_file(
             'estimated_velocities': estimated_velocities
         }, f)
 
-    # Now do the final plots
-    # Build a Plotter if none was passed
-    if plotter is None:
-        from lab_uw.plotting import Plotter
-        plotter = Plotter()
-
     # 1) Velocity and stress vs ec_disp_mm
-    plot_name_ec_disp = f"{outfile_stem}_velocity_stress_vs_ec_disp"
+    plotter = Plotter()
+    plot_name_ec_disp = f"{outfile_name}_velocity_stress_vs_ec_disp"
     plot_path_ec_disp = Path(outdir_path_image) / plot_name_ec_disp  # outdir_path_image is in params
 
     plotter.plot_velocity_and_stresses(
@@ -429,7 +399,7 @@ def process_uw_file(
     )
 
     # 2) Velocity and stress vs time_s
-    plot_name_time = f"{outfile_stem}_velocity_stress_vs_time"
+    plot_name_time = f"{outfile_name}_velocity_stress_vs_time"
     plot_path_time = Path(outdir_path_image) / plot_name_time
 
     plotter.plot_velocity_and_stresses(
@@ -461,12 +431,8 @@ def process_waveform(
     stf_waveform: np.ndarray,
     stf_time: np.ndarray,
     stf_duration: float,
-    assembly_travel_time: float,
-    c_step: float,
-    c_range: float,
-    frequency_cutoff: float,
     params: Dict[str, Any],
-    plotter: Optional[Any] = None
+    geometry: Dict[str,Any],
 ) -> Dict[str, Union[float, np.ndarray, None]]:
     """
     Process a single waveform by scanning possible gouge velocities, computing misfit,
@@ -508,12 +474,10 @@ def process_waveform(
         Step size for scanning gouge velocities [cm/μs].
     c_range : float
         Half-range for scanning velocities (in subsequent waveforms).
-    frequency_cutoff : float
+    frequency_cutoff_MHz : float
         Frequency cutoff for simulating or filtering waveforms.
     params : dict
         Dictionary containing relevant geometry, velocity, and plotting parameters.
-    plotter : Plotter, optional
-        An instance of Plotter for generating plots. If None, a local Plotter is created.
 
     Returns
     -------
@@ -526,34 +490,34 @@ def process_waveform(
             'range_factor': Possibly updated range scaling factor if min was at boundary.
     """
     # Unpack additional parameters
+    frequency_cutoff = params['frequency_cutoff_MHz']
     minimum_SNR = params['minimum_SNR']
-    h_groove_side = params['h_groove_side']
-    h_groove_central = params['h_groove_central']
-    steel_velocity = params['steel_velocity']
-    side_block_1 = params['side_block_1']
-    central_block = params['central_block']
-    side_block_2 = params['side_block_2']
-    pzt_depth = params['pzt_depth']
-    transmitter_position = params['transmitter_position']
-    pzt_layer_width = params['pzt_layer_width']
-    pmma_layer_width = params['pmma_layer_width']
-    pzt_velocity = params['pzt_velocity']
-    pmma_velocity = params['pmma_velocity']
+    c_step = params['c_step_cm/mus']
+    c_range = params['c_range_cm/mus']
+    range_scaling_factor = params['range_scaling_factor']
     plot_save_interval = params['plot_save_interval']
     movie_save_interval = params['movie_save_interval']
     l2norm_plot_interval = params['l2norm_plot_interval']
     outdir_path_image_list = params['outdir_path_image']
-    range_scaling_factor = params['range_scaling_factor']
+
+    h_groove_side = geometry['h_groove_side']
+    h_groove_central = geometry['h_groove_central']
+    steel_velocity = geometry['steel_velocity']
+    side_block_1 = geometry['side_block_1']
+    central_block = geometry['central_block']
+    side_block_2 = geometry['side_block_2']
+    pzt_depth = geometry['pzt_depth']
+    pzt_layer_width = geometry['pzt_layer_width']
+    pla_layer_width = geometry['pla_layer_width']
+    pzt_velocity = geometry['pzt_velocity']
+    pla_velocity = geometry['pla_velocity']
+    transmitter_position = geometry['transmitter_position']
+    assembly_travel_time = geometry['assembly_travel_time']
 
     # Convert outdir_path_image_list[0] to a Path
     outdir_path_image = Path(outdir_path_image_list) if isinstance(outdir_path_image_list, str) else outdir_path_image_list
     if isinstance(outdir_path_image, list):
         outdir_path_image = Path(outdir_path_image[0])
-
-    # Ensure we have a Plotter instance
-    if plotter is None:
-        from lab_uw.plotting import Plotter
-        plotter = Plotter()
 
     # ------------------------------------------
     # 1) INITIAL VELOCITY ESTIMATION
@@ -561,41 +525,48 @@ def process_waveform(
     if previous_min_velocity is None:
         # Attempt velocity from manual picks
         try:
-            estimated_velocities = []
-            for picked_time in manual_pick_arrival_time_interval:
-                Delta_t = picked_time - assembly_travel_time
-                L_g = thickness_gouge_1 + thickness_gouge_2
-                L_h = 2 * h_groove_side + 2 * h_groove_central
+            # from lab_uw.utils import solve_quadratic_equation
+            # estimated_velocities = []
+            # for picked_time in manual_pick_arrival_time_interval:                
+            #     # To get an estimation of the velocity from the travel times, we have a
+            #     # Quadratic eq: A*vel^2 + B*vel + C = 0
+            #     Delta_t = picked_time - assembly_travel_time
+            #     L_g = thickness_gouge_1 + thickness_gouge_2
+            #     L_h = 2 * h_groove_side + 2 * h_groove_central
+            #     A = 0.5 * Delta_t
+            #     B = 0.5 * Delta_t * steel_velocity - 0.5 * L_g - L_h
+            #     C = -0.5 * L_g * steel_velocity
+            #     solutions = solve_quadratic_equation(A, B, C, real_only=True, positive_only=True)
+                
+            #     if solutions:
+            #         estimated_velocities.extend(solutions)
+            #         for sol in solutions:
+            #             print(f"Estimated velocity: {sol}")
+            #     else:
+            #         print("No real solution for cmin_waveform from manual picks.")
 
-                # Quadratic eq: A*c^2 + B*c + C = 0
-                A = 0.5 * Delta_t
-                B = 0.5 * Delta_t * steel_velocity - 0.5 * L_g - L_h
-                C = -0.5 * L_g * steel_velocity
-
-                discriminant = B**2 - 4*A*C
-                if discriminant >= 0:
-                    # Keep the positive root
-                    est_vel1 = (-B + np.sqrt(discriminant)) / (2*A)
-                    est_vel2 = (-B - np.sqrt(discriminant)) / (2*A)
-                    # Usually one is negative or not physically relevant, so pick positive
-                    estimated_velocities.append(est_vel1)
-                    print(f"Estimated velocitiy: {est_vel1}")
-                else:
-                    print("No real solution for cmin_waveform from manual picks.")
-
-            cmin_waveform = min(estimated_velocities) if estimated_velocities else None
-            cmax_waveform = max(estimated_velocities) if estimated_velocities else None
-
-            if cmin_waveform is None:
+            # Then you do:
+            if estimated_velocities:
+                cmin_waveform = min(estimated_velocities)
+                cmax_waveform = max(estimated_velocities)
+                print(f"Manual picks -> cmin={cmin_waveform:.4f}, cmax={cmax_waveform:.4f}")
+            else:
                 raise ValueError("Manual picks gave no valid solutions.")
-            
-            print(f"Manual picks -> cmin={cmin_waveform:.4f}, cmax={cmax_waveform:.4f}")
 
         except:
             # Fallback if no manual picks are valid: empirical estimate of granular material velocity from literature
             # Problem: this should be material-dependent
-            cmin_waveform = 0.035 * (normal_stress**0.25)
-            cmax_waveform = 0.055 * (normal_stress**0.25)
+            # cmin_waveform = 0.035 * (normal_stress**0.25)
+            # cmax_waveform = 0.055 * (normal_stress**0.25)
+
+            if wave_type == '_s':
+                cmin_waveform = 0.1
+                cmax_waveform = 0.25
+
+            if wave_type == '_p':
+                cmin_waveform = 0.2
+                cmax_waveform = 0.4
+
             print(f"No manual velocity estimates found. Using fallback cmin={cmin_waveform:.4f}, cmax={cmax_waveform:.4f}")
 
         c_step_waveform = c_step
@@ -655,7 +626,7 @@ def process_waveform(
     num_processes = cpu_count()
 
     def _build_args(gouge_velocity: float):
-        # The process_velocity call expects a tuple: (gouge_velocity, observed_waveform, thickness_g1, thickness_g2, misfit_interval, observed_time, stf_time, stf_waveform, transmitter_position, params)
+        # The process_velocity call expects a tuple: (gouge_velocity, observed_waveform, thickness_g1, thickness_g2, misfit_interval, observed_time, stf_time, stf_waveform, transmitter_position, params, geometry)
         return (
             (gouge_velocity, gouge_velocity),  # same velocity for both layers
             observed_waveform,
@@ -666,7 +637,8 @@ def process_waveform(
             stf_time,
             stf_waveform,
             transmitter_position,
-            params
+            params,
+            geometry
         )
 
     args_list = [_build_args(gv) for gv in gouge_velocity_list_waveform]
@@ -688,7 +660,7 @@ def process_waveform(
     # Check boundary
     if min_idx in (0, len(L2norm_waveform) - 1):
         print(f"Minimum misfit is on the boundary, doubling next search range.")
-        range_scaling_factor = 2.0
+        range_scaling_factor *= range_scaling_factor
 
     previous_min_velocity = best_gouge_velocity
 
@@ -710,18 +682,18 @@ def process_waveform(
     # Construct output paths
     outdir_path_image = Path(outdir_path_image)
     if save_plot:
-        plot_output_name = f"{outfile_name}_waveform_{overall_index}_vel_{best_gouge_velocity:.4f}"
+        plot_output_name = f"{outfile_name}_waveform_{overall_index}_vel_{1e4*best_gouge_velocity:.0f}"
         plot_output_path = outdir_path_image / plot_output_name
     else:
         plot_output_path = None
 
     if save_movie:
-        movie_output_name = f"{outfile_name}_waveform_{overall_index}_vel_{best_gouge_velocity:.4f}.mp4"
+        movie_output_name = f"{outfile_name}_waveform_{overall_index}_vel_{1e4*best_gouge_velocity:.0f}.mp4"
         movie_output_path = outdir_path_image / movie_output_name
     else:
         movie_output_path = None
 
-    synthetic_waveform, _, _ = ForwardModeler().DDS_UW_simulation(
+    synthetic_waveform, _,_,_,_,_,_,_,_,_,_,_ = ForwardModeler().forward_simulation(
         observed_time=observed_time,
         observed_waveform=observed_waveform,
         stf_time=stf_time,
@@ -733,11 +705,11 @@ def process_waveform(
         transmitter_position=transmitter_position,
         receiver_position=receiver_position,
         pzt_layer_width=pzt_layer_width,
-        pmma_layer_width=pmma_layer_width,
+        pla_layer_width=pla_layer_width,
         steel_velocity=steel_velocity,
         gouge_velocity=(best_gouge_velocity, best_gouge_velocity),
         pzt_velocity=pzt_velocity,
-        pmma_velocity=pmma_velocity,
+        pla_velocity=pla_velocity,
         misfit_interval=misfit_interval,
         fixed_minimum_velocity=best_gouge_velocity,
         normalize_waveform=True,
@@ -750,6 +722,7 @@ def process_waveform(
     # Possibly plot L2 norm vs. velocity
     save_l2norm_plot = (idx_waveform % l2norm_plot_interval == 0) or is_first_waveform
     if save_l2norm_plot:
+        plotter = Plotter()
         l2norm_plot_name = f"{outfile_name}_L2norm_waveform_{overall_index}"
         l2norm_plot_path = outdir_path_image / l2norm_plot_name
         plotter.plot_l2_norm_vs_velocity(
@@ -772,7 +745,7 @@ def process_velocity(args):
     Function to process a single velocity value in multiprocessing.
     """
     (
-        gouge_velocity_tuple,  # Now a tuple
+        gouge_velocity_tuple,  
         observed_waveform,
         thickness_gouge_1,
         thickness_gouge_2,
@@ -781,28 +754,30 @@ def process_velocity(args):
         stf_time,
         stf_waveform,
         transmitter_position,
-        params
+        params,
+        geometry
     ) = args
 
     # Unpack parameters
-    h_groove_side = params['h_groove_side']
-    h_groove_central = params['h_groove_central']
-    steel_velocity = params['steel_velocity']
-    side_block_1 = params['side_block_1']
-    central_block = params['central_block']
-    side_block_2 = params['side_block_2']
-    pzt_depth = params['pzt_depth']
-    pzt_layer_width = params['pzt_layer_width']
-    pmma_layer_width = params['pmma_layer_width']
-    pzt_velocity = params['pzt_velocity']
-    pmma_velocity = params['pmma_velocity']
-    frequency_cutoff = params['frequency_cutoff']
+    frequency_cutoff_MHz = params['frequency_cutoff_MHz']
+
+    h_groove_side = geometry['h_groove_side']
+    h_groove_central = geometry['h_groove_central']
+    steel_velocity = geometry['steel_velocity']
+    side_block_1 = geometry['side_block_1']
+    central_block = geometry['central_block']
+    side_block_2 = geometry['side_block_2']
+    pzt_depth = geometry['pzt_depth']
+    pzt_layer_width = geometry['pzt_layer_width']
+    pla_layer_width = geometry['pla_layer_width']
+    pzt_velocity = geometry['pzt_velocity']
+    pla_velocity = geometry['pla_velocity']
 
     sample_dimensions = [side_block_1, thickness_gouge_1, central_block, thickness_gouge_2, side_block_2]
     receiver_position = pzt_depth  # [cm] Receiver is in the side_block_2
 
     # Call DDS_UW_simulation with gouge_velocity_tuple
-    synthetic_waveform, _, _ = ForwardModeler().DDS_UW_simulation(
+    synthetic_waveform, _,_,_,_,_,_,_,_,_,_,_ = ForwardModeler().forward_simulation(
         observed_time=observed_time,
         observed_waveform=observed_waveform,
         stf_time=stf_time,
@@ -810,15 +785,15 @@ def process_velocity(args):
         sample_dimensions=sample_dimensions,
         h_groove_side=h_groove_side,
         h_groove_central=h_groove_central,
-        frequency_cutoff=frequency_cutoff,
+        frequency_cutoff=frequency_cutoff_MHz,
         transmitter_position=transmitter_position,
         receiver_position=receiver_position,
         pzt_layer_width=pzt_layer_width,
-        pmma_layer_width=pmma_layer_width,
+        pla_layer_width=pla_layer_width,
         steel_velocity=steel_velocity,
         gouge_velocity=gouge_velocity_tuple,  # Pass the tuple
         pzt_velocity=pzt_velocity,
-        pmma_velocity=pmma_velocity,
+        pla_velocity=pla_velocity,
         misfit_interval=misfit_interval,
         fixed_minimum_velocity=min(gouge_velocity_tuple),
         normalize_waveform=True,
@@ -838,54 +813,58 @@ def process_velocity(args):
 
 ###############################################################################################################
 # Main Execution
-
 if __name__ == "__main__":
 
-    # 1) Initialize directory manager
+    # Initialize directory manager
     dir_manager = DirectoryManager()
-
-    # 2) Load block metadata
-    side1_params, side2_params, central_params = BlockMetadataHandler.load_blocks_metadata(
-        dir_manager=dir_manager,
-        blocks_metadata_name="blocks_metadata.json",
-        block_keys=("mauro_side1","mauro_side2","central_block1")
-    )
     
-    # 3) Basic experiment info
+    # Basic experiment info
     machine_name = "Brava_2"
     experiment_name = "s0216suw04anh_50"
-    data_type_uw = "uw_data/data_tsv_files_S"
+    wave_type = "_s"
+    data_type_uw = "uw_data/data_tsv_files" + wave_type
     data_type_mech = "mechanical_data"
     mech_file_name = f"{experiment_name}_data_rp"
 
-    # 4) Create output directories
+    # Create output directories
     outdir_path_l2norm = dir_manager.make_data_analysis_folders(
         machine_name=machine_name,
         experiment_name=experiment_name,
-        data_types=["global_optimization_velocity"]
+        data_types=["global_optimization_velocity"+wave_type]
     )
     outdir_path_image = dir_manager.make_data_analysis_folders(
         machine_name=machine_name,
         experiment_name=experiment_name,
-        data_types=["global_optimization_velocity_images_and_movie"]
+        data_types=["global_optimization_velocity_images_and_movie"+wave_type]
     )
-    print(f"The misfits calculated will be saved at path:\n\t {outdir_path_l2norm[0]}")
+    print(f"The misfits calculated will be saved at path:\n{outdir_path_l2norm[0]}")
 
-    # 5) Load the source time function
+    # Basic simulation parameters 
+    params = {
+        "frequency_cutoff_MHz": 4,
+        "minimum_SNR": 5,
+        "c_step_cm/mus":  50 * (1e2 / 1e6),
+        "c_range_cm/mus":  100 * (1e2 / 1e6),
+        "range_scaling_factor": 1,
+        "plot_save_interval": 1,
+        "movie_save_interval": 1,
+        "l2norm_plot_interval": 1,
+        "number_of_waveforms2process": 10,
+        "outdir_path_l2norm": outdir_path_l2norm[0],
+        "outdir_path_image": outdir_path_image[0]
+    }
+
+    # Load the source time function
     stf_waveform, stf_time, stf_duration = load_and_process_stf(
         dir_manager=dir_manager,
         machine_name_stf="on_bench",
         experiment_name_stf="STF",
-        data_type_stf="data_analysis/wavelets",
-        stf_choosen="width500_volt200_s2s_wavelet_number_1",
-        frequency_cutoff=4  # Example cutoff
+        data_type_stf="data_analysis/source_time_functions"+wave_type,
+        stf_choosen="width500_volt200_s2s",
+        frequency_cutoff_MHz= params['frequency_cutoff_MHz']
     )
 
-    import matplotlib.pyplot as plt
-    plt.plot(stf_waveform)
-    plt.show()
-
-    # 6) Load mechanical data
+    # Load mechanical data
     mech_data, sync_data, sync_peaks = load_mechanical_data(
         dir_manager=dir_manager,
         machine_name=machine_name,
@@ -894,26 +873,39 @@ if __name__ == "__main__":
         mech_file_name=mech_file_name
     )
 
-    # 7) Build or compute all needed geometry info / velocity from side1_params, side2_params, central_params
-    side_block_1 = side1_params["z"]
-    side_block_2 = side2_params["z"]
-    central_block = central_params["z"]
-    h_groove_side = side1_params["h_grooves"]
-    h_groove_central = central_params["h_grooves"]
-    steel_velocity = side1_params["steel_velocity"]  # Already cm/μs?
+    # Load block metadata
+    side1_params, side2_params, central_params = BlockMetadataHandler.load_blocks_metadata(
+        dir_manager=dir_manager,
+        blocks_metadata_name="blocks_metadata.json",
+        block_keys=("mauro_side1","mauro_side2","central_block1")
+    )
 
-    pzt2grove = side1_params["z_pzt2grove"]
-    pzt_depth = side_block_1 - pzt2grove
-    transmitter_position = pzt_depth
+    # Build or compute all needed geometry info / velocity from side1_params, side2_params, central_params
+    geometry = {
+        "side_block_1": side1_params["z"],
+        "central_block": central_params["z"],
+        "side_block_2": side2_params["z"],
+        "h_groove_side": side1_params["h_grooves"],
+        "h_groove_central": central_params["h_grooves"],
+        "steel_velocity": side1_params["steel_velocity"+wave_type],
+        "pzt_depth": side1_params["z"]-side1_params["z_pzt2grove"],
+        "pzt_layer_width": side1_params["pzt_layer_width"],
+        "pla_layer_width": side1_params["pla_layer_width"],
+        "pzt_velocity": side1_params["pzt_velocity"+wave_type],
+        "pla_velocity": side1_params["pla_velocity"+wave_type],
+    }
+
+    # the tramitter position, in this case, is precisely where the pzt is in depth (z-axis)
+    geometry['transmitter_position'] =  geometry['pzt_depth']
 
     # 8) fixed travel time in the assembly, without gouge. It is the lower bound for signal detection
-    assembly_travel_time = (
-        2 * (side_block_1 - transmitter_position)
-        + central_block
-        - 2*h_groove_side - 2*h_groove_central
-    ) / steel_velocity
+    geometry['assembly_travel_time'] = (2*(geometry['side_block_1']-geometry['transmitter_position']) 
+                                        + geometry['central_block']
+                                        - 2*geometry['h_groove_side']
+                                        - 2*geometry['h_groove_central']
+                                        ) / geometry['steel_velocity']
 
-    print(f"Travel time assembly: {assembly_travel_time}")
+    print(f"Travel time assembly: {geometry['assembly_travel_time']}")
 
     # 9) Make UW path list
     infile_path_list_uw = sorted(
@@ -926,42 +918,9 @@ if __name__ == "__main__":
         machine_name=machine_name,
         experiment_name=experiment_name,
         infile_path_list_uw=infile_path_list_uw,
-        start_time= assembly_travel_time
+        start_time= geometry['assembly_travel_time']
     )
-
-    # 11) Build final parameter dictionary
-    frequency_cutoff = 4
-    minimum_SNR = 5
-    c_step = 10 * (1e2 / 1e6)
-    c_range = 100 * (1e2 / 1e6)
-    range_scaling_factor = 1
-
-    params = {
-        "minimum_SNR": minimum_SNR,
-        "assembly_travel_time": assembly_travel_time,
-        "c_step": c_step,
-        "c_range": c_range,
-        "range_scaling_factor": range_scaling_factor,
-        "h_groove_side": h_groove_side,
-        "h_groove_central": h_groove_central,
-        "steel_velocity": steel_velocity,
-        "side_block_1": side_block_1,
-        "central_block": central_block,
-        "side_block_2": side_block_2,
-        "pzt_depth": pzt_depth,
-        "transmitter_position": transmitter_position,
-        "pzt_layer_width": side1_params["pzt_layer_width"],
-        "pmma_layer_width": side1_params["pmma_layer_width"],
-        "pzt_velocity": side1_params["pzt_velocity"],
-        "pmma_velocity": side1_params["pmma_velocity"],
-        "plot_save_interval": 1,
-        "movie_save_interval": 100,
-        "l2norm_plot_interval": 5,
-        "outdir_path_image": outdir_path_image[0],
-        "frequency_cutoff": frequency_cutoff,
-        "number_of_waveforms2process": 10
-    }
-
+ 
     # 12) Process each UW file
     for chosen_uw_file, infile_path in enumerate(infile_path_list_uw):
         manual_pick_arrival_time_interval = manual_pick_arrival_time_interval_list[chosen_uw_file]
@@ -975,9 +934,6 @@ if __name__ == "__main__":
             stf_waveform=stf_waveform,
             stf_time=stf_time,
             stf_duration=stf_duration,
-            frequency_cutoff=frequency_cutoff,
-            outdir_path_l2norm=outdir_path_l2norm[0],
-            params=params
+            params=params,
+            geometry = geometry
         )
-
-

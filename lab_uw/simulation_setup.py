@@ -2,6 +2,7 @@
 import numpy as np
 from typing import Union, Tuple, Optional
 from lab_uw.plotting import Plotter
+from pathlib import Path
 
 class Grid1D:
     def __init__(self, cmin: float, fmax: float, grid_len: float, ppt: int):
@@ -88,14 +89,15 @@ class VelocityModel1D:
         x_transmitter: float,
         x_receiver: float,
         pzt_layer_width: float,
-        pmma_layer_width: float,
+        pla_layer_width: float,
         h_groove_side: float,
         h_groove_central: float,
         steel_velocity: float,
         gouge_velocity: Union[Tuple[float, float], Tuple[np.ndarray, np.ndarray]],
         pzt_velocity: float,
-        pmma_velocity: float,
-        plotting: bool = False
+        pla_velocity: float,
+        plotting: bool = False,
+        outfile_path: Path = False
     ):
         '''
         Initialize the 1D velocity model.
@@ -105,23 +107,19 @@ class VelocityModel1D:
         self.x_transmitter = x_transmitter
         self.x_receiver = x_receiver
         self.pzt_layer_width = pzt_layer_width
-        self.pmma_layer_width = pmma_layer_width
+        self.pla_layer_width = pla_layer_width
         self.h_groove_side = h_groove_side
         self.h_groove_central = h_groove_central
         self.steel_velocity = steel_velocity
         self.gouge_velocity = gouge_velocity
         self.pzt_velocity = pzt_velocity
-        self.pmma_velocity = pmma_velocity
-        self.plotting = plotting
-
+        self.pla_velocity = pla_velocity
+        self.outfile_path = outfile_path
         self.layer_starts = None
         self.idx_dict = {}
         self.values = None  # Velocity model array
 
         self.build_velocity_model()
-
-        if self.plotting:
-            self.plot()
 
     def build_velocity_model(self):
         '''
@@ -148,7 +146,7 @@ class VelocityModel1D:
 
         # Compute cumulative positions along the sample
         self.layer_thicknesses = [
-            self.pmma_layer_width,
+            self.pla_layer_width,
             self.pzt_layer_width,
             side_block_1 - self.x_transmitter,
             self.h_groove_side,
@@ -160,7 +158,7 @@ class VelocityModel1D:
             self.h_groove_side,
             side_block_2 - self.x_receiver,
             self.pzt_layer_width,
-            self.pmma_layer_width
+            self.pla_layer_width
         ]
         self.layer_starts = np.concatenate(([0.0], np.cumsum(self.layer_thicknesses)))
 
@@ -171,7 +169,7 @@ class VelocityModel1D:
         x = self.x  # For brevity
 
         regions = [
-            'pmma_1',
+            'pla_1',
             'pzt_1',
             'side_block_1',
             'groove_sb1',
@@ -183,7 +181,7 @@ class VelocityModel1D:
             'groove_sb2',
             'side_block_2',
             'pzt_2',
-            'pmma_2'
+            'pla_2'
         ]
 
         for i, region in enumerate(regions):
@@ -202,7 +200,7 @@ class VelocityModel1D:
         '''
         Assign velocities to each region.
         '''
-        self.assign_constant_velocity('pmma_1', self.pmma_velocity)
+        self.assign_constant_velocity('pla_1', self.pla_velocity)
         self.assign_constant_velocity('pzt_1', self.pzt_velocity)
         # Side Block 1 remains steel_velocity
 
@@ -218,7 +216,7 @@ class VelocityModel1D:
 
         # Side Block 2 remains steel_velocity
         self.assign_constant_velocity('pzt_2', self.pzt_velocity)
-        self.assign_constant_velocity('pmma_2', self.pmma_velocity)
+        self.assign_constant_velocity('pla_2', self.pla_velocity)
 
     def assign_constant_velocity(self, region_name: str, velocity: float):
         '''
@@ -289,7 +287,7 @@ class VelocityModel1D:
             c=self.values,
             layer_starts=self.layer_starts,
             pzt_layer_width=self.pzt_layer_width,
-            pmma_layer_width=self.pmma_layer_width,
+            pla_layer_width=self.pla_layer_width,
             outfile_path=outfile_path
         )
 
