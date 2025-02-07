@@ -1,8 +1,9 @@
 # lab_uw/forward_modeling.py
 
+import sys
 import numpy as np
 from numpy import linalg as LA
-from typing import Union, Tuple, Optional, Dict
+from typing import Union, Tuple, Optional, Dict, Any
 
 from lab_uw.simulation_setup import Grid1D, VelocityModel1D, Source1D, Receiver1D, SimulationTime
 from lab_uw.plotting import Plotter
@@ -12,12 +13,6 @@ class ForwardModeler:
     """
     Class for simulating ultrasonic wave propagation and optionally
     performing gradient-based local inversion.
-
-    The forward modeling is done in a dedicated method (`forward_simulation`),
-    and the local gradient descent is in `run_local_inversion`.
-
-    This way, you can reuse `forward_simulation` for any global (or other)
-    inversion method you choose to implement elsewhere.
     """
 
     def __init__(self, plotter: Optional["Plotter"] = None):
@@ -29,29 +24,17 @@ class ForwardModeler:
         """
         self.plotter = plotter or Plotter()
 
-    # -------------------------------------------------------------------------
-    # 1) Forward Modeling Only
-    # -------------------------------------------------------------------------
-    def forward_simulation(
+    def dds_forward_simulation(
         self,
         observed_time: np.ndarray,
         observed_waveform: np.ndarray,
         stf_time: np.ndarray,
         stf_waveform: np.ndarray,
-        sample_dimensions: Tuple[float, float, float],
-        h_groove_side: float,
-        h_groove_central: float,
         frequency_cutoff: float,
-        transmitter_position: float,
-        receiver_position: float,
-        pzt_layer_width: float,
-        pla_layer_width: float,
-        steel_velocity: float,
+        assembly_dict: Dict[str,Any],
         gouge_velocity: Union[Tuple[float, float], Tuple[np.ndarray, np.ndarray]],
-        pzt_velocity: float,
-        pla_velocity: float,
+        gouge_thickness: Tuple[float, float],
         misfit_interval: np.ndarray,
-        # The next four are relevant for building a brand-new velocity model if needed:
         fixed_minimum_velocity: Optional[float] = None,
         initial_velocity_model: Optional[np.ndarray] = None,
         idx_dict: Optional[Dict[str, np.ndarray]] = None,
@@ -69,12 +52,7 @@ class ForwardModeler:
         Args:
             observed_time, observed_waveform: 1D arrays of the measured data.
             stf_time, stf_waveform: 1D arrays defining the source time function.
-            sample_dimensions: (thickness_steel1, thickness_gouge, thickness_steel2)
-            h_groove_side, h_groove_central: geometric groove parameters.
             frequency_cutoff: frequency cutoff for building grid spacing.
-            transmitter_position, receiver_position: for geometry offset.
-            pzt_layer_width, pla_layer_width: widths of PZT and PLA layers.
-            steel_velocity, gouge_velocity, pzt_velocity, pla_velocity: wave speeds in each region.
             misfit_interval: 1D array of indices over which we compute the misfit.
             fixed_minimum_velocity: if no initial velocity is provided, we need the min velocity to build the grid.
             initial_velocity_model, idx_dict: can be provided to skip building a new velocity model.
@@ -112,6 +90,30 @@ class ForwardModeler:
 
         # Unpack gouge velocities
         gouge_velocity_1, gouge_velocity_2 = gouge_velocity
+        gouge_thickness_1,gouge_thickness_2 = gouge_thickness
+
+        # Unpack assembly parameters
+        wave_type = assembly_dict["wave_type"]
+        side1_params = assembly_dict["side1_params"] 
+        side2_params = assembly_dict["side2_params"] 
+        central_params = assembly_dict["central_params"] 
+        transmitter_position = assembly_dict["transmitter_position"]
+        receiver_position = assembly_dict["receiver_position"]
+        pla_layer_width = side1_params["pla_layer_width"]     
+        pzt_layer_width = side1_params["pzt_layer_width"]     
+        steel_velocity = side1_params["velocity" + wave_type]
+        h_groove_side = side1_params["h_grooves"]
+        h_groove_central = central_params["h_grooves"]
+        pzt_velocity = side1_params["pzt_velocity" + wave_type]
+        pla_velocity = side1_params["pla_velocity" + wave_type]
+
+        sample_dimensions = [
+            side1_params["z"],
+            gouge_thickness_1,
+            central_params["z"],
+            gouge_thickness_2,
+            side1_params["z"]
+        ]
 
         # Compute total length for 1D domain
         total_length = (
@@ -137,28 +139,28 @@ class ForwardModeler:
                 raise ValueError(
                     "Must provide `fixed_minimum_velocity` if building a new velocity model."
                 )
-            # EXACT CODE FROM YOUR SETUP: create the 1D grid
+            # create the 1D grid space axis
             grid = Grid1D(
                 cmin=fixed_minimum_velocity,
                 fmax=frequency_cutoff,
                 grid_len=total_length,
-                ppt=10  # points per wavelength, or another suitable choice
+                ppt=10  # points per wavelength
             )
             spatial_axis = grid.spatial_axis
             dx = grid.dx
             num_x = grid.total_grid_points
 
-            # EXACT CODE FROM YOUR SETUP: define sim time
+            # Define time axis
             sim_time_handler = SimulationTime(
                 observed_time=observed_time,
                 dx=dx,
-                max_velocity=steel_velocity
+                max_velocity=max(steel_velocity,gouge_velocity_1)
             )
             simulation_time = sim_time_handler.simulation_time
             dt = sim_time_handler.dt
             num_t = sim_time_handler.num_t
 
-            # EXACT CODE FROM YOUR SETUP: build velocity model
+            # build velocity model
             velocity_model_handler = VelocityModel1D(
                 x=spatial_axis,
                 sample_dimensions=sample_dimensions,
@@ -197,9 +199,7 @@ class ForwardModeler:
         )
         receiver.create_spatial_function(spatial_axis=spatial_axis, dx=dx, flip_side=None)
 
-        # ---------------------------------------------------------------------
         # Forward modeling (single pass)
-        # ---------------------------------------------------------------------
         wavefield_forward = pseudospectral_1D(
             num_x=num_x,
             delta_x=dx,

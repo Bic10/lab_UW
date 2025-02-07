@@ -75,3 +75,79 @@ def solve_quadratic_equation(A, B, C, real_only=True, positive_only=False):
                 solutions.append(x)
 
     return solutions
+
+def cross_correlate_wavelet_signal(wavelet, signal, dt):
+    """
+    Cross-correlate a wavelet with a recorded signal.
+    
+    Parameters
+    ----------
+    wavelet : ndarray
+        1D array containing the wavelet.
+    signal : ndarray
+        1D array containing the recorded signal.
+    dt : float
+        Sampling interval in seconds.
+
+    Returns
+    -------
+    time_shift : float
+        Estimated time shift (in seconds) of the wavelet within the signal.
+    corr : ndarray
+        Full cross-correlation array.
+    lags : ndarray
+        Array of sample lags corresponding to 'corr'.
+    """
+    from scipy.signal import correlate
+    # 'full' mode returns cross-correlation at all possible lags
+    corr = correlate(signal, wavelet, mode='full')
+    # Lags: from -(len(wavelet)-1) to (len(signal)-1)
+    lags = np.arange(-len(wavelet) + 1, len(signal))
+    
+    # Index of the maximum correlation
+    imax = np.argmax(corr)
+    # Convert sample lag to time shift
+    best_lag = lags[imax]
+    time_shift = best_lag * dt
+    
+    return time_shift, corr, lags
+
+def plot_wavelet_over_signal(wavelet, signal, dt, time_shift):
+    """
+    Plot the recorded signal and overlay the wavelet shifted to the 
+    location of maximum correlation.
+    
+    Parameters
+    ----------
+    wavelet : ndarray
+        1D array containing the wavelet.
+    signal : ndarray
+        1D array containing the recorded signal.
+    dt : float
+        Sampling interval in seconds.
+    time_shift : float
+        Time shift (in seconds) at which to overlay the wavelet.
+    """
+    import matplotlib.pyplot as plt
+
+    t_signal = np.arange(len(signal)) * dt
+    t_wavelet = np.arange(len(wavelet)) * dt
+    
+    # You might want to align the *center* of the wavelet to the best match:
+    # For instance, shift by half the wavelet length to place its center
+    # at the correlation maximum:
+    # shift_correction = (len(wavelet)//2) * dt
+    # t_wavelet_shifted = t_wavelet + time_shift - shift_correction
+    
+    # If you prefer to overlay the wavelet's start at the best match, do:
+    t_wavelet_shifted = t_wavelet + time_shift
+    
+    plt.figure(figsize=(8,4))
+    plt.plot(t_signal, signal, label='Recorded Signal')
+    plt.plot(t_wavelet_shifted, wavelet, label='Wavelet (Aligned)', color='red')
+    plt.title("Wavelet Overlaid on Recorded Signal")
+    plt.xlabel("Time (s)")
+    plt.ylabel("Amplitude")
+    plt.legend()
+    plt.grid(True)
+    plt.show()

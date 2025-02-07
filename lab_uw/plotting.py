@@ -581,19 +581,34 @@ class Plotter:
             raise ValueError("t, sp_simulated, and sp_recorded must have the same length.")
 
         fig, ax = plt.subplots(figsize=self.settings['figure_size'])
-        ax.plot(t, sp_recorded, label="Recorded Waveform", color=self.settings['colors']['black_olive'], linewidth=self.settings['line_width'])
-        ax.plot(t, sp_simulated, label="Simulated Waveform", color=self.settings['colors']['indianred'], linewidth=self.settings['line_width'])
-
         # Check misfit_interval
         if misfit_interval.size > 0:
             misfit_start_time = t[misfit_interval[0]]
             misfit_end_time = t[misfit_interval[-1]]
 
             # Add shaded region for misfit interval
-            ax.axvspan(misfit_start_time, misfit_end_time, color=self.settings['colors']['dutch_white'], alpha=0.5)
+            ax.axvspan(t[0],misfit_start_time, color=self.settings['colors']['lightsteelblue'])
+            ax.axvspan(misfit_start_time, misfit_end_time, color=self.settings['colors']['sandybrown'], alpha=0.5)
+            ax.axvspan(misfit_end_time,t[-1], color=self.settings['colors']['lightsteelblue'])            
             ax.text(misfit_start_time, min(sp_recorded), 'Misfit Evaluation Interval', ha='left', fontsize=self.settings['fontsize_labels'], color=self.settings['colors']['darkslategray'])
         else:
             print("Misfit interval is empty; cannot shade region.")
+
+        COLORS = {
+            'reseda_green': '#788054',
+            'dutch_white': '#E0D6B4',
+            'khaki': '#CABB9E',
+            'platinum': '#E7E5E2',
+            'black_olive': '#322D1E',
+            'sandybrown': 'sandybrown',
+            'lightgrey': 'lightgrey',
+            'lightsteelblue': 'lightsteelblue',
+            'indianred': 'indianred',
+            'teal': 'teal',
+            'darkslategray': 'darkslategray'
+        }
+        ax.plot(t, sp_recorded, label="Recorded Waveform", color=self.settings['colors']['platinum'], linewidth=2*self.settings['line_width'])
+        ax.plot(t, sp_simulated, label="Simulated Waveform", color=self.settings['colors']['indianred'], linewidth=2*self.settings['line_width'])
 
         ax.set_title("Ultrasonic Wave Simulation", fontsize=self.settings['fontsize_title'])
         ax.set_xlabel("Time [$\\mu s$]", fontsize=self.settings['fontsize_labels'])
@@ -683,7 +698,7 @@ class Plotter:
             # Configure ax2 for the recorded signal
             ax2.set_ylim([t[0], t[-1]])
             ax2.set_xlim([-1, 1])  # Set x-limits to small range around zero
-            ax2.set_title("Recorded Signal", fontsize=self.settings['fontsize_title'], color=self.settings['colors']['darkslategray'])
+            ax2.set_ylabel("Recorded Signal", fontsize=self.settings['fontsize_labels'], color=self.settings['colors']['darkslategray'])
             ax2.axis('off')
             ax2.invert_yaxis()
 
