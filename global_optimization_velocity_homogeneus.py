@@ -264,6 +264,7 @@ def process_uw_file(
     print(f"PROCESSING UW DATA IN {infile_path}:")
 
     # Unpack parameters
+    maxtime2simulate = params["maxtime2simulate_mus"]
     frequency_cutoff_MHz = params['frequency_cutoff_MHz']
     number_of_waveforms2process = params["number_of_waveforms2process"]
     outdir_path_l2norm = params['outdir_path_l2norm']
@@ -295,9 +296,7 @@ def process_uw_file(
     observed_waveform_data = observed_waveform_data - np.mean(observed_waveform_data)
     initial_time_removed = np.searchsorted(observed_time,assembly_dict['assembly_travel_time'])
     observed_waveform_data[:, :initial_time_removed] = 0
-    idx = 800
-    observed_waveform = observed_waveform_data[:idx]
-    observed_time = metadata['time_ax_waveform'][idx]
+
     # Lowpass filtering
     signal_processor = SignalProcessor()
     observed_waveform_data, _ = signal_processor.signal2noise_separation_lowpass(
@@ -307,9 +306,9 @@ def process_uw_file(
     )
 
     # Possibly reduce the number of samples
-    total_time_to_simulate = int(metadata['number_of_samples'])
-    observed_waveform_data = observed_waveform_data[:, :total_time_to_simulate]
-    observed_time = observed_time[:total_time_to_simulate]
+    idx_maxtime = np.searchsorted(observed_time, maxtime2simulate)
+    observed_waveform_data = observed_waveform_data[:, :idx_maxtime]
+    observed_time = observed_time[:idx_maxtime]
 
     # Downsampling waveforms
     downsampling = max(1, round(metadata['number_of_waveforms'] / number_of_waveforms2process))
@@ -349,10 +348,6 @@ def process_uw_file(
         ):
 
         idx_data = idx_waveform * downsampling
-
-        # Adjust thickness (In some of the reduced data are surely wrong
-        # thick_g1 *= 2.0
-        # thick_g2 *= 2.0
 
         try:
             observed_waveform = observed_waveform_data[idx_data]
@@ -653,7 +648,6 @@ def process_waveform(
         
     misfit_interval = np.where((observed_time > min_travel_time) & (observed_time < max_travel_time + stf_duration))[0]
     
-    # sys.exit(f"{min_travel_time},{max_travel_time}")
     # Generate velocity array
     gouge_velocity_list_waveform = np.arange(cmin_waveform, cmax_waveform, c_step_waveform)
     print(f"Velocity range = [{cmin_waveform:.4f}, {cmax_waveform:.4f}] with step={c_step_waveform:.4f}")
@@ -833,9 +827,10 @@ if __name__ == "__main__":
 
     # Basic simulation parameters 
     params = {
+        "maxtime2simulate_mus" : 40,
         "frequency_cutoff_MHz": 4,
         "minimum_SNR": 5,
-        "c_step_cm/mus":  50 * (1e2 / 1e6),
+        "c_step_cm/mus":  10 * (1e2 / 1e6),
         "c_range_cm/mus":  100 * (1e2 / 1e6),
         "range_scaling_factor": 1,
         "plot_save_interval": 1,
@@ -852,7 +847,7 @@ if __name__ == "__main__":
         machine_name_stf="on_bench",
         experiment_name_stf="STF",
         data_type_stf="data_analysis/source_time_functions" + wave_type,
-        stf_choosen="width250_volt200_p2p",
+        stf_choosen="width500_volt200_p2p",
         frequency_cutoff_MHz= params['frequency_cutoff_MHz']
     )
 

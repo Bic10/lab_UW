@@ -608,7 +608,7 @@ class Plotter:
             'darkslategray': 'darkslategray'
         }
         ax.plot(t, sp_recorded, label="Recorded Waveform", color=self.settings['colors']['platinum'], linewidth=2*self.settings['line_width'])
-        ax.plot(t, sp_simulated, label="Simulated Waveform", color=self.settings['colors']['indianred'], linewidth=2*self.settings['line_width'])
+        ax.plot(t, sp_simulated, label="Simulated Waveform", color=self.settings['colors']['indianred'], linewidth=2*self.settings['line_width'],alpha=0.25)
 
         ax.set_title("Ultrasonic Wave Simulation", fontsize=self.settings['fontsize_title'])
         ax.set_xlabel("Time [$\\mu s$]", fontsize=self.settings['fontsize_labels'])
@@ -669,14 +669,22 @@ class Plotter:
             ax.tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
 
             # Shading layers based on indices in idx_dict
-            layers = [
-                {'name': 'Gouge Layer 1', 'idx': idx_dict.get('gouge_1'), 'color': self.settings['colors']['sandybrown']},
-                {'name': 'Gouge Layer 2', 'idx': idx_dict.get('gouge_2'), 'color': self.settings['colors']['sandybrown']},
-                {'name': 'PZT Layer 1', 'idx': idx_dict.get('pzt_1'), 'color': self.settings['colors']['indianred']},
-                {'name': 'PZT Layer 2', 'idx': idx_dict.get('pzt_2'), 'color': self.settings['colors']['indianred']},
-                {'name': 'Grooves', 'idx': np.concatenate([idx_dict.get(key) for key in ['groove_sb1', 'groove_cb1', 'groove_cb2', 'groove_sb2'] if idx_dict.get(key) is not None]), 'color': self.settings['colors']['lightgrey']},
-                {'name': 'Steel Blocks', 'idx': np.concatenate([idx_dict.get(key) for key in ['side_block_1', 'central_block', 'side_block_2'] if idx_dict.get(key) is not None]), 'color': self.settings['colors']['lightsteelblue']},
-            ]
+            # work around for the new added possibility to plot the experiment of an homogeneus block, the one to find STF
+            if len(sample_dimensions) == 1:
+                layers = [
+                      {'name': 'PZT Layer 1', 'idx': idx_dict.get('pzt_1'), 'color': self.settings['colors']['indianred']},
+                      {'name': 'PZT Layer 2', 'idx': idx_dict.get('pzt_2'), 'color': self.settings['colors']['indianred']},
+                      {'name': 'Steel Blocks', 'idx': idx_dict.get('steel_block'), 'color': self.settings['colors']['lightsteelblue']},
+                ]
+            else:    
+                layers = [
+                    {'name': 'PZT Layer 1', 'idx': idx_dict.get('pzt_1'), 'color': self.settings['colors']['indianred']},
+                    {'name': 'PZT Layer 2', 'idx': idx_dict.get('pzt_2'), 'color': self.settings['colors']['indianred']},
+                    {'name': 'Steel Blocks', 'idx': np.concatenate([idx_dict.get(key) for key in ['side_block_1', 'central_block', 'side_block_2'] if idx_dict.get(key) is not None]), 'color': self.settings['colors']['lightsteelblue']},
+                    {'name': 'Grooves', 'idx': np.concatenate([idx_dict.get(key) for key in ['groove_sb1', 'groove_cb1', 'groove_cb2', 'groove_sb2'] if idx_dict.get(key) is not None]), 'color': self.settings['colors']['lightgrey']},
+                    {'name': 'Gouge Layer 1', 'idx': idx_dict.get('gouge_1'), 'color': self.settings['colors']['sandybrown']},
+                    {'name': 'Gouge Layer 2', 'idx': idx_dict.get('gouge_2'), 'color': self.settings['colors']['sandybrown']}
+                ]
 
             for layer in layers:
                 if layer['idx'] is not None and len(layer['idx']) > 0:
@@ -754,22 +762,31 @@ class Plotter:
         fig, ax = plt.subplots(figsize=self.settings['figure_size'])
         ax.plot(x, c, label='Velocity Model', color='black', linewidth=self.settings['line_width'])
 
-        layers = [
-            {'name': 'pla Layer 1', 'start': layer_starts[0], 'end': layer_starts[1], 'color': self.settings['colors']['platinum']},
-            {'name': 'PZT Layer 1', 'start': layer_starts[1], 'end': layer_starts[2], 'color': self.settings['colors']['indianred']},
-            {'name': 'Side Block 1', 'start': layer_starts[2], 'end': layer_starts[3], 'color': self.settings['colors']['lightsteelblue']},
-            {'name': 'Groove SB1', 'start': layer_starts[3], 'end': layer_starts[4], 'color': self.settings['colors']['lightgrey']},
-            {'name': 'Gouge Layer 1', 'start': layer_starts[4], 'end': layer_starts[5], 'color': self.settings['colors']['sandybrown']},
-            {'name': 'Groove CB1', 'start': layer_starts[5], 'end': layer_starts[6], 'color': self.settings['colors']['lightgrey']},
-            {'name': 'Central Block', 'start': layer_starts[6], 'end': layer_starts[7], 'color': self.settings['colors']['lightsteelblue']},
-            {'name': 'Groove CB2', 'start': layer_starts[7], 'end': layer_starts[8], 'color': self.settings['colors']['lightgrey']},
-            {'name': 'Gouge Layer 2', 'start': layer_starts[8], 'end': layer_starts[9], 'color': self.settings['colors']['sandybrown']},
-            {'name': 'Groove SB2', 'start': layer_starts[9], 'end': layer_starts[10], 'color': self.settings['colors']['lightgrey']},
-            {'name': 'Side Block 2', 'start': layer_starts[10], 'end': layer_starts[11], 'color': self.settings['colors']['lightsteelblue']},
-            {'name': 'PZT Layer 2', 'start': layer_starts[11], 'end': layer_starts[12], 'color': self.settings['colors']['indianred']},
-            {'name': 'pla Layer 2', 'start': layer_starts[12], 'end': layer_starts[13], 'color': self.settings['colors']['platinum']},
-        ]
+        try: 
+            layers = [
+                {'name': 'pla Layer 1', 'start': layer_starts[0], 'end': layer_starts[1], 'color': self.settings['colors']['platinum']},
+                {'name': 'PZT Layer 1', 'start': layer_starts[1], 'end': layer_starts[2], 'color': self.settings['colors']['indianred']},
+                {'name': 'Side Block 1', 'start': layer_starts[2], 'end': layer_starts[3], 'color': self.settings['colors']['lightsteelblue']},
+                {'name': 'Groove SB1', 'start': layer_starts[3], 'end': layer_starts[4], 'color': self.settings['colors']['lightgrey']},
+                {'name': 'Gouge Layer 1', 'start': layer_starts[4], 'end': layer_starts[5], 'color': self.settings['colors']['sandybrown']},
+                {'name': 'Groove CB1', 'start': layer_starts[5], 'end': layer_starts[6], 'color': self.settings['colors']['lightgrey']},
+                {'name': 'Central Block', 'start': layer_starts[6], 'end': layer_starts[7], 'color': self.settings['colors']['lightsteelblue']},
+                {'name': 'Groove CB2', 'start': layer_starts[7], 'end': layer_starts[8], 'color': self.settings['colors']['lightgrey']},
+                {'name': 'Gouge Layer 2', 'start': layer_starts[8], 'end': layer_starts[9], 'color': self.settings['colors']['sandybrown']},
+                {'name': 'Groove SB2', 'start': layer_starts[9], 'end': layer_starts[10], 'color': self.settings['colors']['lightgrey']},
+                {'name': 'Side Block 2', 'start': layer_starts[10], 'end': layer_starts[11], 'color': self.settings['colors']['lightsteelblue']},
+                {'name': 'PZT Layer 2', 'start': layer_starts[11], 'end': layer_starts[12], 'color': self.settings['colors']['indianred']},
+                {'name': 'pla Layer 2', 'start': layer_starts[12], 'end': layer_starts[13], 'color': self.settings['colors']['platinum']},
+            ]
 
+        except IndexError:
+            layers = [
+                {'name': 'pla Layer 1', 'start': layer_starts[0], 'end': layer_starts[1], 'color': self.settings['colors']['platinum']},
+                {'name': 'PZT Layer 1', 'start': layer_starts[1], 'end': layer_starts[2], 'color': self.settings['colors']['indianred']},
+                {'name': 'Steel Block', 'start': layer_starts[2], 'end': layer_starts[3], 'color': self.settings['colors']['lightsteelblue']},
+                {'name': 'PZT Layer 2', 'start': layer_starts[3], 'end': layer_starts[4], 'color': self.settings['colors']['indianred']},
+                {'name': 'pla Layer 2', 'start': layer_starts[4], 'end': layer_starts[5], 'color': self.settings['colors']['platinum']},
+            ]
         labels_used = set()
 
         for layer in layers:
@@ -902,40 +919,39 @@ class Plotter:
         self.output_path_choice(fig=fig, outfile_path=outfile_path)
 
     def plot_l2_norm_vs_velocity(self,
-                                 gouge_velocity: np.ndarray,
+                                 velocity: np.ndarray,
                                  L2norm: np.ndarray,
                                  overall_index: int,
                                  outfile_path: Optional[str] = None) -> None:
         """
-        Plot the L2 norm vs Gouge velocity.
+        Plot the L2 norm vs  velocity.
 
         Args:
-            gouge_velocity (np.ndarray): Array of gouge velocity values.
+            _velocity (np.ndarray): Array of  velocity values.
             L2norm (np.ndarray): Array of L2 norm values corresponding to the velocity.
             overall_index (int): Index of the waveform for plot title.
             outfile_path (str, optional): Path to save the plot.
 
         Raises:
-            ValueError: If gouge_velocity and L2norm are not 1D arrays of the same length.
+            ValueError: If _velocity and L2norm are not 1D arrays of the same length.
         """
-        if gouge_velocity.ndim != 1 or L2norm.ndim != 1:
-            raise ValueError("gouge_velocity and L2norm must be 1D numpy arrays.")
-        if len(gouge_velocity) != len(L2norm):
-            raise ValueError("gouge_velocity and L2norm must have the same length.")
+        if velocity.ndim != 1 or L2norm.ndim != 1:
+            raise ValueError("_velocity and L2norm must be 1D numpy arrays.")
+        if len(velocity) != len(L2norm):
+            raise ValueError("_velocity and L2norm must have the same length.")
 
         fig, ax = plt.subplots(figsize=self.settings['figure_size'])
         
-        # Plotting the L2 norm vs gouge velocity
-        ax.plot(gouge_velocity, L2norm, linewidth=self.settings['line_width'])
-        ax.set_xlabel('Gouge Velocity (cm/$\\mu$s)', fontsize=self.settings['fontsize_labels'])
+        # Plotting the L2 norm vs  velocity
+        ax.plot(velocity, L2norm, linewidth=self.settings['line_width'])
+        ax.set_xlabel(' Velocity (cm/$\\mu$s)', fontsize=self.settings['fontsize_labels'])
         ax.set_ylabel('L2 Norm of Residuals', fontsize=self.settings['fontsize_labels'])
-        ax.set_title(f'L2 Norm vs Gouge Velocity for Waveform {overall_index}', fontsize=self.settings['fontsize_title'])
+        ax.set_title(f'L2 Norm vs  Velocity for Waveform {overall_index}', fontsize=self.settings['fontsize_title'])
         ax.tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
         ax.grid(alpha=0.3)
         
         self.output_path_choice(fig=fig, outfile_path=outfile_path)
        
-
     def plot_direct_and_reflections(
         self,
         direct_wave_time: np.ndarray,

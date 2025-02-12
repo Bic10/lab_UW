@@ -5,7 +5,7 @@ import numpy as np
 from numpy import linalg as LA
 from typing import Union, Tuple, Optional, Dict, Any
 
-from lab_uw.simulation_setup import Grid1D, VelocityModel1D, Source1D, Receiver1D, SimulationTime
+from lab_uw.simulation_setup import Grid1D, VelocityModel1D, Source1D, Receiver1D, SimulationTime, VelocityModel1D_SingleBlock
 from lab_uw.plotting import Plotter
 from lab_uw.signal_processing import SignalProcessor
 
@@ -35,8 +35,7 @@ class ForwardModeler:
         gouge_velocity: Union[Tuple[float, float], Tuple[np.ndarray, np.ndarray]],
         gouge_thickness: Tuple[float, float],
         misfit_interval: np.ndarray,
-        fixed_minimum_velocity: Optional[float] = None,
-        initial_velocity_model: Optional[np.ndarray] = None,
+        minimum_velocity: Optional[float] = None,
         idx_dict: Optional[Dict[str, np.ndarray]] = None,
         # Some general optional flags:
         normalize_waveform: bool = True,
@@ -54,7 +53,6 @@ class ForwardModeler:
             stf_time, stf_waveform: 1D arrays defining the source time function.
             frequency_cutoff: frequency cutoff for building grid spacing.
             misfit_interval: 1D array of indices over which we compute the misfit.
-            fixed_minimum_velocity: if no initial velocity is provided, we need the min velocity to build the grid.
             initial_velocity_model, idx_dict: can be provided to skip building a new velocity model.
             normalize_waveform: if True, amplitude-scale synthetic to match observed.
             enable_plotting, make_movie: if True, produce output via Plotter.
@@ -123,60 +121,44 @@ class ForwardModeler:
             - (transmitter_position + receiver_position)
         )
 
-        # ---------------------------------------------------------------------
-        # Build or reuse velocity model
-        # ---------------------------------------------------------------------
-        # If the user gave us a velocity_model and idx_dict, we just reuse it:
-        if (initial_velocity_model is not None) and (idx_dict is not None):
-            velocity_model = initial_velocity_model.copy()
-            num_x = len(velocity_model)
-            spatial_axis = np.linspace(start=0, stop=total_length, num=num_x)
-            dx = spatial_axis[1] - spatial_axis[0]
+        # create the 1D grid space axis
+        grid = Grid1D(
+            cmin=minimum_velocity,
+            fmax=frequency_cutoff,
+            grid_len=total_length,
+            ppt=10  # points per wavelength
+        )
+        spatial_axis = grid.spatial_axis
+        dx = grid.dx
+        num_x = grid.total_grid_points
 
-        # Otherwise, build from scratch
-        else:
-            if fixed_minimum_velocity is None:
-                raise ValueError(
-                    "Must provide `fixed_minimum_velocity` if building a new velocity model."
-                )
-            # create the 1D grid space axis
-            grid = Grid1D(
-                cmin=fixed_minimum_velocity,
-                fmax=frequency_cutoff,
-                grid_len=total_length,
-                ppt=10  # points per wavelength
-            )
-            spatial_axis = grid.spatial_axis
-            dx = grid.dx
-            num_x = grid.total_grid_points
+        # Define time axis
+        sim_time_handler = SimulationTime(
+            observed_time=observed_time,
+            dx=dx,
+            max_velocity=max(steel_velocity,gouge_velocity_1)
+        )
+        simulation_time = sim_time_handler.simulation_time
+        dt = sim_time_handler.dt
+        num_t = sim_time_handler.num_t
 
-            # Define time axis
-            sim_time_handler = SimulationTime(
-                observed_time=observed_time,
-                dx=dx,
-                max_velocity=max(steel_velocity,gouge_velocity_1)
-            )
-            simulation_time = sim_time_handler.simulation_time
-            dt = sim_time_handler.dt
-            num_t = sim_time_handler.num_t
-
-            # build velocity model
-            velocity_model_handler = VelocityModel1D(
-                x=spatial_axis,
-                sample_dimensions=sample_dimensions,
-                x_transmitter=transmitter_position,
-                x_receiver=receiver_position,
-                pzt_layer_width=pzt_layer_width,
-                pla_layer_width=pla_layer_width,
-                h_groove_side=h_groove_side,
-                h_groove_central=h_groove_central,
-                steel_velocity=steel_velocity,
-                gouge_velocity=(gouge_velocity_1, gouge_velocity_2),
-                pzt_velocity=pzt_velocity,
-                pla_velocity=pla_velocity,
-            )
-            velocity_model = velocity_model_handler.values
-            idx_dict = velocity_model_handler.idx_dict
+        # build velocity model
+        velocity_model_handler = VelocityModel1D(
+            x=spatial_axis,
+            sample_dimensions=sample_dimensions,
+            x_transmitter=transmitter_position,
+            x_receiver=receiver_position,
+            pzt_layer_width=pzt_layer_width,
+            pla_layer_width=pla_layer_width,
+            h_groove_side=h_groove_side,
+            h_groove_central=h_groove_central,
+            steel_velocity=steel_velocity,
+            gouge_velocity=(gouge_velocity_1, gouge_velocity_2),
+            pzt_velocity=pzt_velocity,
+            pla_velocity=pla_velocity,
+        )
+        velocity_model = velocity_model_handler.values
+        idx_dict = velocity_model_handler.idx_dict
 
         # Initialize Source
         transmitter_position_relative = pzt_layer_width + pla_layer_width
@@ -189,6 +171,12 @@ class ForwardModeler:
         )
         source.interpolate_time_function(dt=dt, simulation_time=simulation_time)
         source.create_spatial_function(spatial_axis=spatial_axis, dx=dx, flip_side=None)
+
+        import sys
+        import matplotlib.pyplot as plt
+        plt.plot(source.spatial_function)
+        plt.show()
+        sys.exit()
 
         # Initialize Receiver
         receiver_position_relative = total_length - pzt_layer_width - pla_layer_width
@@ -258,6 +246,215 @@ class ForwardModeler:
             receiver
         )
 
+    def block_forward_simulation(
+        self,
+        observed_time: np.ndarray,
+        observed_waveform: np.ndarray,
+        stf_time: np.ndarray,
+        stf_waveform: np.ndarray,
+        frequency_cutoff: float,
+        assembly_dict: Dict[str,Any],
+        montecarlo: Dict[str,Any],
+        misfit_interval: np.ndarray,
+        minimum_velocity: Optional[float] = None,
+        maximum_velocity: Optional[float] = None,
+        idx_dict: Optional[Dict[str, np.ndarray]] = None,
+        # Some general optional flags:
+        normalize_waveform: bool = True,
+        enable_plotting: bool = False,
+        make_movie: bool = False,
+        plot_output_path: Optional[str] = None,
+        movie_output_path: Optional[str] = "simulation_movie.mp4",
+    ) -> Tuple[np.ndarray,np.ndarray,Dict[str, np.ndarray],np.ndarray, np.ndarray, float,int, np.ndarray,float,int,Source1D,Receiver1D]:
+        """
+        Perform the forward modeling (one pass) of ultrasonic wave propagation
+        in a 1D layered medium.
+
+        Args:
+            observed_time, observed_waveform: 1D arrays of the measured data.
+            stf_time, stf_waveform: 1D arrays defining the source time function.
+            frequency_cutoff: frequency cutoff for building grid spacing.
+            misfit_interval: 1D array of indices over which we compute the misfit.
+            initial_velocity_model, idx_dict: can be provided to skip building a new velocity model.
+            normalize_waveform: if True, amplitude-scale synthetic to match observed.
+            enable_plotting, make_movie: if True, produce output via Plotter.
+            plot_output_path, movie_output_path: specify file paths for saving plots/movies.
+
+        Returns:
+            A 12-tuple of:
+                (np.ndarray,  # synthetic_waveform
+                np.ndarray,  # velocity_model
+                Dict[str, np.ndarray],  # idx_dict
+                np.ndarray,  # simulation_time
+                np.ndarray,  # wavefield_forward
+                float,       # dt
+                int,         # num_t
+                np.ndarray,  # spatial_axis
+                float,       # dx
+                int,         # num_x
+                Source1D,  # source
+                Receiver1D # receiver)
+        """
+
+        # Validate shape of arrays
+        if observed_time.ndim != 1 or observed_waveform.ndim != 1:
+            raise ValueError("observed_time and observed_waveform must be 1D numpy arrays.")
+        if stf_time.ndim != 1 or stf_waveform.ndim != 1:
+            raise ValueError("stf_time and stf_waveform must be 1D numpy arrays.")
+        if len(observed_time) != len(observed_waveform):
+            raise ValueError("observed_time and observed_waveform must have the same length.")
+        if len(stf_time) != len(stf_waveform):
+            raise ValueError("stf_time and stf_waveform must have the same length.")
+        if misfit_interval.ndim != 1:
+            raise ValueError("misfit_interval must be a 1D array of indices.")
+
+        # Unpack assembly parameters
+        wave_type = assembly_dict["wave_type"]
+        transmitter_position = assembly_dict["transmitter_position"]
+        receiver_position = assembly_dict["receiver_position"]
+        pla_layer_width = assembly_dict["pla_layer_width"]     
+        pzt_layer_width = assembly_dict["pzt_layer_width"]     
+        pla_velocity = assembly_dict["pla_velocity" + wave_type]
+        steel_velocity = assembly_dict["velocity" + wave_type]
+        pzt_velocity = assembly_dict["pzt_velocity" + wave_type]
+        
+        spreading_factor_transmitter = montecarlo["spreading_factor_transmitter"]
+        spreading_factor_receiver = montecarlo["spreading_factor_receiver"]
+        position2edge_transmitter = montecarlo["position2edge_transmitter"]
+        position2edge_receiver = montecarlo["position2edge_receiver"]
+        radius_factor_transmitter = montecarlo["radius_factor_transmitter"]
+        radius_factor_receiver = montecarlo["radius_factor_receiver"]
+
+        sample_dimensions = [assembly_dict["z"]]
+
+        # Compute total length for 1D domain
+        total_length = (
+            np.sum(sample_dimensions)
+            + 2 * pla_layer_width
+            + 2 * pzt_layer_width
+        )
+
+        # create the 1D grid space axis
+        grid = Grid1D(
+            cmin=minimum_velocity,
+            fmax=frequency_cutoff,
+            grid_len=total_length,
+            ppt=10  # points per wavelength
+        )
+        spatial_axis = grid.spatial_axis
+        dx = grid.dx
+        num_x = grid.total_grid_points
+
+        # Define time axis
+        sim_time_handler = SimulationTime(
+            observed_time=observed_time,
+            dx=dx,
+            max_velocity=maximum_velocity
+        )
+        simulation_time = sim_time_handler.simulation_time
+        dt = sim_time_handler.dt
+        num_t = sim_time_handler.num_t
+
+        # build velocity model
+        velocity_model_handler = VelocityModel1D_SingleBlock(
+            x=spatial_axis,
+            sample_dimensions=sample_dimensions,
+            x_transmitter=transmitter_position,
+            x_receiver=receiver_position,
+            pzt_layer_width=pzt_layer_width,
+            pla_layer_width=pla_layer_width,
+            steel_velocity=steel_velocity,
+            pzt_velocity=pzt_velocity,
+            pla_velocity=pla_velocity,
+        )
+        velocity_model = velocity_model_handler.values
+        idx_dict = velocity_model_handler.idx_dict
+
+        transmitter_position_relative = position2edge_transmitter*pzt_layer_width + pla_layer_width
+        radius_transmitter = round(radius_factor_transmitter * len(idx_dict['pzt_1']))
+        source = Source1D(
+            stf_time=stf_time,
+            stf_waveform=stf_waveform,
+            position=transmitter_position_relative,
+            radius=radius_transmitter,
+            spreading_factor=spreading_factor_transmitter,
+            pzt_layer_width=assembly_dict["pzt_layer_width"]
+        )
+        source.interpolate_time_function(dt=dt, simulation_time=simulation_time)
+        source.create_spatial_function(spatial_axis=spatial_axis, dx=dx, flip_side=None)
+
+        # Initialize Receiver
+        receiver_position_relative = total_length - position2edge_receiver*pzt_layer_width - pla_layer_width
+        radius_receiver = round(radius_factor_receiver * len(idx_dict['pzt_2']))
+        receiver = Receiver1D(
+            position=receiver_position_relative,
+            radius=radius_receiver,
+            spreading_factor=spreading_factor_receiver,
+            pzt_layer_width=assembly_dict["pzt_layer_width"]
+        )
+        receiver.create_spatial_function(spatial_axis=spatial_axis, dx=dx, flip_side=None)
+
+        # Forward modeling (single pass)
+        wavefield_forward = pseudospectral_1D(
+            num_x=num_x,
+            delta_x=dx,
+            num_t=num_t,
+            delta_t=dt,
+            source_spatial_function=source.spatial_function,
+            source_time_function=source.time_function,
+            velocity_model=velocity_model,
+            compute_derivative=False
+        )
+
+        # Record the simulated wavefield at the receiver position
+        simulated_waveform = np.sum(wavefield_forward * receiver.spatial_function, axis=1)
+
+        if normalize_waveform:
+            amplitude_scale = np.amax(observed_waveform) / np.amax(simulated_waveform)
+            simulated_waveform *= amplitude_scale
+
+        # Interpolate synthetic waveform onto the observed time axis
+        synthetic_waveform = np.interp(observed_time, simulation_time, simulated_waveform)
+
+        if enable_plotting:
+            self.plotter.plot_simulation_waveform(
+                t=observed_time,
+                sp_simulated=synthetic_waveform,
+                sp_recorded=observed_waveform,
+                misfit_interval=misfit_interval,
+                outfile_path=plot_output_path
+            )
+
+            model_output_name = plot_output_path.name + "_velocity_model"
+            model_output_path = plot_output_path.parent / model_output_name
+            print(f"model output path: {model_output_name}")
+            velocity_model_handler.plot(outfile_path=model_output_path )
+
+        if make_movie:
+            self.plotter.make_movie_from_simulation(
+                outfile_path=movie_output_path,
+                x=spatial_axis,
+                t=simulation_time,
+                sp_field=wavefield_forward,
+                sp_recorded=simulated_waveform,
+                sample_dimensions=sample_dimensions,
+                idx_dict=idx_dict,
+            )
+
+        return (
+            synthetic_waveform,
+            velocity_model,
+            simulation_time,
+            wavefield_forward,
+            dt,
+            num_t,
+            spatial_axis,
+            dx,
+            num_x,
+            source,
+            receiver
+        )
+    
 def run_local_inversion(
     self,
     observed_time: np.ndarray,
@@ -268,7 +465,7 @@ def run_local_inversion(
     dc_max_start: float,
     reduce_factor: float,
     dc_threshold: float,
-    fixed_minimum_velocity: float,
+    minimum_velocity: float,
     steel_velocity: float,
     # The same forward-simulation inputs for consistency
     **forward_args
@@ -277,10 +474,6 @@ def run_local_inversion(
     Perform iterative gradient-based local inversion using repeated calls
     to `forward_simulation`. This method simply orchestrates the optimization.
     """
-
-    # ---------------------------
-    # 1) Forward pass (no deriv)
-    # ---------------------------
     (
         synthetic_waveform,
         velocity_model,
@@ -403,7 +596,7 @@ def run_local_inversion(
             velocity_model[regions_to_update] -= (dc_max / dE_max) * gradient_update[regions_to_update]
 
             # Clip velocities to physical bounds
-            velocity_min = fixed_minimum_velocity  # Minimum velocity
+            velocity_min = minimum_velocity  # Minimum velocity
             velocity_max = steel_velocity  # Maximum velocity is steel_velocity
             velocity_model[regions_to_update] = np.clip(velocity_model[regions_to_update], velocity_min, velocity_max)
 
@@ -415,6 +608,7 @@ def run_local_inversion(
 
     final_synthetic_waveform = synthetic_waveform.copy()
     return final_synthetic_waveform, best_velocity_model
+
 
 def pseudospectral_1D(
     num_x: int,
