@@ -4,6 +4,7 @@ from typing import Union, Tuple, Optional
 from lab_uw.plotting import Plotter
 from pathlib import Path
 from scipy.signal.windows import kaiser
+from numpy import convolve
 
 class Grid1D:
     def __init__(self, cmin: float, fmax: float, grid_len: float, ppt: int):
@@ -517,23 +518,6 @@ class Source1D:
         self.time_function = np.zeros(len(simulation_time))
         self.time_function[:len(interpolated_stf)] = interpolated_stf
 
-    # def create_spatial_function(self, spatial_axis: np.ndarray, dx: float, flip_side: str = None):
-    #     '''
-    #     Create the spatial function of the source on the grid.
-
-    #     Args:
-    #         spatial_axis (np.ndarray): The spatial axis of the grid.
-    #         dx (float): Spatial step size.
-    #         flip_side (str): 'left' or 'right' to indicate which side to flip and fold (if any).
-    #     '''
-    #     self.spatial_function = self._arbitrary_position_filter(
-    #         spatial_axis=spatial_axis,
-    #         dx=dx,
-    #         position=self.position,
-    #         radius=self.radius,
-    #         flip_side=flip_side
-    #     )
-
     def create_spatial_function(self, spatial_axis: np.ndarray, dx: float, flip_side: str = None):
         self.spatial_function = convolved_sinc_gaussian_filter(
             spatial_axis=spatial_axis,
@@ -664,23 +648,6 @@ class Receiver1D:
         self.pzt_layer_width = pzt_layer_width
         self.spatial_function = None  # Will be set after being created on the grid
 
-    # def create_spatial_function(self, spatial_axis: np.ndarray, dx: float, flip_side: str = None):
-    #     '''
-    #     Create the spatial function of the receiver on the grid.
-
-    #     Args:
-    #         spatial_axis (np.ndarray): The spatial axis of the grid.
-    #         dx (float): Spatial step size.
-    #         flip_side (str): 'left' or 'right' to indicate which side to flip and fold (if any).
-    #     '''
-    #     self.spatial_function = self._arbitrary_position_filter(
-    #         spatial_axis=spatial_axis,
-    #         dx=dx,
-    #         position=self.position,
-    #         radius=self.radius,
-    #         flip_side=flip_side
-    #     )
-
     def create_spatial_function(self, spatial_axis: np.ndarray, dx: float, flip_side: str = None):
         self.spatial_function = convolved_sinc_gaussian_filter(
             spatial_axis=spatial_axis,
@@ -777,10 +744,6 @@ class Receiver1D:
             windowed_sinc[right_indices] = 0.0
 
         return windowed_sinc
-
-
-import numpy as np
-from numpy import convolve
 
 def convolved_sinc_gaussian_filter(
     spatial_axis: np.ndarray,

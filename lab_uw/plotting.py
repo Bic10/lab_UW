@@ -943,7 +943,7 @@ class Plotter:
         fig, ax = plt.subplots(figsize=self.settings['figure_size'])
         
         # Plotting the L2 norm vs  velocity
-        ax.plot(velocity, L2norm, linewidth=self.settings['line_width'])
+        ax.scatter(velocity, L2norm, linewidth=self.settings['line_width'])
         ax.set_xlabel(' Velocity (cm/$\\mu$s)', fontsize=self.settings['fontsize_labels'])
         ax.set_ylabel('L2 Norm of Residuals', fontsize=self.settings['fontsize_labels'])
         ax.set_title(f'L2 Norm vs  Velocity for Waveform {overall_index}', fontsize=self.settings['fontsize_title'])

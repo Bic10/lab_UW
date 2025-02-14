@@ -53,7 +53,6 @@ class ForwardModeler:
             stf_time, stf_waveform: 1D arrays defining the source time function.
             frequency_cutoff: frequency cutoff for building grid spacing.
             misfit_interval: 1D array of indices over which we compute the misfit.
-            initial_velocity_model, idx_dict: can be provided to skip building a new velocity model.
             normalize_waveform: if True, amplitude-scale synthetic to match observed.
             enable_plotting, make_movie: if True, produce output via Plotter.
             plot_output_path, movie_output_path: specify file paths for saving plots/movies.
@@ -110,7 +109,7 @@ class ForwardModeler:
             gouge_thickness_1,
             central_params["z"],
             gouge_thickness_2,
-            side1_params["z"]
+            side2_params["z"]
         ]
 
         # Compute total length for 1D domain
@@ -171,12 +170,6 @@ class ForwardModeler:
         )
         source.interpolate_time_function(dt=dt, simulation_time=simulation_time)
         source.create_spatial_function(spatial_axis=spatial_axis, dx=dx, flip_side=None)
-
-        import sys
-        import matplotlib.pyplot as plt
-        plt.plot(source.spatial_function)
-        plt.show()
-        sys.exit()
 
         # Initialize Receiver
         receiver_position_relative = total_length - pzt_layer_width - pla_layer_width
@@ -275,7 +268,6 @@ class ForwardModeler:
             stf_time, stf_waveform: 1D arrays defining the source time function.
             frequency_cutoff: frequency cutoff for building grid spacing.
             misfit_interval: 1D array of indices over which we compute the misfit.
-            initial_velocity_model, idx_dict: can be provided to skip building a new velocity model.
             normalize_waveform: if True, amplitude-scale synthetic to match observed.
             enable_plotting, make_movie: if True, produce output via Plotter.
             plot_output_path, movie_output_path: specify file paths for saving plots/movies.
@@ -311,19 +303,28 @@ class ForwardModeler:
         # Unpack assembly parameters
         wave_type = assembly_dict["wave_type"]
         transmitter_position = assembly_dict["transmitter_position"]
-        receiver_position = assembly_dict["receiver_position"]
-        pla_layer_width = assembly_dict["pla_layer_width"]     
-        pzt_layer_width = assembly_dict["pzt_layer_width"]     
-        pla_velocity = assembly_dict["pla_velocity" + wave_type]
-        steel_velocity = assembly_dict["velocity" + wave_type]
-        pzt_velocity = assembly_dict["pzt_velocity" + wave_type]
+        receiver_position    = assembly_dict["receiver_position"]
+        pla_layer_width      = assembly_dict["pla_layer_width"]     
+        pzt_layer_width      = assembly_dict["pzt_layer_width"]     
+        pla_velocity         = assembly_dict["pla_velocity" + wave_type]
+        steel_velocity       = assembly_dict["velocity" + wave_type]
+        pzt_velocity         = assembly_dict["pzt_velocity" + wave_type]
         
-        spreading_factor_transmitter = montecarlo["spreading_factor_transmitter"]
-        spreading_factor_receiver = montecarlo["spreading_factor_receiver"]
-        position2edge_transmitter = montecarlo["position2edge_transmitter"]
-        position2edge_receiver = montecarlo["position2edge_receiver"]
-        radius_factor_transmitter = montecarlo["radius_factor_transmitter"]
-        radius_factor_receiver = montecarlo["radius_factor_receiver"]
+        if montecarlo:
+            spreading_factor_transmitter = montecarlo["spreading_factor_transmitter"]
+            spreading_factor_receiver    = montecarlo["spreading_factor_receiver"]
+            position2edge_transmitter    = montecarlo["position2edge_transmitter"]
+            position2edge_receiver       = montecarlo["position2edge_receiver"]
+            radius_factor_transmitter    = montecarlo["radius_factor_transmitter"]
+            radius_factor_receiver       = montecarlo["radius_factor_receiver"]
+
+        else:
+            spreading_factor_transmitter = 1
+            spreading_factor_receiver    = 1
+            position2edge_transmitter    = 1
+            position2edge_receiver       = 1
+            radius_factor_transmitter    = 1
+            radius_factor_receiver       = 1
 
         sample_dimensions = [assembly_dict["z"]]
 
