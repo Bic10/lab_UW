@@ -5,60 +5,14 @@ import pickle
 import time as tm
 import numpy as np
 from multiprocessing import Pool, cpu_count
-from typing import Any, Dict, Tuple, Union
+from typing import Any, Dict, Union
 import matplotlib.pyplot as plt
 import corner
 
-from lab_uw.data_io import UltrasonicDataHandler, BlockMetadataHandler
+from lab_uw.data_io import UltrasonicDataHandler, BlockMetadataHandler, load_and_process_stf
 from lab_uw.directory_manager import DirectoryManager
 from lab_uw.signal_processing import SignalProcessor
 from lab_uw.forward_modeling import ForwardModeler, compute_misfit
-
-def load_and_process_stf(
-    dir_manager: DirectoryManager,
-    machine_name_stf: str,
-    experiment_name_stf: str,
-    data_type_stf: str,
-    stf_choosen: str,
-    frequency_cutoff_MHz: float
-) -> Tuple[np.ndarray, np.ndarray, float]:
-    """
-    Loads and processes a source time function (stf) from a file.
-    """
-    infile_path_stf_list = dir_manager.make_infile_path_list(
-        machine_name=machine_name_stf,
-        experiment_name=experiment_name_stf,
-        data_type=data_type_stf
-    )
-
-    chosen_stf_path = None
-    for infile_stf in infile_path_stf_list:
-        if infile_stf.stem == stf_choosen:
-            chosen_stf_path = infile_stf
-            break
-    if chosen_stf_path is None:
-        raise FileNotFoundError(
-            f"No stf file named '{stf_choosen}' found in {data_type_stf} "
-            f"for experiment '{experiment_name_stf}'."
-        )
-
-    stf_handler = UltrasonicDataHandler()
-    stf_waveform_raw, stf_metadata = stf_handler.load_waveform_json(chosen_stf_path)
-
-    stf_time = np.array(stf_metadata["time_ax_waveform"])
-    signal_processor = SignalProcessor()
-
-    stf_waveform_filt, _ = signal_processor.signal2noise_separation_lowpass(
-        waveform_data=stf_waveform_raw,
-        metadata=stf_metadata,
-        freq_cut=frequency_cutoff_MHz
-    )
-
-    # Shift waveform so the first sample is zero
-    stf_waveform = stf_waveform_filt - stf_waveform_filt[0]
-    stf_duration = stf_time[-1] - stf_time[0]
-
-    return stf_waveform, stf_time, stf_duration
 
 def process_uw_file(
     infile_path: Path,
@@ -76,46 +30,21 @@ def process_uw_file(
     print(f"PROCESSING UW DATA IN {infile_path}:")
 
     # Unpack parameters
-    maxtime2simulate            = params["maxtime2simulate_mus"]
-    frequency_cutoff_MHz        = params["frequency_cutoff_MHz"]
-    number_of_waveforms2process = params["number_of_waveforms2process"]
     outdir_path_l2norm          = params["outdir_path_l2norm"]
     outdir_path_image           = params["outdir_path_image"]
 
     start_time = tm.time()
 
-    # 1) Load UW data
-    ultrasonic_handler = UltrasonicDataHandler.make_UW_data(infile_path)
-    observed_waveform_data, metadata = ultrasonic_handler.waveform_data, ultrasonic_handler.metadata
-    observed_time = metadata["time_ax_waveform"]
-
-    # Remove mean from the entire dataset
-    observed_waveform_data = observed_waveform_data - np.mean(observed_waveform_data)
-
-    # Possibly reduce the number of samples (time-limiting)
-    if maxtime2simulate:
-        idx_maxtime = np.searchsorted(observed_time, maxtime2simulate)
-        observed_waveform_data = observed_waveform_data[:, :idx_maxtime]
-        observed_time = observed_time[:idx_maxtime]
-        print("Truncating at maxtime2simulate:", maxtime2simulate)
-
-    # Downsampling waveforms
-    downsampling = max(1, round(metadata["number_of_waveforms"] / number_of_waveforms2process))
-    print(
-        f"Number of waveforms: {metadata['number_of_waveforms']}, "
-        f"wanting {number_of_waveforms2process}, downsampling factor: {downsampling}"
+    # Load and preprocess uw data
+    observed_waveform_data, observed_time, downsampling, metadata = UltrasonicDataHandler.load_and_process_uw(
+        infile_path=infile_path,
+        frequency_cutoff_MHz=params["frequency_cutoff_MHz"],
+        maxtime2simulate=params["maxtime2simulate_mus"],
+        number_of_waveforms_to_process=params["number_of_waveforms2process"]
     )
 
     # We only want 1 "mean" waveform for analysis
     observed_waveform = np.mean(observed_waveform_data, axis=0)
-
-    # Lowpass filtering
-    signal_processor = SignalProcessor()
-    observed_waveform, _ = signal_processor.signal2noise_separation_lowpass(
-        waveform_data=observed_waveform,
-        metadata=metadata,
-        freq_cut=frequency_cutoff_MHz
-    )
 
     # 2) We'll run the Monte Carlo approach multiple times
     n_repeats = 100
@@ -594,14 +523,17 @@ if __name__ == "__main__":
     for infile_path in infile_path_list_uw:
         # Load the source time function
         infile_name = infile_path.name.split(".")[0]
-        stf_waveform, stf_time, _ = load_and_process_stf(
+
+        # Load the Source Time Function
+        stf_waveform, stf_time, stf_duration = UltrasonicDataHandler.load_stf(
             dir_manager=dir_manager,
             machine_name_stf="on_bench",
             experiment_name_stf="STF",
-            data_type_stf=f"data_analysis/source_time_functions{wave_type}",
-            stf_choosen=infile_name,
+            data_type_stf="data_analysis/source_time_functions" + wave_type,
+            stf_chosen="width500_volt200_p2p",
             frequency_cutoff_MHz=params["frequency_cutoff_MHz"]
         )
+
         # Run the main simulation routine
         process_uw_file(
             infile_path=infile_path,

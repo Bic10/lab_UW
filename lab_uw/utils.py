@@ -1,6 +1,60 @@
 # lab_uw/utils.py
 
 import numpy as np
+import pickle
+from pathlib import Path
+from lab_uw.data_io import UltrasonicDataHandler
+from lab_uw.plotting import InteractivePlotter
+
+def pick_arrival_times(
+    dir_manager, machine_name, experiment_name, infile_path_list_uw, start_time=0
+):
+    """
+    Prepare manual pick arrival times by processing UW files.
+
+    Parameters:
+        dir_manager (DirectoryManager): Manages directory paths.
+        machine_name (str): Name of the machine used for the experiment.
+        experiment_name (str): Name of the experiment.
+        infile_path_list_uw (list[Path]): List of paths to ultrasonic waveform files.
+        start_time (float, optional): Starting time for processing. Defaults to 0s.
+
+    Returns:
+        list: A list of manual pick arrival time intervals.
+    """
+    # Prepare output directory
+
+    experiment_path = dir_manager.base_dir / f"experiments_{machine_name}" / experiment_name
+    picked_travel_times_dir = experiment_path / 'data_analysis' / 'picked_travel_times'
+    picked_travel_times_dir.mkdir(parents=True, exist_ok=True)
+
+    arrival_times_list = []
+    for infile_path_uw in infile_path_list_uw:
+        stem = Path(infile_path_uw.stem).stem  # Get file stem
+        new_file_name = f"{stem}.pkl"
+        infile_path_travel_times = picked_travel_times_dir / new_file_name
+
+        try:
+            with open(infile_path_travel_times, 'rb') as f:
+                arrival_times_list.append(pickle.load(f))
+        except FileNotFoundError:
+            waveform_choosed = 0
+            
+            # Instantiate UltrasonicDataHandler using the Path object
+            ultrasonic_handler = UltrasonicDataHandler.load_UW_data(infile_path_uw)
+            observed_waveform_data, metadata = ultrasonic_handler.waveform_data, ultrasonic_handler.metadata
+            observed_waveform = observed_waveform_data[waveform_choosed]
+            observed_time = metadata['time_ax_waveform']
+
+            picked_times = InteractivePlotter().manual_pick_arrival_times(
+                observed_time=observed_time,
+                observed_waveform=observed_waveform,
+                start_time=start_time,
+                outfile_path=infile_path_travel_times
+            )
+            arrival_times_list.append(picked_times)
+
+    return arrival_times_list
 
 def solve_quadratic_equation(A, B, C, real_only=True, positive_only=False):
     """

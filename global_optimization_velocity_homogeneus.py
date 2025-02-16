@@ -10,13 +10,48 @@ import numpy as np
 from multiprocessing import Pool, cpu_count
 from typing import Any, Dict, List
 
-from lab_uw.data_io import UltrasonicDataHandler, MechanicalDataHandler, BlockMetadataHandler
+from lab_uw.data_io import UltrasonicDataHandler, BlockMetadataHandler, MechanicalDataHandler
 from lab_uw.directory_manager import DirectoryManager
-from lab_uw.signal_processing import SignalProcessor
 from lab_uw.simulation_setup import *
 from lab_uw.forward_modeling import *
-from lab_uw.plotting import InteractivePlotter, Plotter
+from lab_uw.plotting import Plotter
 from lab_uw.forward_modeling import ForwardModeler
+from lab_uw.utils import pick_arrival_times
+
+def update_assembly_dict_with_mech_data(
+    assembly_dict: Dict[str, Any],
+    mech_data: pd.DataFrame,
+    sync_peaks: np.ndarray,
+    chosen_uw_file: int
+) -> None:
+    """
+    Update assembly_dict with per-waveform mechanical arrays (thickness, stress, etc.)
+    for a given UW file index (chosen_uw_file).
+    """
+    try:
+        start_sync = sync_peaks[2 * chosen_uw_file]
+        end_sync   = sync_peaks[2 * chosen_uw_file + 1]
+    except (TypeError, IndexError):
+        # fallback if sync_peaks is partial
+        start_sync = sync_peaks[2 * chosen_uw_file]
+        end_sync = start_sync + 1  # minimal fallback
+
+    # Example: thickness in mm -> convert to cm
+    thickness_gouge_1_array = mech_data['rgt_lt_mm'][start_sync:end_sync].values / 10.0
+    thickness_gouge_2_array = thickness_gouge_1_array  # if they match in your experiment
+
+    normal_stress_array = mech_data['normal_stress_MPa'][start_sync:end_sync].values
+    shear_stress_array  = mech_data['shear_stress_MPa'][start_sync:end_sync].values
+    ec_disp_mm_array    = mech_data['ec_disp_mm'][start_sync:end_sync].values
+    time_s_array        = mech_data['time_s'][start_sync:end_sync].values
+
+    # Store them in assembly_dict for the next steps
+    assembly_dict["thickness_gouge_1_array"] = thickness_gouge_1_array
+    assembly_dict["thickness_gouge_2_array"] = thickness_gouge_2_array
+    assembly_dict["normal_stress_array"]     = normal_stress_array
+    assembly_dict["shear_stress_array"]      = shear_stress_array
+    assembly_dict["ec_disp_mm_array"]        = ec_disp_mm_array
+    assembly_dict["time_s_array"]            = time_s_array
 
 def compute_dds_travel_time(assembly_travel_time,
                             side1_params,
@@ -28,348 +63,110 @@ def compute_dds_travel_time(assembly_travel_time,
                             v_gouge_2):
     
     return  (assembly_travel_time
-                    + thickness_gouge_1 / v_gouge_1
-                    + thickness_gouge_2 / v_gouge_2
-                    + side1_params["h_grooves"]/(side1_params["velocity"+wave_type]+v_gouge_1)
-                    + side2_params["h_grooves"]/(side2_params["velocity"+wave_type]+v_gouge_2)
-                    + central_params["h_grooves"]/(side1_params["velocity"+wave_type]+v_gouge_1)
-                    + central_params["h_grooves"]/(side1_params["velocity"+wave_type]+v_gouge_2)
-                    )
+            + thickness_gouge_1 / v_gouge_1
+            + thickness_gouge_2 / v_gouge_2
+            + side1_params["h_grooves"]/(side1_params["velocity"+wave_type]+v_gouge_1)
+            + side2_params["h_grooves"]/(side2_params["velocity"+wave_type]+v_gouge_2)
+            + central_params["h_grooves"]/(side1_params["velocity"+wave_type]+v_gouge_1)
+            + central_params["h_grooves"]/(side1_params["velocity"+wave_type]+v_gouge_2)
+            )
     
 # Function Definitions
-def load_and_process_stf(
-    dir_manager: DirectoryManager,
-    machine_name_stf: str,
-    experiment_name_stf: str,
-    data_type_stf: str,
-    stf_choosen: str,
-    frequency_cutoff_MHz: float
-) -> Tuple[np.ndarray, np.ndarray, float]:
-    """
-    Loads and processes a source time function (stf) from a file.
-
-    Parameters
-    ----------
-    dir_manager : DirectoryManager
-        DirectoryManager to locate the stf file path.
-    machine_name_stf : str
-        Machine name used for acquiring the stf.
-    experiment_name_stf : str
-        Experiment name for the stf data.
-    data_type_stf : str
-        Subfolder name indicating where stf data is stored.
-    stf_choosen : str
-        Stem of the stf file (without extension) to be loaded.
-    frequency_cutoff_MHz : float
-        Frequency cutoff in MHz for lowpass filtering of the stf.
-
-    Returns
-    -------
-    Tuple[np.ndarray, np.ndarray, float]
-        (stf_waveform, stf_time, stf_duration)
-        stf_waveform : Filtered stf waveform, zeroed at start.
-        stf_time : Corresponding time axis of the waveform.
-        stf_duration : Duration of the stf (stf_time[-1] - stf_time[0]).
-
-    Raises
-    ------
-    FileNotFoundError
-        If no stf file matching stf_choosen is found.
-    """
-    # Locate the stf file
-    infile_path_stf_list = dir_manager.make_infile_path_list(
-        machine_name=machine_name_stf,
-        experiment_name=experiment_name_stf,
-        data_type=data_type_stf
-    )
-
-    chosen_stf_path = None
-    for infile_stf in infile_path_stf_list:
-        if infile_stf.stem == stf_choosen:
-            chosen_stf_path = infile_stf
-            break
-    if chosen_stf_path is None:
-        raise FileNotFoundError(
-            f"No stf file named '{stf_choosen}' found in {data_type_stf} "
-            f"for experiment '{experiment_name_stf}'."
-        )
-
-    # Load stf data (JSON or TSV) using UltrasonicDataHandler
-    stf_handler = UltrasonicDataHandler()
-    stf_waveform_raw, stf_metadata = stf_handler.load_waveform_json(chosen_stf_path)
-
-    stf_time = np.array(stf_metadata["time_ax_waveform"])
-    signal_processor = SignalProcessor()
-
-    # Apply lowpass filter
-    stf_waveform_filt, _ = signal_processor.signal2noise_separation_lowpass(
-        waveform_data=stf_waveform_raw,
-        metadata=stf_metadata,
-        freq_cut=frequency_cutoff_MHz
-    )
-
-    # Shift waveform to start at zero amplitude
-    stf_waveform = stf_waveform_filt - stf_waveform_filt[0]
-    stf_duration = stf_time[-1] - stf_time[0]
-
-    return stf_waveform, stf_time, stf_duration
-
-def load_mechanical_data(
-    dir_manager: DirectoryManager,
-    machine_name: str,
-    experiment_name: str,
-    data_type_mech: str,
-    mech_file_name: str
-) -> Tuple[pd.DataFrame, Optional[np.ndarray], Optional[np.ndarray]]:
-    """
-    Locates and loads mechanical data, returning the DataFrame plus sync_data and sync_peaks.
-
-    Parameters
-    ----------
-    dir_manager : DirectoryManager
-        DirectoryManager instance for building file paths.
-    machine_name : str
-        Machine name used for mechanical data experiment.
-    experiment_name : str
-        Experiment name for mechanical data.
-    data_type_mech : str
-        Subfolder or data type under which mechanical data is stored.
-    mech_file_name : str
-        File name (including extension) for the mechanical data file.
-
-    Returns
-    -------
-    Tuple[pd.DataFrame, Optional[np.ndarray], Optional[np.ndarray]]
-        - mech_data : The loaded mechanical DataFrame.
-        - sync_data : Array of synchronization data, or None if not found.
-        - sync_peaks : Indices of synchronization peaks, or None if not found.
-
-    Raises
-    ------
-    FileNotFoundError
-        If the file named mech_file_name is not found among mechanical data files.
-    """
-    infile_path_list_mech = dir_manager.make_infile_path_list(
-        machine_name, experiment_name, data_type=data_type_mech
-    )
-    mech_data_path = None
-    for infile_path in infile_path_list_mech:
-        if infile_path.name == mech_file_name:
-            mech_data_path = infile_path
-            break
-    if mech_data_path is None:
-        raise FileNotFoundError(f"{mech_file_name} not found in mechanical data.")
-
-    # Create a MechanicalDataHandler from the CSV file
-    mech_handler = MechanicalDataHandler.make_mechanical_data(mech_data_path)
-    mech_data = mech_handler.mech_data
-
-    # Attempt to find synchronization data
-    sync_data, sync_peaks = mech_handler.find_sync_values()
-
-    return mech_data, sync_data, sync_peaks
-
-def pick_arrival_times(
-    dir_manager, machine_name, experiment_name, infile_path_list_uw, start_time=0
-):
-    """
-    Prepare manual pick arrival times by processing UW files.
-
-    Parameters:
-        dir_manager (DirectoryManager): Manages directory paths.
-        machine_name (str): Name of the machine used for the experiment.
-        experiment_name (str): Name of the experiment.
-        infile_path_list_uw (list[Path]): List of paths to ultrasonic waveform files.
-        start_time (float, optional): Starting time for processing. Defaults to 0s.
-
-    Returns:
-        list: A list of manual pick arrival time intervals.
-    """
-    # Prepare output directory
-    experiment_path = dir_manager.base_dir / f"experiments_{machine_name}" / experiment_name
-    picked_travel_times_dir = experiment_path / 'data_analysis' / 'picked_travel_times'
-    picked_travel_times_dir.mkdir(parents=True, exist_ok=True)
-
-    arrival_times_list = []
-    for infile_path_uw in infile_path_list_uw:
-        stem = Path(infile_path_uw.stem).stem  # Get file stem
-        new_file_name = f"{stem}.pkl"
-        infile_path_travel_times = picked_travel_times_dir / new_file_name
-
-        try:
-            with open(infile_path_travel_times, 'rb') as f:
-                arrival_times_list.append(pickle.load(f))
-        except FileNotFoundError:
-            waveform_choosed = 0
-            
-            # Instantiate UltrasonicDataHandler using the Path object
-            ultrasonic_handler = UltrasonicDataHandler.make_UW_data(infile_path_uw)
-            observed_waveform_data, metadata = ultrasonic_handler.waveform_data, ultrasonic_handler.metadata
-            observed_waveform = observed_waveform_data[waveform_choosed]
-            observed_time = metadata['time_ax_waveform']
-
-            picked_times = InteractivePlotter().manual_pick_arrival_times(
-                observed_time=observed_time,
-                observed_waveform=observed_waveform,
-                start_time=start_time,
-                outfile_path=infile_path_travel_times
-            )
-            arrival_times_list.append(picked_times)
-
-    return arrival_times_list
-
 def process_uw_file(
     infile_path: Path,
-    chosen_uw_file: int,
     arrival_time_interval: List[Any],
-    sync_peaks: np.ndarray,
-    mech_data: Any,
     stf_waveform: np.ndarray,
     stf_time: np.ndarray,
     stf_duration: float,
     params: Dict[str, Any],
-    assembly_dict: Dict[str,Any],
+    assembly_dict: Dict[str, Any],
 ) -> None:
     """
-    Process a single UW data file.
-
-    Parameters
-    ----------
-    infile_path : Path
-        The path to the ultrasonic waveforms file.
-    chosen_uw_file : int
-        Index of the current UW file in the experiment.
-    arrival_time_interval : list
-        List of manually picked arrival times for some waveforms.
-    sync_peaks : np.ndarray
-        Array of synchronization indices for mechanical data.
-    mech_data : Any
-        Mechanical DataFrame or structure containing mechanical data (stress, displacement).
-    stf_waveform : np.ndarray
-        Source time function waveform (filtered, zeroed).
-    stf_time : np.ndarray
-        Corresponding time axis of the STF waveform.
-    stf_duration : float
-        Duration of the STF waveform.
-    params : Dict[str, Any]
-        Dictionary of parameters needed for processing.
-    assembly_dict: Dict[Dict],        
-        Dictionary of the Dictionaries containing material and dimensions of the various parts of the experiment
-
-    Returns
-    -------
-    None
-        Saves results to disk and optionally creates plots of velocity vs. displacement/stress.
+    Process a single UW data file (ultrasonic waveforms). 
+    The mechanical data is already stored in assembly_dict by an external function.
     """
     print(f"PROCESSING UW DATA IN {infile_path}:")
 
     # Unpack parameters
     maxtime2simulate = params["maxtime2simulate_mus"]
     frequency_cutoff_MHz = params['frequency_cutoff_MHz']
-    number_of_waveforms2process = params["number_of_waveforms2process"]
-    outdir_path_l2norm = params['outdir_path_l2norm']
-    outdir_path_image = params['outdir_path_image']
+    num_waveform2porcess = params["num_waveform2porcess"]
+    outdir_path_l2norm = Path(params["outdir_path_l2norm"])
+    outdir_path_image  = Path(params["outdir_path_image"])
 
-    # Initialize results
-    velocity_ranges = []
-    L2norm_all_waveforms = []
-    estimated_velocities = []
-
-    # Initialize lists for mechanical data
-    normal_stress_values = []
-    shear_stress_values = []
-    ec_disp_mm_values = []
-    time_s_values = []
-
-    # Derive output filenames using pathlib
+  # Derive output filenames using pathlib
     outfile_name = infile_path.name.split(".")[0]  
     outfile_path = outdir_path_l2norm / outfile_name
 
     start_time = tm.time()
 
-    # Load UW data
-    ultrasonic_handler = UltrasonicDataHandler.make_UW_data(infile_path)
-    observed_waveform_data, metadata = ultrasonic_handler.waveform_data, ultrasonic_handler.metadata
-    observed_time = metadata['time_ax_waveform']
-
-    # Preprocessing: remove mean, zero out first N samples
-    observed_waveform_data = observed_waveform_data - np.mean(observed_waveform_data)
-    initial_time_removed = np.searchsorted(observed_time,assembly_dict['assembly_travel_time'])
-    observed_waveform_data[:, :initial_time_removed] = 0
-
-    # Lowpass filtering
-    signal_processor = SignalProcessor()
-    observed_waveform_data, _ = signal_processor.signal2noise_separation_lowpass(
-        waveform_data=observed_waveform_data,
-        metadata=metadata,
-        freq_cut=frequency_cutoff_MHz
+    # Load and process ultrasonic data from TSV
+    ######## Downsampling the number of waveform only work if the sampling of uw and mechanical data is the same!!!
+    ######## Must be implemented a way for choosing the right mechanical data for the uw pomparing the time!!!
+    observed_waveform_data, observed_time, downsampling, metadata = (
+        UltrasonicDataHandler.load_and_process_uw(
+            infile_path=infile_path,
+            zero_out_time=assembly_dict["assembly_travel_time"],
+            frequency_cutoff_MHz=frequency_cutoff_MHz,
+            maxtime2simulate=maxtime2simulate,
+            number_of_waveforms_to_process=num_waveform2porcess
+        )
     )
+    
+    print(f"Number of waveforms: {metadata['number_of_waveforms']}, wanting {num_waveform2porcess}, downsampling factor: {downsampling}")
 
-    # Possibly reduce the number of samples
-    idx_maxtime = np.searchsorted(observed_time, maxtime2simulate)
-    observed_waveform_data = observed_waveform_data[:, :idx_maxtime]
-    observed_time = observed_time[:idx_maxtime]
+    # We retrieve the mechanical arrays from assembly_dict
+    thickness_gouge_1_array = assembly_dict["thickness_gouge_1_array"]
+    thickness_gouge_2_array = assembly_dict["thickness_gouge_2_array"]
+    normal_stress_array     = assembly_dict["normal_stress_array"]
+    shear_stress_array      = assembly_dict["shear_stress_array"]
+    ec_disp_array           = assembly_dict["ec_disp_mm_array"]
+    time_s_array            = assembly_dict["time_s_array"]
 
-    # Downsampling waveforms
-    downsampling = max(1, round(metadata['number_of_waveforms'] / number_of_waveforms2process))
-    print(f"Number of waveforms: {metadata['number_of_waveforms']}, wanting {number_of_waveforms2process}, downsampling factor: {downsampling}")
-
-    # Extract thickness & stress from mechanical data
-    try:
-        start_sync = sync_peaks[2 * chosen_uw_file]
-        end_sync = sync_peaks[2 * chosen_uw_file + 1]
-    except (TypeError, IndexError):
-        # fallback if sync_peaks is partial
-        start_sync = sync_peaks[2 * chosen_uw_file]
-        end_sync = metadata['number_of_waveforms']
-
-    # Convert mm -> cm
-    thickness_gouge_1_list = mech_data.rgt_lt_mm[start_sync:end_sync].values / 10.0
-    thickness_gouge_2_list = thickness_gouge_1_list  # same thickness for both layers?
-    normal_stress_list = mech_data.normal_stress_MPa[start_sync:end_sync].values
-    shear_stress_list = mech_data.shear_stress_MPa[start_sync:end_sync].values
-    ec_disp_mm_list = mech_data.ec_disp_mm[start_sync:end_sync].values
-    time_s_list = mech_data.time_s[start_sync:end_sync].values
-
+    # Prepare for the loop
+    velocity_ranges       = []
+    L2norm_all_waveforms  = []
+    estimated_velocities  = []
+    normal_stress_values  = []
+    shear_stress_values   = []
+    ec_disp_values        = []
+    time_s_values         = []
     previous_min_velocity = None
 
-    # Loop through waveforms
+    # Iterate over waveforms (downsampling)
     for idx_waveform, (
-            thick_g1, thick_g2, normal_stress, shear_stress, ec_disp_mm, time_s
+            thick_g1, thick_g2, normal_stress, shear_stress, ec_disp, time_s
         ) in enumerate(
             zip(
-                thickness_gouge_1_list[::downsampling],
-                thickness_gouge_2_list[::downsampling],
-                normal_stress_list[::downsampling],
-                shear_stress_list[::downsampling],
-                ec_disp_mm_list[::downsampling],
-                time_s_list[::downsampling]
+                thickness_gouge_1_array[::downsampling],
+                thickness_gouge_2_array[::downsampling],
+                normal_stress_array[::downsampling],
+                shear_stress_array[::downsampling],
+                ec_disp_array[::downsampling],
+                time_s_array[::downsampling]
             )
         ):
 
         idx_data = idx_waveform * downsampling
+        if idx_data >= observed_waveform_data.shape[0]:
+            break  # out of range
 
-        try:
-            observed_waveform = observed_waveform_data[idx_data]
-        except IndexError:
-            # Out of waveforms, break
-            break
-
-        overall_index = start_sync + idx_data
+        observed_waveform = observed_waveform_data[idx_data]
+        overall_index = idx_data  # or start_sync + idx_data, etc.
 
         normal_stress_values.append(normal_stress)
         shear_stress_values.append(shear_stress)
-        ec_disp_mm_values.append(ec_disp_mm)
+        ec_disp_values.append(ec_disp)
         time_s_values.append(time_s)
 
-        # Process the waveform (assuming process_waveform is defined/imported)
+        # Call the actual waveform processor
         result = process_waveform(
             arrival_time_interval,
             observed_waveform=observed_waveform,
             observed_time=observed_time,
             idx_waveform=idx_waveform,
             overall_index=overall_index,
-            outfile_name=outfile_name,
+            outfile_name=infile_path.stem,
             previous_min_velocity=previous_min_velocity,
             thickness_gouge_1=thick_g1,
             thickness_gouge_2=thick_g2,
@@ -382,27 +179,27 @@ def process_uw_file(
             assembly_dict=assembly_dict
         )
 
-        previous_min_velocity = result['previous_min_velocity']
-        velocity_ranges.append(result['gouge_velocity_list_waveform'])
-        L2norm_all_waveforms.append(result['L2norm_waveform'])
-        estimated_velocities.append(result['best_gouge_velocity'])
+        previous_min_velocity = result["previous_min_velocity"]
+        velocity_ranges.append(result["gouge_velocity_list_waveform"])
+        L2norm_all_waveforms.append(result["L2norm_waveform"])
+        estimated_velocities.append(result["best_gouge_velocity"])
 
     # Save results to a pickle
     results_pkl = outfile_path.with_suffix(".pkl")  # e.g. path/to/l2norm/filename.pkl
     with open(results_pkl, 'wb') as f:
         pickle.dump({
-            'L2norm_all_waveforms': L2norm_all_waveforms,
-            'velocity_ranges': velocity_ranges,
-            'estimated_velocities': estimated_velocities
+            "L2norm_all_waveforms": L2norm_all_waveforms,
+            "velocity_ranges": velocity_ranges,
+            "estimated_velocities": estimated_velocities
         }, f)
 
-    # 1) Velocity and stress vs ec_disp_mm
+    #  Velocity and stress vs ec_disp
     plotter = Plotter()
     plot_name_ec_disp = f"{outfile_name}_velocity_stress_vs_ec_disp"
     plot_path_ec_disp = Path(outdir_path_image) / plot_name_ec_disp  # outdir_path_image is in params
 
     plotter.plot_velocity_and_stresses(
-        x_values=np.array(ec_disp_mm_values),
+        x_values=np.array(ec_disp_values),
         velocities=np.array(estimated_velocities),
         normal_stress=np.array(normal_stress_values),
         shear_stress=np.array(shear_stress_values),
@@ -413,7 +210,7 @@ def process_uw_file(
         outfile_path=plot_path_ec_disp
     )
 
-    # 2) Velocity and stress vs time_s
+    # Velocity and stress vs time_s
     plot_name_time = f"{outfile_name}_velocity_stress_vs_time"
     plot_path_time = Path(outdir_path_image) / plot_name_time
 
@@ -449,79 +246,23 @@ def process_waveform(
     params: Dict[str, Any],
     assembly_dict: Dict[str,Any],
 ) -> Dict[str, Union[float, np.ndarray, None]]:
-    """
-    Process a single waveform by scanning possible gouge velocities, computing misfit,
-    and simulating a synthetic waveform at the best velocity.
 
-    Parameters
-    ----------
-    arrival_time_interval : list of float
-        List of manually picked arrival times.
-    observed_waveform : np.ndarray
-        The actual observed waveform for this iteration (1D array).
-    observed_time : np.ndarray
-        Time axis for the observed waveform.
-    idx_waveform : int
-        Index of this waveform in the entire experiment's waveforms.
-    overall_index : int
-        Overall index in the mechanical data synchronization.
-    outfile_name : str
-        Stem for output filenames.
-    previous_min_velocity : float or None
-        Best velocity from the previous waveform, or None if this is the first.
-    thickness_gouge_1 : float
-        Thickness of gouge layer 1 [cm].
-    thickness_gouge_2 : float
-        Thickness of gouge layer 2 [cm].
-    normal_stress : float
-        Normal stress [MPa].
-    shear_stress : float
-        Shear stress [MPa].
-    stf_waveform : np.ndarray
-        Source time function waveform (filtered, zero-started).
-    stf_time : np.ndarray
-        Corresponding time axis of the STF.
-    stf_duration : float
-        Duration of the STF waveform.
-    assembly_travel_time : float
-        Time needed for wave to travel through the steel assembly, excluding gouge.
-    c_step : float
-        Step size for scanning gouge velocities [cm/μs].
-    c_range : float
-        Half-range for scanning velocities (in subsequent waveforms).
-    frequency_cutoff_MHz : float
-        Frequency cutoff for simulating or filtering waveforms.
-    assembly_dict : dict
-        Dictionary with the assembly metadata, like dimensions, blocks velocity, pzt position       
-    params : dict
-        Dictionary containing relevant parameters.
-
-    Returns
-    -------
-    dict
-        A dictionary with:
-            'previous_min_velocity': Updated best velocity for the next iteration,
-            'gouge_velocity_list_waveform': The array of tested velocities,
-            'L2norm_waveform': The computed L2 norms for each velocity,
-            'best_gouge_velocity': The best-fit velocity,
-            'range_factor': Possibly updated range scaling factor if min was at boundary.
-    """
     # Unpack additional parameters
-    frequency_cutoff = params['frequency_cutoff_MHz']
-    minimum_SNR = params['minimum_SNR']
-    c_step = params['c_step_cm/mus']
-    c_range = params['c_range_cm/mus']
-    range_scaling_factor = params['range_scaling_factor']
-    plot_save_interval = params['plot_save_interval']
-    movie_save_interval = params['movie_save_interval']
-    l2norm_plot_interval = params['l2norm_plot_interval']
+    frequency_cutoff       = params['frequency_cutoff_MHz']
+    minimum_SNR            = params['minimum_SNR']
+    c_step                 = params['c_step_cm/mus']
+    c_range                = params['c_range_cm/mus']
+    range_scaling_factor   = params['range_scaling_factor']
+    plot_save_interval     = params['plot_save_interval']
+    movie_save_interval    = params['movie_save_interval']
+    l2norm_plot_interval   = params['l2norm_plot_interval']
     outdir_path_image_list = params['outdir_path_image']
 
-    side1_params = assembly_dict['side1_params']
-    side2_params = assembly_dict['side2_params']
-    central_params = assembly_dict['central_params']
-    assembly_travel_time = assembly_dict['assembly_travel_time']
-    wave_type = assembly_dict["wave_type"]
+    side1_params           = assembly_dict['side1_params']
+    side2_params           = assembly_dict['side2_params']
+    central_params         = assembly_dict['central_params']
+    assembly_travel_time   = assembly_dict['assembly_travel_time']
+    wave_type              = assembly_dict["wave_type"]
 
     # Convert outdir_path_image_list[0] to a Path
     outdir_path_image = Path(outdir_path_image_list) if isinstance(outdir_path_image_list, str) else outdir_path_image_list
@@ -582,26 +323,28 @@ def process_waveform(
         c_step_waveform = c_step
 
         # Evaluate SNR in a smaller time window          
-        max_travel_time = compute_dds_travel_time(assembly_travel_time= assembly_travel_time,
-                                    side1_params=side1_params,
-                                    side2_params=side2_params,
-                                    central_params=central_params,
-                                    thickness_gouge_1=thickness_gouge_1,
-                                    thickness_gouge_2=thickness_gouge_2,
-                                    v_gouge_1=cmin_waveform,
-                                    v_gouge_2=cmin_waveform)
+        max_travel_time = compute_dds_travel_time(
+            assembly_travel_time = assembly_travel_time,
+            side1_params         = side1_params,
+            side2_params         = side2_params,
+            central_params       = central_params,
+            thickness_gouge_1    = thickness_gouge_1,
+            thickness_gouge_2    = thickness_gouge_2,
+            v_gouge_1            = cmin_waveform,
+            v_gouge_2            = cmin_waveform
+            )
 
-        min_travel_time = compute_dds_travel_time(assembly_travel_time= assembly_travel_time,
-                                    side1_params=side1_params,
-                                    side2_params=side2_params,
-                                    central_params=central_params,
-                                    thickness_gouge_1=thickness_gouge_1,
-                                    thickness_gouge_2=thickness_gouge_2,
-                                    v_gouge_1=cmax_waveform,
-                                    v_gouge_2=cmax_waveform)
+        min_travel_time = compute_dds_travel_time(
+            assembly_travel_time = assembly_travel_time,
+            side1_params         = side1_params,
+            side2_params         = side2_params,
+            central_params       = central_params,
+            thickness_gouge_1    = thickness_gouge_1,
+            thickness_gouge_2    = thickness_gouge_2,
+            v_gouge_1            = cmax_waveform,
+            v_gouge_2            =cmax_waveform
+            )
         
-        ()
-
         # Evaluate SNR
         sure_noise_interval = np.where(observed_time < min_travel_time)
         good_data_interval = np.where(observed_time > min_travel_time)
@@ -611,11 +354,11 @@ def process_waveform(
         if max_signal / max_noise < minimum_SNR:
             print(f"SNR {max_signal / max_noise:.2f} < {minimum_SNR}. Skipping waveform {idx_waveform}.")
             return {
-                'previous_min_velocity': None,
+                'previous_min_velocity'       : None,
                 'gouge_velocity_list_waveform': None,
-                'L2norm_waveform': None,
-                'best_gouge_velocity': None,
-                'range_factor': None
+                'L2norm_waveform'             : None,
+                'best_gouge_velocity'         : None,
+                'range_factor'                : None
             }
 
         is_first_waveform = True
@@ -623,28 +366,32 @@ def process_waveform(
     else:
         # For subsequent waveforms, search around previous velocity
         is_first_waveform = False
-        c_range_waveform = range_scaling_factor * c_range
-        cmin_waveform = previous_min_velocity - c_range_waveform
-        cmax_waveform = previous_min_velocity + c_range_waveform
-        c_step_waveform = c_step
+        c_range_waveform  = range_scaling_factor * c_range
+        cmin_waveform     = previous_min_velocity - c_range_waveform
+        cmax_waveform     = previous_min_velocity + c_range_waveform
+        c_step_waveform   = c_step
 
-        max_travel_time = compute_dds_travel_time(assembly_travel_time= assembly_travel_time,
-                                    side1_params=side1_params,
-                                    side2_params=side2_params,
-                                    central_params=central_params,
-                                    thickness_gouge_1=thickness_gouge_1,
-                                    thickness_gouge_2=thickness_gouge_2,
-                                    v_gouge_1=cmin_waveform,
-                                    v_gouge_2=cmin_waveform)
+        max_travel_time = compute_dds_travel_time(
+            assembly_travel_time = assembly_travel_time,
+            side1_params         = side1_params,
+            side2_params         = side2_params,
+            central_params       = central_params,
+            thickness_gouge_1    = thickness_gouge_1,
+            thickness_gouge_2    = thickness_gouge_2,
+            v_gouge_1            = cmin_waveform,
+            v_gouge_2            = cmin_waveform
+            )
 
-        min_travel_time = compute_dds_travel_time(assembly_travel_time= assembly_travel_time,
-                                    side1_params=side1_params,
-                                    side2_params=side2_params,
-                                    central_params=central_params,
-                                    thickness_gouge_1=thickness_gouge_1,
-                                    thickness_gouge_2=thickness_gouge_2,
-                                    v_gouge_1=cmax_waveform,
-                                    v_gouge_2=cmax_waveform)
+        min_travel_time = compute_dds_travel_time(
+            assembly_travel_time = assembly_travel_time,
+            side1_params         = side1_params,
+            side2_params         = side2_params,
+            central_params       = central_params,
+            thickness_gouge_1    = thickness_gouge_1,
+            thickness_gouge_2    = thickness_gouge_2,
+            v_gouge_1            = cmax_waveform,
+            v_gouge_2            = cmax_waveform
+            )
         
     misfit_interval = np.where((observed_time > min_travel_time) & (observed_time < max_travel_time + stf_duration))[0]
     
@@ -693,7 +440,7 @@ def process_waveform(
     previous_min_velocity = best_gouge_velocity
 
     # Determine if we save plots and/or movies
-    save_plot = (idx_waveform % plot_save_interval == 0) 
+    save_plot  = (idx_waveform % plot_save_interval == 0) 
     save_movie = (idx_waveform+1 % movie_save_interval == 0) 
 
     # Construct output paths
@@ -711,21 +458,21 @@ def process_waveform(
         movie_output_path = None
     
     synthetic_waveform, _,_,_,_,_,_,_,_,_,_,_ = ForwardModeler().dds_forward_simulation(
-        observed_time=observed_time,
-        observed_waveform=observed_waveform,
-        stf_time=stf_time,
-        stf_waveform=stf_waveform,
-        frequency_cutoff=frequency_cutoff,
-        assembly_dict=assembly_dict,
-        gouge_velocity=(best_gouge_velocity, best_gouge_velocity),
-        gouge_thickness=(thickness_gouge_1,thickness_gouge_2),
-        misfit_interval=misfit_interval,
-        fixed_minimum_velocity=best_gouge_velocity,
-        normalize_waveform=True,
-        enable_plotting=save_plot,
-        make_movie=save_movie,
-        plot_output_path=str(plot_output_path) if plot_output_path else None,
-        movie_output_path=str(movie_output_path) if movie_output_path else None
+        observed_time           = observed_time,
+        observed_waveform       = observed_waveform,
+        stf_time                = stf_time,
+        stf_waveform            = stf_waveform,
+        frequency_cutoff        = frequency_cutoff,
+        assembly_dict           = assembly_dict,
+        gouge_velocity          = (best_gouge_velocity, best_gouge_velocity),
+        gouge_thickness         = (thickness_gouge_1,thickness_gouge_2),
+        misfit_interval         = misfit_interval,
+        fixed_minimum_velocity  = best_gouge_velocity,
+        normalize_waveform      = True,
+        enable_plotting         = save_plot,
+        make_movie              = save_movie,
+        plot_output_path        = str(plot_output_path) if plot_output_path else None,
+        movie_output_path       = str(movie_output_path) if movie_output_path else None
     )
 
     # Possibly plot L2 norm vs. velocity
@@ -735,18 +482,18 @@ def process_waveform(
         l2norm_plot_name = f"{outfile_name}_L2norm_waveform_{overall_index}"
         l2norm_plot_path = outdir_path_image / l2norm_plot_name
         plotter.plot_l2_norm_vs_velocity(
-            gouge_velocity=gouge_velocity_list_waveform,
-            L2norm=L2norm_waveform,
-            overall_index=overall_index,
-            outfile_path=l2norm_plot_path
+            gouge_velocity      = gouge_velocity_list_waveform,
+            L2norm              = L2norm_waveform,
+            overall_index       = overall_index,
+            outfile_path        = l2norm_plot_path
         )
 
     return {
-        'previous_min_velocity': previous_min_velocity,
+        'previous_min_velocity'       : previous_min_velocity,
         'gouge_velocity_list_waveform': gouge_velocity_list_waveform,
-        'L2norm_waveform': L2norm_waveform,
-        'best_gouge_velocity': best_gouge_velocity,
-        'range_factor': range_scaling_factor
+        'L2norm_waveform'             : L2norm_waveform,
+        'best_gouge_velocity'         : best_gouge_velocity,
+        'range_factor'                : range_scaling_factor
     }
 
 def process_velocity(args):
@@ -805,12 +552,12 @@ if __name__ == "__main__":
     dir_manager = DirectoryManager()
     
     # Basic experiment info
-    machine_name = "Brava_2"
+    machine_name    = "Brava_2"
     experiment_name = "s0216suw04anh_50"
-    wave_type = "_p"    # that "_" is ugly, but needed
-    data_type_uw = "uw_data/data_tsv_files" + wave_type
-    data_type_mech = "mechanical_data"
-    mech_file_name = f"{experiment_name}_data_rp"
+    wave_type       = "_p"    # that "_" is ugly, but needed
+    data_type_uw    = "uw_data/data_tsv_files" + wave_type
+    data_type_mech  = "mechanical_data"
+    mech_file_name  = f"{experiment_name}_data_rp"
 
     # Create output directories
     outdir_path_l2norm = dir_manager.make_data_analysis_folders(
@@ -827,32 +574,32 @@ if __name__ == "__main__":
 
     # Basic simulation parameters 
     params = {
-        "maxtime2simulate_mus" : 40,
-        "frequency_cutoff_MHz": 4,
-        "minimum_SNR": 5,
-        "c_step_cm/mus":  10 * (1e2 / 1e6),
-        "c_range_cm/mus":  100 * (1e2 / 1e6),
-        "range_scaling_factor": 1,
-        "plot_save_interval": 1,
-        "movie_save_interval": 1,
-        "l2norm_plot_interval": 1,
-        "number_of_waveforms2process": 10,
-        "outdir_path_l2norm": outdir_path_l2norm[0],
-        "outdir_path_image": outdir_path_image[0]
+        "maxtime2simulate_mus"      : 40,
+        "frequency_cutoff_MHz"      : 4,
+        "minimum_SNR"               : 5,
+        "c_step_cm/mus"             : 0.00110,
+        "c_range_cm/mus"            : 0.01,
+        "range_scaling_factor"      : 1,
+        "plot_save_interval"        : 1,
+        "movie_save_interval"       : 1,
+        "l2norm_plot_interval"      : 1,
+        "num_waveform2porcess"      : 10,
+        "outdir_path_l2norm"        : outdir_path_l2norm[0],
+        "outdir_path_image"         : outdir_path_image[0]
     }
 
-    # Load the source time function
-    stf_waveform, stf_time, stf_duration = load_and_process_stf(
+    # Load the Source Time Function
+    stf_waveform, stf_time, stf_duration = UltrasonicDataHandler.load_stf(
         dir_manager=dir_manager,
         machine_name_stf="on_bench",
         experiment_name_stf="STF",
         data_type_stf="data_analysis/source_time_functions" + wave_type,
-        stf_choosen="width500_volt200_p2p",
-        frequency_cutoff_MHz= params['frequency_cutoff_MHz']
+        stf_chosen="width500_volt200_p2p",
+        frequency_cutoff_MHz=params["frequency_cutoff_MHz"]
     )
 
-    # Load mechanical data
-    mech_data, sync_data, sync_peaks = load_mechanical_data(
+    # Load Mechanical Data
+    mech_data, sync_data, sync_peaks = MechanicalDataHandler.locate_and_load_data(
         dir_manager=dir_manager,
         machine_name=machine_name,
         experiment_name=experiment_name,
@@ -860,46 +607,56 @@ if __name__ == "__main__":
         mech_file_name=mech_file_name
     )
 
+
     # Build a dictionary containing all the relevant assembly parameters
     side1_params, side2_params, central_params = BlockMetadataHandler.load_blocks_metadata(
         dir_manager=dir_manager,
         blocks_metadata_name="blocks_metadata.json",
         block_keys=("mauro_side1","mauro_side2","central_block1")
     )
-    assembly_dict= {"side1_params": side1_params, "side2_params":side2_params, "central_params":central_params}
 
-    # fixed travel time in the assembly, without gouge and excluding grouves. It is the lower bound for signal detection
-    assembly_dict['assembly_travel_time'] = ((side1_params["z_pzt2grove"]-side1_params["h_grooves"])/side1_params["velocity"+ wave_type]
-                                       +(side2_params["z_pzt2grove"]-side2_params["h_grooves"])/side2_params["velocity" + wave_type]
-                                       +(central_params["z"]-2*central_params['h_grooves'])/central_params["velocity" + wave_type]
-                                        )
-    assembly_dict["wave_type"] = wave_type
-    assembly_dict["transmitter_position"] = side1_params["z_pzt2grove"]
-    assembly_dict["receiver_position"] = side2_params["z_pzt2grove"]
+    assembly_dict = {
+        "side1_params"        : side1_params,
+        "side2_params"        : side2_params,
+        "central_params"      : central_params,
+        "wave_type"           : wave_type,
+        "transmitter_position": side1_params["z_pzt2grove"],
+        "receiver_position"   : side2_params["z_pzt2grove"],
+        # compute steel-only lower-bound
+        "assembly_travel_time": (
+              (side1_params["z_pzt2grove"] - side1_params["h_grooves"]) / side1_params["velocity" + wave_type]
+            + (side2_params["z_pzt2grove"] - side2_params["h_grooves"]) / side2_params["velocity" + wave_type]
+            + (central_params["z"] - 2*central_params["h_grooves"]) / central_params["velocity" + wave_type]
+            ),
+    }
 
     # Make UW path list
-    infile_path_list_uw = sorted(
-        dir_manager.make_infile_path_list(machine_name, experiment_name, data_type=data_type_uw)
-    )
+    infile_path_list_uw = sorted( dir_manager.make_infile_path_list(machine_name, experiment_name, data_type=data_type_uw))
 
     # Prepare manual pick arrival times for first guess velocities
     arrival_times_list = pick_arrival_times(
-                                            dir_manager=dir_manager,
-                                            machine_name=machine_name,
-                                            experiment_name=experiment_name,
-                                            infile_path_list_uw=infile_path_list_uw,
-                                            start_time= assembly_dict['assembly_travel_time']
-                                            )
+        dir_manager=dir_manager,
+        machine_name=machine_name,
+        experiment_name=experiment_name,
+        infile_path_list_uw=infile_path_list_uw,
+        start_time= assembly_dict['assembly_travel_time']
+        )
  
     # Process each UW file
     for chosen_uw_file, infile_path in enumerate(infile_path_list_uw):
         arrival_time_interval = arrival_times_list[chosen_uw_file]
+
+        # Update assembly_dict with mechanical arrays for this file
+        update_assembly_dict_with_mech_data(
+            assembly_dict=assembly_dict,
+            mech_data=mech_data,
+            sync_peaks=sync_peaks,
+            chosen_uw_file=chosen_uw_file
+    )
+        
         process_uw_file(
             infile_path=infile_path,
-            chosen_uw_file=chosen_uw_file,
             arrival_time_interval=arrival_time_interval,
-            sync_peaks=sync_peaks,
-            mech_data=mech_data,
             stf_waveform=stf_waveform,
             stf_time=stf_time,
             stf_duration=stf_duration,
