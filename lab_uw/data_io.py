@@ -61,17 +61,19 @@ class UltrasonicDataHandler:
     def load_and_process_uw(
         cls,
         infile_path: Path,
+        remove_mean: bool = True,
+        number_of_waveforms2process: int = None,
+        maxtime2simulate: float = 0,
         zero_out_time: float = 0,
         frequency_cutoff_MHz: float = None,
-        maxtime2simulate: float = 0,
-        number_of_waveforms_to_process: int = None
+        time_ax_acquisition_start: float = None
     ) -> Tuple[np.ndarray, np.ndarray, int, Dict[str, Any]]:
         """
         High-level method to:
         1) load the .tsv ultrasonic data
         2) remove mean,
         3) optionally truncate at maxtime2simulate,
-        4) compute downsampling factor
+        4) Downsampling the number of waveforms to analyze
         5) optionally zero out data up to 'zero_out_time'
         6) lowpass filter
 
@@ -79,42 +81,39 @@ class UltrasonicDataHandler:
         -------
         observed_waveform_data : np.ndarray
             The 2D array of shape [n_waveforms, n_samples], after processing.
-        observed_time : np.ndarray
-            The truncated time axis.
-        downsampling : int
-            The computed downsampling factor.
         metadata : Dict[str, Any]
             The original metadata from the .tsv file (with minor changes if truncated).
         """
-        # 1) Load raw data from .tsv
+        # Load raw data from .tsv
         handler = cls.load_UW_data(infile_path)
         observed_waveform_data = handler.waveform_data
         metadata = handler.metadata
-        observed_time = metadata["time_ax_waveform"]
 
-        # 2) Remove mean
-        observed_waveform_data = observed_waveform_data - np.mean(observed_waveform_data)
+        if remove_mean:
+            observed_waveform_data = observed_waveform_data - np.mean(observed_waveform_data)
 
-        # 4) Downsampling factor
-        if number_of_waveforms_to_process > 0:
-            total_waveforms = metadata["number_of_waveforms"]
-            downsampling = max(1, round(total_waveforms / number_of_waveforms_to_process)) 
+        # Downsampling the number of waveforms to analyze and edit the metadata accordingly
+        if number_of_waveforms2process > 0:
+            downsampling = max(1, round(metadata["number_of_waveforms"] / number_of_waveforms2process)) 
+            print(f"Number of waveforms: {metadata['number_of_waveforms']}, wanting {number_of_waveforms2process}, downsampling factor: {downsampling}")
 
-        # 3) Possibly reduce the number of samples (time-limiting)
+            observed_waveform_data = observed_waveform_data[::downsampling,:]
+            metadata["time_ax_acquisition"] = metadata["time_ax_acquisition"][::downsampling]
+            metadata["number_of_waveforms"] = len(observed_waveform_data)
+
+        # Possibly reduce the number of samples (time-limiting the simulation of a waveform)
         if maxtime2simulate > 0:
-            idx_maxtime = np.searchsorted(observed_time, maxtime2simulate)
+            idx_maxtime = np.searchsorted(metadata["time_ax_waveform"], maxtime2simulate)
             observed_waveform_data = observed_waveform_data[:, :idx_maxtime]
-            observed_time = observed_time[:idx_maxtime]
-            # (Optionally update metadata if you need the truncated shape/time.)
-            metadata["time_ax_waveform"] = observed_time
-            metadata["number_of_samples"] = len(observed_time)
+            metadata["time_ax_waveform"] = metadata["time_ax_waveform"][:idx_maxtime]
+            metadata["number_of_samples"] = len(metadata["time_ax_waveform"])
 
-        # 5) Zero out data up to zero_out_time
+        # Zero out data up to zero_out_time
         if zero_out_time > 0:
-            idx_zero_out = np.searchsorted(observed_time, zero_out_time)
+            idx_zero_out = np.searchsorted(metadata["time_ax_waveform"], zero_out_time)
             observed_waveform_data[:, :idx_zero_out] = 0.0
 
-        # 6) Lowpass filtering
+        # Lowpass filtering
         if frequency_cutoff_MHz:
             signal_processor = SignalProcessor()
             observed_waveform_data, _ = signal_processor.signal2noise_separation_lowpass(
@@ -123,7 +122,13 @@ class UltrasonicDataHandler:
                 freq_cut=frequency_cutoff_MHz
             )
 
-        return observed_waveform_data, observed_time, downsampling, metadata
+        if time_ax_acquisition_start:
+            metadata["time_ax_acquisition"] = metadata["time_ax_acquisition"] + time_ax_acquisition_start
+
+        handler.waveform_data = observed_waveform_data
+        handler.metadata      = metadata
+
+        return handler
 
     @classmethod
     def load_stf(

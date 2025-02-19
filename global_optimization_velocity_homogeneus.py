@@ -21,38 +21,28 @@ from lab_uw.utils import pick_arrival_times
 def update_assembly_dict_with_mech_data(
     assembly_dict: Dict[str, Any],
     mech_data: pd.DataFrame,
-    sync_peaks: np.ndarray,
-    chosen_uw_file: int
 ) -> None:
     """
-    Update assembly_dict with per-waveform mechanical arrays (thickness, stress, etc.)
-    for a given UW file index (chosen_uw_file).
+    Update assembly_dict with per-waveform mechanical data entry
     """
-    try:
-        start_sync = sync_peaks[2 * chosen_uw_file]
-        end_sync   = sync_peaks[2 * chosen_uw_file + 1]
-    except (TypeError, IndexError):
-        # fallback if sync_peaks is partial
-        start_sync = sync_peaks[2 * chosen_uw_file]
-        end_sync = start_sync + 1  # minimal fallback
 
-    # Example: thickness in mm -> convert to cm
-    thickness_gouge_1_array = mech_data['rgt_lt_mm'][start_sync:end_sync].values / 10.0
-    thickness_gouge_2_array = thickness_gouge_1_array  # if they match in your experiment
+    # thickness in mm -> convert to cm
+    assembly_dict["thickness_gouge_1"] = mech_data["rgt_lt_mm"] / 10.0
+    # for now, layers are assumed to have same thickness
+    assembly_dict["thickness_gouge_2"] = mech_data["rgt_lt_mm"]
+    assembly_dict["normal_stress"]     = mech_data["normal_stress_MPa"]
+    assembly_dict["shear_stress"]      = mech_data["shear_stress_MPa"]
+    assembly_dict["ec_disp_mm"]        = mech_data["ec_disp_mm"]
+    assembly_dict["time_s"]            = mech_data["time_s"]
 
-    normal_stress_array = mech_data['normal_stress_MPa'][start_sync:end_sync].values
-    shear_stress_array  = mech_data['shear_stress_MPa'][start_sync:end_sync].values
-    ec_disp_mm_array    = mech_data['ec_disp_mm'][start_sync:end_sync].values
-    time_s_array        = mech_data['time_s'][start_sync:end_sync].values
+def mechdata_slice4uw_processing(mech_data, sync_peaks, chosen_uw_file, params):        
+    start_sync      = sync_peaks[2 * chosen_uw_file]
+    end_sync        = sync_peaks[2 * chosen_uw_file + 1]
+    mech_data_slice = mech_data.iloc[start_sync : end_sync].copy()
+    downsampling    = max(1, round(len(mech_data_slice)/ params["num_waveform2porcess"])) 
+    mech_data_slice = mech_data_slice.iloc[:: downsampling].copy()  
 
-    # Store them in assembly_dict for the next steps
-    assembly_dict["thickness_gouge_1_array"] = thickness_gouge_1_array
-    assembly_dict["thickness_gouge_2_array"] = thickness_gouge_2_array
-    assembly_dict["normal_stress_array"]     = normal_stress_array
-    assembly_dict["shear_stress_array"]      = shear_stress_array
-    assembly_dict["ec_disp_mm_array"]        = ec_disp_mm_array
-    assembly_dict["time_s_array"]            = time_s_array
-
+    return mech_data_slice
 def compute_dds_travel_time(assembly_travel_time,
                             side1_params,
                             side2_params,
@@ -70,11 +60,13 @@ def compute_dds_travel_time(assembly_travel_time,
             + central_params["h_grooves"]/(side1_params["velocity"+wave_type]+v_gouge_1)
             + central_params["h_grooves"]/(side1_params["velocity"+wave_type]+v_gouge_2)
             )
-    
+
 # Function Definitions
 def process_uw_file(
     infile_path: Path,
     arrival_time_interval: List[Any],
+    uw_data_handler: UltrasonicDataHandler,
+    mechanical_data_handler: MechanicalDataHandler,
     stf_waveform: np.ndarray,
     stf_time: np.ndarray,
     stf_duration: float,
@@ -82,48 +74,22 @@ def process_uw_file(
     assembly_dict: Dict[str, Any],
 ) -> None:
     """
-    Process a single UW data file (ultrasonic waveforms). 
-    The mechanical data is already stored in assembly_dict by an external function.
+    Process a single UW data file (ultrasonic waveforms).
+    The mechanical data is already stored in assembly_dict by an external function,
+    but we apply the final downsampling in that function for a consistent indexing
+    between ultrasonic waveforms and mechanical arrays.
     """
     print(f"PROCESSING UW DATA IN {infile_path}:")
 
-    # Unpack parameters
-    maxtime2simulate = params["maxtime2simulate_mus"]
-    frequency_cutoff_MHz = params['frequency_cutoff_MHz']
-    num_waveform2porcess = params["num_waveform2porcess"]
+  # Derive output filenames using pathlib
     outdir_path_l2norm = Path(params["outdir_path_l2norm"])
     outdir_path_image  = Path(params["outdir_path_image"])
-
-  # Derive output filenames using pathlib
     outfile_name = infile_path.name.split(".")[0]  
     outfile_path = outdir_path_l2norm / outfile_name
 
     start_time = tm.time()
-
-    # Load and process ultrasonic data from TSV
-    ######## Downsampling the number of waveform only work if the sampling of uw and mechanical data is the same!!!
-    ######## Must be implemented a way for choosing the right mechanical data for the uw pomparing the time!!!
-    observed_waveform_data, observed_time, downsampling, metadata = (
-        UltrasonicDataHandler.load_and_process_uw(
-            infile_path=infile_path,
-            zero_out_time=assembly_dict["assembly_travel_time"],
-            frequency_cutoff_MHz=frequency_cutoff_MHz,
-            maxtime2simulate=maxtime2simulate,
-            number_of_waveforms_to_process=num_waveform2porcess
-        )
-    )
-    
-    print(f"Number of waveforms: {metadata['number_of_waveforms']}, wanting {num_waveform2porcess}, downsampling factor: {downsampling}")
-
-    # We retrieve the mechanical arrays from assembly_dict
-    thickness_gouge_1_array = assembly_dict["thickness_gouge_1_array"]
-    thickness_gouge_2_array = assembly_dict["thickness_gouge_2_array"]
-    normal_stress_array     = assembly_dict["normal_stress_array"]
-    shear_stress_array      = assembly_dict["shear_stress_array"]
-    ec_disp_array           = assembly_dict["ec_disp_mm_array"]
-    time_s_array            = assembly_dict["time_s_array"]
-
-    # Prepare for the loop
+ 
+    # 3) Prepare for the loop
     velocity_ranges       = []
     L2norm_all_waveforms  = []
     estimated_velocities  = []
@@ -133,96 +99,68 @@ def process_uw_file(
     time_s_values         = []
     previous_min_velocity = None
 
-    # Iterate over waveforms (downsampling)
-    for idx_waveform, (
-            thick_g1, thick_g2, normal_stress, shear_stress, ec_disp, time_s
-        ) in enumerate(
-            zip(
-                thickness_gouge_1_array[::downsampling],
-                thickness_gouge_2_array[::downsampling],
-                normal_stress_array[::downsampling],
-                shear_stress_array[::downsampling],
-                ec_disp_array[::downsampling],
-                time_s_array[::downsampling]
-            )
-        ):
+    observed_waveform_data = uw_data_handler.waveform_data
+    observed_waveform_time = uw_data_handler.metadata
+    # 4) Iterate over waveforms and mechanical data in sync
+    for observed_waveform, (idx_waveform, mech_data) in zip(observed_waveform_data, mechanical_data_handler.iterrows()):
+        
+        update_assembly_dict_with_mech_data(assembly_dict=assembly_dict, mech_data=mech_data)
 
-        idx_data = idx_waveform * downsampling
-        if idx_data >= observed_waveform_data.shape[0]:
-            break  # out of range
-
-        observed_waveform = observed_waveform_data[idx_data]
-        overall_index = idx_data  # or start_sync + idx_data, etc.
-
-        normal_stress_values.append(normal_stress)
-        shear_stress_values.append(shear_stress)
-        ec_disp_values.append(ec_disp)
-        time_s_values.append(time_s)
-
-        # Call the actual waveform processor
         result = process_waveform(
             arrival_time_interval,
             observed_waveform=observed_waveform,
-            observed_time=observed_time,
+            observed_time=observed_waveform_time,
             idx_waveform=idx_waveform,
-            overall_index=overall_index,
-            outfile_name=infile_path.stem,
+            outfile_name=outfile_name,
             previous_min_velocity=previous_min_velocity,
-            thickness_gouge_1=thick_g1,
-            thickness_gouge_2=thick_g2,
-            normal_stress=normal_stress,
-            shear_stress=shear_stress,
             stf_waveform=stf_waveform,
             stf_time=stf_time,
             stf_duration=stf_duration,
             params=params,
             assembly_dict=assembly_dict
         )
-
         previous_min_velocity = result["previous_min_velocity"]
         velocity_ranges.append(result["gouge_velocity_list_waveform"])
         L2norm_all_waveforms.append(result["L2norm_waveform"])
         estimated_velocities.append(result["best_gouge_velocity"])
 
-    # Save results to a pickle
-    results_pkl = outfile_path.with_suffix(".pkl")  # e.g. path/to/l2norm/filename.pkl
-    with open(results_pkl, 'wb') as f:
+    # Save results
+    results_pkl = outfile_path.with_suffix(".pkl")
+    with open(results_pkl, "wb") as f:
         pickle.dump({
             "L2norm_all_waveforms": L2norm_all_waveforms,
             "velocity_ranges": velocity_ranges,
             "estimated_velocities": estimated_velocities
         }, f)
 
-    #  Velocity and stress vs ec_disp
+    # Plot velocity & stress vs. ec_disp
     plotter = Plotter()
     plot_name_ec_disp = f"{outfile_name}_velocity_stress_vs_ec_disp"
-    plot_path_ec_disp = Path(outdir_path_image) / plot_name_ec_disp  # outdir_path_image is in params
-
+    plot_path_ec_disp = outdir_path_image / plot_name_ec_disp
     plotter.plot_velocity_and_stresses(
         x_values=np.array(ec_disp_values),
         velocities=np.array(estimated_velocities),
         normal_stress=np.array(normal_stress_values),
         shear_stress=np.array(shear_stress_values),
-        x_label='ec_disp_mm',
-        velocity_label='Gouge Velocity (cm/μs)',
-        stress_labels=('Normal Stress (MPa)', 'Shear Stress (MPa)'),
-        title='Gouge Velocity and Stress vs ec_disp_mm',
+        x_label="ec_disp_mm",
+        velocity_label="Gouge Velocity (cm/µs)",
+        stress_labels=("Normal Stress (MPa)", "Shear Stress (MPa)"),
+        title="Gouge Velocity and Stress vs ec_disp_mm",
         outfile_path=plot_path_ec_disp
     )
 
-    # Velocity and stress vs time_s
+    # Plot velocity & stress vs. time_s
     plot_name_time = f"{outfile_name}_velocity_stress_vs_time"
-    plot_path_time = Path(outdir_path_image) / plot_name_time
-
+    plot_path_time = outdir_path_image / plot_name_time
     plotter.plot_velocity_and_stresses(
         x_values=np.array(time_s_values),
         velocities=np.array(estimated_velocities),
         normal_stress=np.array(normal_stress_values),
         shear_stress=np.array(shear_stress_values),
-        x_label='time_s',
-        velocity_label='Gouge Velocity (cm/μs)',
-        stress_labels=('Normal Stress (MPa)', 'Shear Stress (MPa)'),
-        title='Gouge Velocity and Stress vs time_s',
+        x_label="time_s",
+        velocity_label="Gouge Velocity (cm/µs)",
+        stress_labels=("Normal Stress (MPa)", "Shear Stress (MPa)"),
+        title="Gouge Velocity and Stress vs time_s",
         outfile_path=plot_path_time
     )
 
@@ -233,13 +171,8 @@ def process_waveform(
     observed_waveform: np.ndarray,
     observed_time: np.ndarray,
     idx_waveform: int,
-    overall_index: int,
     outfile_name: str,
     previous_min_velocity: Optional[float],
-    thickness_gouge_1: float,
-    thickness_gouge_2: float,
-    normal_stress: float,
-    shear_stress: float,
     stf_waveform: np.ndarray,
     stf_time: np.ndarray,
     stf_duration: float,
@@ -281,7 +214,7 @@ def process_waveform(
                 # To get an estimation of the velocity from the travel times, we have a
                 # Quadratic eq: A*vel^2 + B*vel + C = 0
                 Delta_t = picked_time - assembly_dict['assembly_travel_time']
-                L_g = thickness_gouge_1 + thickness_gouge_2
+                L_g = assembly_dict["thickness_gouge_1"] + assembly_dict["thickness_gouge_2"]
                 L_h = side1_params["h_grooves"] + 2 * central_params["h_grooves"] + side2_params["h_grooves"]
                 A = 0.5 * Delta_t
                 ##### For now assume the velocity is the same for all the blcoks. So just pick one
@@ -607,7 +540,6 @@ if __name__ == "__main__":
         mech_file_name=mech_file_name
     )
 
-
     # Build a dictionary containing all the relevant assembly parameters
     side1_params, side2_params, central_params = BlockMetadataHandler.load_blocks_metadata(
         dir_manager=dir_manager,
@@ -627,7 +559,7 @@ if __name__ == "__main__":
               (side1_params["z_pzt2grove"] - side1_params["h_grooves"]) / side1_params["velocity" + wave_type]
             + (side2_params["z_pzt2grove"] - side2_params["h_grooves"]) / side2_params["velocity" + wave_type]
             + (central_params["z"] - 2*central_params["h_grooves"]) / central_params["velocity" + wave_type]
-            ),
+            )
     }
 
     # Make UW path list
@@ -646,20 +578,28 @@ if __name__ == "__main__":
     for chosen_uw_file, infile_path in enumerate(infile_path_list_uw):
         arrival_time_interval = arrival_times_list[chosen_uw_file]
 
-        # Update assembly_dict with mechanical arrays for this file
-        update_assembly_dict_with_mech_data(
-            assembly_dict=assembly_dict,
-            mech_data=mech_data,
-            sync_peaks=sync_peaks,
-            chosen_uw_file=chosen_uw_file
-    )
-        
-        process_uw_file(
+        mech_data_slice = mechdata_slice4uw_processing(mech_data,sync_peaks, chosen_uw_file, params)
+
+        # Load & process ultrasonic data and metadata from TSV, with preprocessing
+        uw_data_handler = (
+            UltrasonicDataHandler.load_and_process_uw(
             infile_path=infile_path,
-            arrival_time_interval=arrival_time_interval,
-            stf_waveform=stf_waveform,
-            stf_time=stf_time,
-            stf_duration=stf_duration,
-            params=params,
-            assembly_dict = assembly_dict
+            zero_out_time=assembly_dict["assembly_travel_time"],
+            frequency_cutoff_MHz=params["frequency_cutoff_MHz"],
+            maxtime2simulate=params["maxtime2simulate_mus"],
+            number_of_waveforms2process=params["num_waveform2porcess"],
+            time_ax_acquisition_start = mech_data_slice["time_s"].values[0]
+            )
+        )
+
+        process_uw_file(
+            infile_path             = infile_path,
+            arrival_time_interval   = arrival_time_interval,
+            uw_data_handler         = uw_data_handler,
+            mechanical_data_handler = mech_data_slice,
+            stf_waveform            = stf_waveform,
+            stf_time                = stf_time,
+            stf_duration            = stf_duration,
+            params                  = params,
+            assembly_dict           = assembly_dict
         )
