@@ -800,11 +800,11 @@ class Plotter:
         ax.axvline(transmitter_pos, color="red", linestyle='-', label='Transmitter')
         ax.axvline(receiver_pos, color="green", linestyle='-', label='Receiver')
 
-        ax.set_title("Velocity Model with Layers and Smoothing", fontsize=self.settings['fontsize_title'])
+        ax.set_title("Velocity Model", fontsize=self.settings['fontsize_title'])
         ax.set_xlabel("Position (cm)", fontsize=self.settings['fontsize_labels'])
         ax.set_ylabel("Velocity (cm/$\\mu$s)", fontsize=self.settings['fontsize_labels'])
         ax.grid(True)
-        ax.legend(loc='upper right', fontsize=self.settings['fontsize_ticks'])
+        ax.legend(loc='upper center', fontsize=self.settings['fontsize_ticks'])
         ax.tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
 
         fig.tight_layout()
@@ -870,10 +870,10 @@ class Plotter:
         Raises:
             ValueError: If input arrays are not 1D or lengths do not match.
         """
-        if not all(arr.ndim == 1 for arr in [x_values, velocities, normal_stress, shear_stress]):
-            raise ValueError("All input arrays must be 1D numpy arrays.")
-        if not (len(x_values) == len(velocities) == len(normal_stress) == len(shear_stress)):
-            raise ValueError("All input arrays must have the same length.")
+        # if not all(arr.ndim == 1 for arr in [x_values, velocities, normal_stress, shear_stress]):
+        #     raise ValueError("All input arrays must be 1D numpy arrays.")
+        # if not (len(x_values) == len(velocities) == len(normal_stress) == len(shear_stress)):
+        #     raise ValueError("All input arrays must have the same length.")
 
         fig, ax = plt.subplots(figsize=self.settings['figure_size'])
 
@@ -921,7 +921,7 @@ class Plotter:
     def plot_l2_norm_vs_velocity(self,
                                  velocity: np.ndarray,
                                  L2norm: np.ndarray,
-                                 overall_index: int,
+                                 acquisition_time: int,
                                  outfile_path: Optional[str] = None) -> None:
         """
         Plot the L2 norm vs  velocity.
@@ -929,7 +929,7 @@ class Plotter:
         Args:
             _velocity (np.ndarray): Array of  velocity values.
             L2norm (np.ndarray): Array of L2 norm values corresponding to the velocity.
-            overall_index (int): Index of the waveform for plot title.
+            acquisition_time (int): acquisition time of the waveform for plot title.
             outfile_path (str, optional): Path to save the plot.
 
         Raises:
@@ -943,10 +943,10 @@ class Plotter:
         fig, ax = plt.subplots(figsize=self.settings['figure_size'])
         
         # Plotting the L2 norm vs  velocity
-        ax.scatter(velocity, L2norm, linewidth=self.settings['line_width'])
-        ax.set_xlabel(' Velocity (cm/$\\mu$s)', fontsize=self.settings['fontsize_labels'])
+        ax.plot(velocity, L2norm, linewidth=self.settings['line_width'])
+        ax.set_xlabel('Velocity (cm/$\\mu$s)', fontsize=self.settings['fontsize_labels'])
         ax.set_ylabel('L2 Norm of Residuals', fontsize=self.settings['fontsize_labels'])
-        ax.set_title(f'L2 Norm vs  Velocity for Waveform {overall_index}', fontsize=self.settings['fontsize_title'])
+        ax.set_title(f'L2 Norm vs  Velocity for Waveform at {acquisition_time} s', fontsize=self.settings['fontsize_title'])
         ax.tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
         ax.grid(alpha=0.3)
         

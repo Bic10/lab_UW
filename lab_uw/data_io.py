@@ -93,7 +93,7 @@ class UltrasonicDataHandler:
             observed_waveform_data = observed_waveform_data - np.mean(observed_waveform_data)
 
         # Downsampling the number of waveforms to analyze and edit the metadata accordingly
-        if number_of_waveforms2process > 0:
+        if isinstance(number_of_waveforms2process,int) and number_of_waveforms2process>0:
             downsampling = max(1, round(metadata["number_of_waveforms"] / number_of_waveforms2process)) 
             print(f"Number of waveforms: {metadata['number_of_waveforms']}, wanting {number_of_waveforms2process}, downsampling factor: {downsampling}")
 
@@ -139,12 +139,11 @@ class UltrasonicDataHandler:
         data_type_stf: str,
         stf_chosen: str,
         frequency_cutoff_MHz: float
-    ) -> Tuple[np.ndarray, np.ndarray, float]:
+    ) -> "UltrasonicDataHandler":
         """
-        High-level method to find, load, filter, and zero an STF from a JSON (or TSV).
-        Returns (stf_waveform, stf_time, stf_duration).
+        Creates an UltrasonicDataHandler instance by locating, loading, and processing
+        an STF file (JSON or similar), returning a 1D array in waveform_data.
         """
-        # 1) Locate the stf file
         infile_path_stf_list = dir_manager.make_infile_path_list(
             machine_name=machine_name_stf,
             experiment_name=experiment_name_stf,
@@ -161,25 +160,23 @@ class UltrasonicDataHandler:
                 f"for experiment '{experiment_name_stf}'."
             )
 
-        # 2) Load stf data (JSON or TSV) using an empty handler instance
         temp_handler = cls()
         stf_waveform_raw, stf_metadata = temp_handler.load_waveform_json(chosen_stf_path)
-
         stf_time = np.array(stf_metadata["time_ax_waveform"])
         signal_processor = SignalProcessor()
-
-        # 3) Lowpass filter
         stf_waveform_filt, _ = signal_processor.signal2noise_separation_lowpass(
             waveform_data=stf_waveform_raw,
             metadata=stf_metadata,
             freq_cut=frequency_cutoff_MHz
         )
-
-        # 4) Zero start
         stf_waveform = stf_waveform_filt - stf_waveform_filt[0]
-        stf_duration = stf_time[-1] - stf_time[0]
 
-        return stf_waveform, stf_time, stf_duration
+        final_metadata = {
+            "time_ax_waveform": stf_time,
+            "number_of_samples": len(stf_waveform),
+        }
+
+        return cls(waveform_data=stf_waveform, metadata=final_metadata)
 
     @staticmethod
     def extract_metadata_from_tsv(infile: TextIO) -> Tuple[List[float], List[float]]:
@@ -244,7 +241,7 @@ class MechanicalDataHandler:
     @classmethod
     def load_mechanical_data(cls, infile_path: Path) -> "MechanicalDataHandler":
         try:
-            mech_data = pd.read_csv(infile_path, sep=',', skiprows=[1])
+            mech_data = pd.read_csv(infile_path, engine="python", sep=None, skiprows=[1])
             metadata = {"file_path": infile_path}
             logger.info(f"Mechanical data loaded successfully from {infile_path}.")
             return cls(mech_data=mech_data, metadata=metadata)

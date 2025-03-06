@@ -1,33 +1,32 @@
 # lab_uw/source_receiver_simulation_parameters.py
 
 from pathlib import Path
+import math
+import sys
 import pickle
 import time as tm
 import numpy as np
 from multiprocessing import Pool, cpu_count
 from typing import Any, Dict, Union
 import matplotlib.pyplot as plt
-import corner
 
-from lab_uw.data_io import UltrasonicDataHandler, BlockMetadataHandler, load_and_process_stf
+from lab_uw.data_io import UltrasonicDataHandler, BlockMetadataHandler
 from lab_uw.directory_manager import DirectoryManager
-from lab_uw.signal_processing import SignalProcessor
 from lab_uw.forward_modeling import ForwardModeler, compute_misfit
 
 def process_uw_file(
     infile_path: Path,
-    stf_waveform: np.ndarray,
-    stf_time: np.ndarray,
+    stf_handler: UltrasonicDataHandler,
     params: Dict[str, Any],
     assembly_dict: Dict[str, Any],
-    montecarlo: Dict[str, Any]
+    global_search_space: Dict[str, Any]
 ) -> None:
     """
     Process a single UW data file multiple times (e.g., 100) with the same
     Monte Carlo approach, storing each 'best' solution. Then aggregate
     those best solutions to visualize the distribution of parameters.
     """
-    print(f"PROCESSING UW DATA IN {infile_path}:")
+    print(f"PROCESSING UW DATA IN {infile_path.name}:")
 
     # Unpack parameters
     outdir_path_l2norm          = params["outdir_path_l2norm"]
@@ -36,18 +35,22 @@ def process_uw_file(
     start_time = tm.time()
 
     # Load and preprocess uw data
-    observed_waveform_data, observed_time, downsampling, metadata = UltrasonicDataHandler.load_and_process_uw(
+    uw_data_handler = UltrasonicDataHandler.load_and_process_uw(
         infile_path=infile_path,
         frequency_cutoff_MHz=params["frequency_cutoff_MHz"],
         maxtime2simulate=params["maxtime2simulate_mus"],
-        number_of_waveforms_to_process=params["number_of_waveforms2process"]
+        number_of_waveforms2process=params["number_of_waveforms2process"]
     )
+
+    observed_waveform_data = uw_data_handler.waveform_data
+    metadata = uw_data_handler.metadata
+    observed_time = metadata["time_ax_waveform"]
 
     # We only want 1 "mean" waveform for analysis
     observed_waveform = np.mean(observed_waveform_data, axis=0)
 
     # 2) We'll run the Monte Carlo approach multiple times
-    n_repeats = 100
+    n_repeats = 10
 
     # We will store the best parameters from each run in a list of dicts
     all_best_params = []
@@ -58,21 +61,20 @@ def process_uw_file(
         outfile_path = outdir_path_l2norm / outfile_name
         # Run the Monte Carlo for this run
         result = process_waveform(
-            observed_waveform=observed_waveform,
-            observed_time=observed_time,
-            outfile_name=outfile_name,
-            stf_waveform=stf_waveform,
-            stf_time=stf_time,
-            params=params,
-            assembly_dict=assembly_dict,
-            montecarlo=montecarlo
+            observed_waveform   = observed_waveform,
+            observed_time       = observed_time,
+            stf_handler         = stf_handler,
+            params              = params,
+            assembly_dict       = assembly_dict,
+            global_search_space = global_search_space,
+            outfile_name        = outfile_name,
         )
 
         # Save results to a pickle
         results_pkl = outfile_path.with_suffix(".pkl")
         with open(results_pkl, "wb") as f:
             pickle.dump(
-                {"montecarlo_result": result, "metadata": metadata, "params": params},
+                {"global_search_space_result": result, "params": params},
                 f
             )
 
@@ -133,7 +135,6 @@ def process_uw_file(
     # e.g. compute them manually:
     means = param_matrix.mean(axis=0)
     stds  = param_matrix.std(axis=0)
-    # etc.
 
     # Optionally, we can do a separate subplot or figure for L2 distribution
     fig2, ax2 = plt.subplots(figsize=(6,4))
@@ -157,11 +158,10 @@ def process_waveform(
     observed_waveform: np.ndarray,
     observed_time: np.ndarray,
     outfile_name: str,
-    stf_waveform: np.ndarray,
-    stf_time: np.ndarray,
+    stf_handler: UltrasonicDataHandler,
     params: Dict[str, Any],
     assembly_dict: Dict[str, Any],
-    montecarlo: Dict[str, Any]
+    global_search_space: Dict[str, Any]
 ) -> Dict[str, Union[float, np.ndarray, None]]:
     """
     Perform multiple (num_iterations) forward simulations, each with random draws
@@ -185,17 +185,17 @@ def process_waveform(
     misfit_interval = np.where(observed_time > 0)[0]
 
     # Monte Carlo parameters
-    num_iteration = montecarlo["num_iterations"]
-    steel_low     = montecarlo["steel_velocity_low"]
-    steel_high    = montecarlo["steel_velocity_high"]
-    pzt_low       = montecarlo["pzt_velocity_low"]
-    pzt_high      = montecarlo["pzt_velocity_high"]
-    spread_low    = montecarlo["spreading_factor_low"]
-    spread_high   = montecarlo["spreading_factor_high"]
-    pos_edge_low  = montecarlo["position2edge_low"]
-    pos_edge_high = montecarlo["position2edge_high"]
-    radius_low    = montecarlo["radius_factor_low"]
-    radius_high   = montecarlo["radius_factor_high"]
+    num_iteration = global_search_space["num_iterations"]
+    steel_low     = global_search_space["steel_velocity_low"]
+    steel_high    = global_search_space["steel_velocity_high"]
+    pzt_low       = global_search_space["pzt_velocity_low"]
+    pzt_high      = global_search_space["pzt_velocity_high"]
+    spread_low    = global_search_space["spreading_factor_low"]
+    spread_high   = global_search_space["spreading_factor_high"]
+    pos_edge_low  = global_search_space["position2edge_low"]
+    pos_edge_high = global_search_space["position2edge_high"]
+    radius_low    = global_search_space["radius_factor_low"]
+    radius_high   = global_search_space["radius_factor_high"]
 
     # Build argument list
     args_list = []
@@ -221,11 +221,9 @@ def process_waveform(
             observed_waveform,
             misfit_interval,
             observed_time,
-            stf_time,
-            stf_waveform,
+            stf_handler,
             params,
             assembly_dict,
-            montecarlo
         ))
 
     # Run in parallel
@@ -273,6 +271,8 @@ def process_waveform(
     # Re-run forward simulation for best parameters (and optionally plot)
     assembly_dict["velocity" + wave_type]       = best_steel_velocity
     assembly_dict["pzt_velocity" + wave_type]   = best_pzt_velocity
+
+    montecarlo = {}
     montecarlo["spreading_factor_transmitter"]  = best_spread_tx
     montecarlo["spreading_factor_receiver"]     = best_spread_rx
     montecarlo["position2edge_transmitter"]     = best_position2edge_tx
@@ -281,12 +281,13 @@ def process_waveform(
     montecarlo["radius_factor_receiver"]        = best_radius_factor_rx
 
     plot_output_name = f"{outfile_name}_best_simulation"
+    movie_output_name = f"{outfile_name}_movie"
     plot_output_path = outdir_path_image / plot_output_name
+    movie_output_path = outdir_path_image / movie_output_name
     synthetic_waveform, *_ = ForwardModeler().block_forward_simulation(
         observed_time=observed_time,
         observed_waveform=observed_waveform,
-        stf_time=stf_time,
-        stf_waveform=stf_waveform,
+        stf_handler = stf_handler,
         frequency_cutoff=params["frequency_cutoff_MHz"],
         assembly_dict=assembly_dict,
         montecarlo=montecarlo,
@@ -295,7 +296,8 @@ def process_waveform(
         maximum_velocity=params["max_velocity2simulate"],
         normalize_waveform=True,
         enable_plotting=True,
-        plot_output_path=plot_output_path
+        plot_output_path=plot_output_path,
+        movie_output_path=movie_output_path
     )
 
     ############################################################################
@@ -328,29 +330,6 @@ def process_waveform(
     fig.suptitle(f"L2 vs. Parameters\n{outfile_name}")
     fig.savefig(scatter_plot_path, dpi=150)
     plt.close(fig)
-
-    ############################################################################
-    # CORNER PLOT: pairwise relationships among parameters
-    # If you want to see how parameters vary in relation to each other and L2,
-    # you can try a corner plot approach. We'll store all parameters + L2 in one array.
-    # This can be quite large if many parameters, but let's demonstrate:
-    # We'll use a small library or do manual pairwise scatter.
-    ############################################################################
-    # Example: manual pairwise scatter for 2-3 parameters can blow up quickly.
-    # If you want a "corner" approach, check out e.g. `corner.py` library
-    # (https://github.com/dfm/corner.py).
-    # For demonstration, let's just do a quick pairwise for 3 parameters: steel, pzt, L2:
-
-    data_for_corner = np.vstack([steel_array, pzt_array, L2_array]).T
-    corner.corner(
-        data_for_corner,
-        labels=["Steel Velocity", "PZT Velocity", "L2"],
-        show_titles=True,
-        quantiles=[0.16, 0.5, 0.84],
-    )
-    corner_plot_path = outdir_path_image / f"{outfile_name}_corner_plot.png"
-    plt.savefig(corner_plot_path, dpi=150)
-    plt.close()
 
     # Return final info
     return {
@@ -389,11 +368,9 @@ def process_velocity(args):
         observed_waveform,
         misfit_interval,
         observed_time,
-        stf_time,
-        stf_waveform,
+        stf_handler,
         params,
         assembly_dict,
-        montecarlo
     ) = args
 
     wave_type = assembly_dict["wave_type"]
@@ -403,6 +380,7 @@ def process_velocity(args):
     assembly_dict["pzt_velocity" + wave_type] = pzt_velocity2simulate
 
     # Also store in 'montecarlo' if the ForwardModeler needs them
+    montecarlo = {}
     montecarlo["spreading_factor_transmitter"]  = spreading_factor_transmitter
     montecarlo["spreading_factor_receiver"]     = spreading_factor_receiver
     montecarlo["position2edge_transmitter"]     = position2edge_transmitter
@@ -411,11 +389,10 @@ def process_velocity(args):
     montecarlo["radius_factor_receiver"]        = radius_factor_receiver
 
     # Run forward simulation for this draw
-    synthetic_waveform, _,_,_,_,_,_,_,_,_,_ = ForwardModeler().block_forward_simulation(
+    synthetic_waveform, *_ = ForwardModeler().block_forward_simulation(
         observed_time=observed_time,
         observed_waveform=observed_waveform,
-        stf_time=stf_time,
-        stf_waveform=stf_waveform,
+        stf_handler = stf_handler,
         frequency_cutoff=params["frequency_cutoff_MHz"],
         assembly_dict=assembly_dict,
         montecarlo=montecarlo,
@@ -432,8 +409,8 @@ def process_velocity(args):
         synthetic_waveform=synthetic_waveform,
         misfit_interval=misfit_interval
     )
-
-    print((f"\tPZT={pzt_velocity2simulate:.3f}, Steel={steel_velocity2simulate:.3f}, txspread={spreading_factor_transmitter:.2f}, rxspread={spreading_factor_receiver:.2f}, tx2edge={position2edge_transmitter:.2f}, rx2edge={position2edge_receiver:.2f}, tx rad={radius_factor_transmitter:.2f}, rx rad={radius_factor_receiver:.4f}  => L2={L2norm_new:.4e}"))
+    
+    print((f"\tL2={L2norm_new:.4e}\tSteel={steel_velocity2simulate:.3f}, PZT={pzt_velocity2simulate:.3f}, txspread={spreading_factor_transmitter:.3f}, rxspread={spreading_factor_receiver:.3f}, tx2edge={position2edge_transmitter:.3f}, rx2edge={position2edge_receiver:.3f}, txrad={radius_factor_transmitter:.4f}, rxrad={radius_factor_receiver:.4f}"))
 
     return (
         pzt_velocity2simulate,
@@ -467,7 +444,7 @@ if __name__ == "__main__":
     outdir_path_image = dir_manager.make_data_analysis_folders(
         machine_name=machine_name,
         experiment_name=experiment_name,
-        data_types=[f"source_receiver_simulation_parameters_images_and_movie{wave_type}"]
+        data_types=[f"source_receiver_simulation_parameters_images_and_movie_fixed{wave_type}"]
     )
     print(f"Misfits will be saved at:\n{outdir_path_l2norm[0]}")
 
@@ -481,16 +458,15 @@ if __name__ == "__main__":
     assembly_dict["wave_type"] = wave_type
     assembly_dict["transmitter_position"] = 0
     assembly_dict["receiver_position"] = assembly_dict["z"]
-
     # Basic simulation parameters
     params = {
-        "maxtime2simulate_mus"      : 12,
+        "maxtime2simulate_mus"      : 30,
         "frequency_cutoff_MHz"      : 6,
         "minimum_SNR"               : 5,
-        "min_velocity2simulate"     : 4000 * (1e2 / 1e6),  # cm/mus
-        "max_velocity2simulate"     : 6000 * (1e2 / 1e6),  # cm/mus
+        "min_velocity2simulate"     : 0.38,  # cm/mus
+        "max_velocity2simulate"     : 0.60,  # cm/mus
         "plot_save_interval"        : 1,
-        "movie_save_interval"       : 50,
+        "movie_save_interval"       : 1,
         "l2norm_plot_interval"      : 1,
         "number_of_waveforms2process": 10,
         "outdir_path_l2norm": outdir_path_l2norm[0],
@@ -498,20 +474,20 @@ if __name__ == "__main__":
     }
 
     #### MONTE CARLO PARAMETERS DEFINED HERE ####
-    montecarlo = {
+    global_search_space = {
         "num_iterations": 1000,  # how many random draws to try
-        "steel_velocity_low": assembly_dict["velocity" + wave_type]- 0.01,
-        "steel_velocity_high": assembly_dict["velocity" + wave_type]+ 0.01,              
-        "pzt_velocity_low": params["min_velocity2simulate"], 
-        "pzt_velocity_high": params["max_velocity2simulate"],
-        "spreading_factor_low": 0.1,
-        "spreading_factor_high": 3.0,
+        "steel_velocity_low": assembly_dict["velocity" + wave_type]- 0.02,
+        "steel_velocity_high": assembly_dict["velocity" + wave_type]+ 0.02,              
+        "pzt_velocity_low": assembly_dict["pzt_velocity" + wave_type], 
+        "pzt_velocity_high": assembly_dict["velocity" + wave_type]+ 0.02,
+        "spreading_factor_low" : 1.0,
+        "spreading_factor_high": 1.0,
         # Uniform range for positions relative to edges pzt-steel
-        "position2edge_low": 0.3,
-        "position2edge_high": 1.7,
+        "position2edge_low" : -0.5,
+        "position2edge_high": -0.5,
         # how many nodes to use to approximate the tx/rx positions in case they do not correspond precisely to one node
-        "radius_factor_low": 0.1,
-        "radius_factor_high": 2.0
+        "radius_factor_low": 1,
+        "radius_factor_high": 1,
     }
 
     # Make UW path list
@@ -525,7 +501,7 @@ if __name__ == "__main__":
         infile_name = infile_path.name.split(".")[0]
 
         # Load the Source Time Function
-        stf_waveform, stf_time, stf_duration = UltrasonicDataHandler.load_stf(
+        stf_handler = UltrasonicDataHandler.load_stf(
             dir_manager=dir_manager,
             machine_name_stf="on_bench",
             experiment_name_stf="STF",
@@ -537,9 +513,8 @@ if __name__ == "__main__":
         # Run the main simulation routine
         process_uw_file(
             infile_path=infile_path,
-            stf_waveform=stf_waveform,
-            stf_time=stf_time,
+            stf_handler=stf_handler,
             params=params,
             assembly_dict=assembly_dict,
-            montecarlo=montecarlo
+            global_search_space=global_search_space
         )

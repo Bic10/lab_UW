@@ -131,7 +131,7 @@ class VelocityModel1D:
         self.define_region_indices()
         self.initialize_velocity_model()
         self.assign_velocities()
-        self.apply_smoothing()
+        # self.apply_smoothing()
 
     def compute_layer_positions(self):
         '''
@@ -367,12 +367,14 @@ class VelocityModel1D_SingleBlock:
         self.build_velocity_model()
 
     def build_velocity_model(self):
-        """ High-level builder: compute positions, define indices, fill velocities, and optionally plot. """
         self.compute_layer_positions()
         self.define_region_indices()
         self.initialize_velocity_model()
         self.assign_velocities()
-        # self.apply_smoothing()
+
+        # # Now apply smoothing for each boundary you care about:
+        # self.apply_smoothing("pzt_1", "steel_block", 10)
+        # self.apply_smoothing("steel_block", "pzt_2", 10)
 
     def compute_layer_positions(self):
         """
@@ -395,7 +397,6 @@ class VelocityModel1D_SingleBlock:
             self.pzt_layer_width,
             self.pla_layer_width
         ]
-        
         # Compute the cumulative starts: [0, layer1, layer1+layer2, ...]
         self.layer_starts = np.concatenate(([0.0], np.cumsum(self.layer_thicknesses)))
 
@@ -404,21 +405,20 @@ class VelocityModel1D_SingleBlock:
         Create a dictionary that maps layer names to the x-grid indices that lie within each layer's start/end.
         """
         x = self.x
-
-        # The naming scheme for five layers:
         regions = ["pla_1", "pzt_1", "steel_block", "pzt_2", "pla_2"]
-
         self.idx_dict.clear()
+
         for i, region in enumerate(regions):
             start = self.layer_starts[i]
             end   = self.layer_starts[i+1]
-            # Indices in x that fall in [start, end)
-            indices = np.where((x >= start) & (x < end))[0]
+
+            indices = np.where((x >= start) & (x <= end))[0]
+
             self.idx_dict[region] = indices
 
     def initialize_velocity_model(self):
         """ Fill the entire velocity array with steel_velocity by default. """
-        self.values = self.steel_velocity * np.ones_like(self.x)
+        self.values = np.ones_like(self.x)
 
     def assign_velocities(self):
         """
@@ -434,6 +434,8 @@ class VelocityModel1D_SingleBlock:
         self.assign_constant_velocity("steel_block", self.steel_velocity)
         self.assign_constant_velocity("pzt_2", self.pzt_velocity)
         self.assign_constant_velocity("pla_2", self.pla_velocity)
+        #  duct-tape solution for last index non-assignement
+        self.values[-1] = self.values[-2]
 
     def assign_constant_velocity(self, region_name: str, velocity: float):
         """ Helper to set a uniform velocity in a specified region. """
@@ -441,33 +443,68 @@ class VelocityModel1D_SingleBlock:
         if indices.size:
             self.values[indices] = velocity
 
-    def apply_smoothing(self):
+    def apply_smoothing(
+        self,
+        region_from: str,
+        region_to: str,
+        n_smooth: int
+    ):
         """
-        (Optional) smoothing at the boundaries between PZT <-> steel.
-        You can customize or remove this as desired.
+        Smooths the boundary transition from 'region_from' to 'region_to' 
+        using up to 'n_smooth' points at the end of region_from and 'n_smooth'
+        points at the start of region_to.
+        
+        1. Retrieves each region’s velocity (pzt_velocity, steel_velocity, etc.) 
+        from a local dictionary that maps region_name -> velocity.
+        2. Finds the last 'n_smooth' indices in region_from and the first 
+        'n_smooth' indices in region_to.
+        3. Builds a linear ramp from region_from's velocity to region_to's velocity
+        across those boundary indices.
+        4. Writes the ramp into self.values for that boundary zone.
         """
-        x = self.x
 
-        # The layers in order are: [0:pla_1, 1:pzt_1, 2:steel_block, 3:pzt_2, 4:pla_2]
-        # pzt_1 ends at layer_starts[2], steel_block starts there
-        # pzt_2 starts at layer_starts[3]
-        # For a gentle transition in each boundary region, we can define small smoothing intervals:
+        # A small lookup so we don’t need separate velocity arguments
+        region_velocity_map = {
+            "pla_1":       self.pla_velocity,
+            "pzt_1":       self.pzt_velocity,
+            "steel_block": self.steel_velocity,
+            "pzt_2":       self.pzt_velocity,
+            "pla_2":       self.pla_velocity
+        }
 
-        # Smooth transmitter side (pzt_1 -> steel_block):
-        pzt_1_end = self.layer_starts[2]
-        pzt_1_start = self.layer_starts[1]
-        t_indices = np.where((x >= pzt_1_start) & (x < pzt_1_end))[0]
-        if t_indices.size > 1:
-            # Example: linear ramp from pzt_velocity to steel_velocity
-            self.values[t_indices] = np.linspace(self.pzt_velocity, self.steel_velocity, t_indices.size)
+        if region_from not in self.idx_dict or region_to not in self.idx_dict:
+            return  # one or both regions don't exist in the idx_dict
 
-        # Smooth receiver side (steel_block -> pzt_2):
-        pzt_2_start = self.layer_starts[3]
-        pzt_2_end   = self.layer_starts[4]
-        r_indices = np.where((x >= pzt_2_start) & (x < pzt_2_end))[0]
-        if r_indices.size > 1:
-            # Example: linear ramp from steel_velocity to pzt_velocity
-            self.values[r_indices] = np.linspace(self.steel_velocity, self.pzt_velocity, r_indices.size)
+        idx_from = self.idx_dict[region_from]
+        idx_to   = self.idx_dict[region_to]
+        if idx_from.size == 0 or idx_to.size == 0:
+            return  # region(s) are empty => no smoothing
+
+        vel_from = region_velocity_map.get(region_from, None)
+        vel_to   = region_velocity_map.get(region_to, None)
+        if vel_from is None or vel_to is None:
+            return  # unknown region => skip
+
+        # Sort the indices so they're in ascending spatial order
+        idx_from_sorted = np.sort(idx_from)
+        idx_to_sorted   = np.sort(idx_to)
+
+        # Up to n_smooth points at the end of region_from
+        n_tail = min(n_smooth, idx_from_sorted.size)
+        tail   = idx_from_sorted[-n_tail:]  # last portion of region_from
+
+        # Up to n_smooth points at the start of region_to
+        n_head = min(n_smooth, idx_to_sorted.size)
+        head   = idx_to_sorted[:n_head]     # first portion of region_to
+
+        boundary_indices = np.concatenate([tail, head])
+        if boundary_indices.size < 2:
+            return  # nothing to ramp
+
+        # Build a linear ramp from vel_from to vel_to
+        ramp = np.linspace(vel_from, vel_to, boundary_indices.size)
+
+        self.values[boundary_indices] = ramp
 
     def plot(self, outfile_path: Optional[str] = None):
         '''
@@ -484,7 +521,7 @@ class VelocityModel1D_SingleBlock:
 
 class Source1D:
     def __init__(self, stf_time: np.ndarray, stf_waveform: np.ndarray, position: float, radius: int, 
-                    spreading_factor: float,
+                    extension: float,
                     pzt_layer_width: float,
 ):
         '''
@@ -500,7 +537,7 @@ class Source1D:
         self.stf_waveform = stf_waveform
         self.position = position
         self.radius = radius
-        self.spreading_factor = spreading_factor
+        self.extension = extension
         self.pzt_layer_width = pzt_layer_width
         self.time_function = None  # Will be set after interpolation
         self.spatial_function = None  # Will be set after being created on the grid
@@ -518,102 +555,24 @@ class Source1D:
         self.time_function = np.zeros(len(simulation_time))
         self.time_function[:len(interpolated_stf)] = interpolated_stf
 
-    def create_spatial_function(self, spatial_axis: np.ndarray, dx: float, flip_side: str = None):
-        self.spatial_function = convolved_sinc_gaussian_filter(
+    def create_spatial_function(self, spatial_axis: np.ndarray, dx: float):
+        # self.spatial_function = convolved_sinc_gaussian_filter(
+        #     spatial_axis=spatial_axis,
+        #     dx=dx,
+        #     position=self.position,
+        #     pzt_layer_width=self.pzt_layer_width,
+        #     spreading_factor=self.spreading_factor,
+        #     radius=self.radius,
+        #     flip_side=flip_side
+        # )
+        self.spatial_function = arbitrary_source_and_receiver_positioning(
             spatial_axis=spatial_axis,
             dx=dx,
             position=self.position,
             pzt_layer_width=self.pzt_layer_width,
-            spreading_factor=self.spreading_factor,
+            extension=self.extension,
             radius=self.radius,
-            flip_side=flip_side
         )
-
-    @staticmethod
-    def _arbitrary_position_filter(
-        spatial_axis: np.ndarray,
-        dx: float,
-        position: float,
-        radius: int,
-        flip_side: str = None  # Either 'left', 'right', or None
-    ) -> np.ndarray:
-        """
-        Create a Kaiser-windowed sinc filter for arbitrary source/receiver positioning on a 1D grid.
-        If flip_side is specified ('left' or 'right'), the values of the windowed sinc function on that side
-        of the closest grid node are flipped and added to the values on the opposite side.
-        
-        Parameters:
-        - spatial_axis (np.ndarray): The spatial axis of the grid.
-        - dx (float): Spatial step size.
-        - position (float): Exact position of the source/receiver.
-        - radius (int): Radius of the windowed sinc function (number of grid points).
-        - flip_side (str): 'left' or 'right' to indicate which side to flip and fold.
-        
-        Returns:
-        - windowed_sinc (np.ndarray): The windowed sinc filter adjusted for the free surface.
-        """
-        # Normalize positions to grid indices
-        grid_indices = spatial_axis / dx
-        num_points = len(grid_indices)
-        position_index = position / dx
-
-        # Create sinc function centered at the arbitrary position
-        sinc_function = np.sinc(grid_indices - position_index)
-
-        # Apply Kaiser window to the sinc function
-        beta = 6.0  # Kaiser window parameter
-        kaiser_window = kaiser(2 * radius + 1, beta)
-
-        # Find the grid node closest to the desired position
-        closest_node_index = np.argmin(np.abs(grid_indices - position_index))
-
-        # Apply windowed sinc filter centered on the position_index
-        start_idx = max(0, closest_node_index - radius)
-        end_idx = min(num_points, closest_node_index + radius + 1)
-        
-        windowed_sinc = np.zeros_like(sinc_function)
-        window_indices = np.arange(start_idx, end_idx)
-        windowed_sinc[window_indices] = sinc_function[window_indices] * kaiser_window[:end_idx - start_idx]
-
-        # Implement the flip and fold
-        if flip_side == 'right':
-            # Indices on the left side
-            left_indices = np.arange(start_idx, closest_node_index)
-            num_left = len(left_indices)
-            # Indices on the right side
-            right_indices = np.arange(closest_node_index, closest_node_index + num_left)
-            # Adjust right_indices to not exceed end_idx
-            right_indices = right_indices[right_indices < end_idx]
-
-            # Flip the left values
-            flipped_left_values = windowed_sinc[left_indices][::-1]
-            flipped_left_values = flipped_left_values[:len(right_indices)]  # Adjust length
-
-            # Add to the right side
-            windowed_sinc[right_indices] += flipped_left_values
-
-            # Zero out the left side
-            windowed_sinc[left_indices] = 0.0
-
-        elif flip_side == 'left':
-            # Indices on the right side
-            right_indices = np.arange(closest_node_index + 1, end_idx)
-            num_right = len(right_indices)
-            # Indices on the left side
-            left_indices = np.arange(closest_node_index - num_right, closest_node_index)
-            left_indices = left_indices[left_indices >= start_idx]  # Ensure within bounds
-
-            # Flip the right values
-            flipped_right_values = windowed_sinc[right_indices][::-1]
-            flipped_right_values = flipped_right_values[:len(left_indices)]  # Adjust length
-
-            # Add to the left side
-            windowed_sinc[left_indices] += flipped_right_values
-
-            # Zero out the right side
-            windowed_sinc[right_indices] = 0.0
-
-        return windowed_sinc
 
     def plot_spatial_function(self, x: np.ndarray, spatial_function: np.ndarray, outfile_path: Optional[str] = None):
         '''
@@ -632,7 +591,7 @@ class Source1D:
 
 class Receiver1D:
     def __init__(self, position: float, radius: int, 
-                    spreading_factor: float,
+                    extension: float,
                     pzt_layer_width: float,
                 ):        
         '''
@@ -644,106 +603,29 @@ class Receiver1D:
         '''
         self.position = position
         self.radius = radius
-        self.spreading_factor = spreading_factor
+        self.extension = extension
         self.pzt_layer_width = pzt_layer_width
         self.spatial_function = None  # Will be set after being created on the grid
 
-    def create_spatial_function(self, spatial_axis: np.ndarray, dx: float, flip_side: str = None):
-        self.spatial_function = convolved_sinc_gaussian_filter(
+    def create_spatial_function(self, spatial_axis: np.ndarray, dx: float):
+        # self.spatial_function = convolved_sinc_gaussian_filter(
+        #     spatial_axis=spatial_axis,
+        #     dx=dx,
+        #     position=self.position,
+        #     pzt_layer_width=self.pzt_layer_width,
+        #     spreading_factor=self.spreading_factor,
+        #     radius=self.radius,
+        #     flip_side=flip_side
+        # )
+
+        self.spatial_function = arbitrary_source_and_receiver_positioning(
             spatial_axis=spatial_axis,
             dx=dx,
             position=self.position,
             pzt_layer_width=self.pzt_layer_width,
-            spreading_factor=self.spreading_factor,
+            extension=self.extension,
             radius=self.radius,
-            flip_side=flip_side
         )
-
-    @staticmethod
-    def _arbitrary_position_filter(
-        spatial_axis: np.ndarray,
-        dx: float,
-        position: float,
-        radius: int,
-        flip_side: str = None  # Either 'left', 'right', or None
-    ) -> np.ndarray:
-        """
-        Create a Kaiser-windowed sinc filter for arbitrary source/receiver positioning on a 1D grid.
-        If flip_side is specified ('left' or 'right'), the values of the windowed sinc function on that side
-        of the closest grid node are flipped and added to the values on the opposite side.
-        
-        Parameters:
-        - spatial_axis (np.ndarray): The spatial axis of the grid.
-        - dx (float): Spatial step size.
-        - position (float): Exact position of the source/receiver.
-        - radius (int): Radius of the windowed sinc function (number of grid points).
-        - flip_side (str): 'left' or 'right' to indicate which side to flip and fold.
-        
-        Returns:
-        - windowed_sinc (np.ndarray): The windowed sinc filter adjusted for the free surface.
-        """
-        # Normalize positions to grid indices
-        grid_indices = spatial_axis / dx
-        num_points = len(grid_indices)
-        position_index = position / dx
-
-        # Create sinc function centered at the arbitrary position
-        sinc_function = np.sinc(grid_indices - position_index)
-
-        # Apply Kaiser window to the sinc function
-        beta = 6.0  # Kaiser window parameter
-        kaiser_window = kaiser(2 * radius + 1, beta)
-
-        # Find the grid node closest to the desired position
-        closest_node_index = np.argmin(np.abs(grid_indices - position_index))
-
-        # Apply windowed sinc filter centered on the position_index
-        start_idx = max(0, closest_node_index - radius)
-        end_idx = min(num_points, closest_node_index + radius + 1)
-        
-        windowed_sinc = np.zeros_like(sinc_function)
-        window_indices = np.arange(start_idx, end_idx)
-        windowed_sinc[window_indices] = sinc_function[window_indices] * kaiser_window[:end_idx - start_idx]
-
-        # Implement the flip and fold
-        if flip_side == 'right':
-            # Indices on the left side
-            left_indices = np.arange(start_idx, closest_node_index)
-            num_left = len(left_indices)
-            # Indices on the right side
-            right_indices = np.arange(closest_node_index, closest_node_index + num_left)
-            # Adjust right_indices to not exceed end_idx
-            right_indices = right_indices[right_indices < end_idx]
-
-            # Flip the left values
-            flipped_left_values = windowed_sinc[left_indices][::-1]
-            flipped_left_values = flipped_left_values[:len(right_indices)]  # Adjust length
-
-            # Add to the right side
-            windowed_sinc[right_indices] += flipped_left_values
-
-            # Zero out the left side
-            windowed_sinc[left_indices] = 0.0
-
-        elif flip_side == 'left':
-            # Indices on the right side
-            right_indices = np.arange(closest_node_index + 1, end_idx)
-            num_right = len(right_indices)
-            # Indices on the left side
-            left_indices = np.arange(closest_node_index - num_right, closest_node_index)
-            left_indices = left_indices[left_indices >= start_idx]  # Ensure within bounds
-
-            # Flip the right values
-            flipped_right_values = windowed_sinc[right_indices][::-1]
-            flipped_right_values = flipped_right_values[:len(left_indices)]  # Adjust length
-
-            # Add to the left side
-            windowed_sinc[left_indices] += flipped_right_values
-
-            # Zero out the right side
-            windowed_sinc[right_indices] = 0.0
-
-        return windowed_sinc
 
 def convolved_sinc_gaussian_filter(
     spatial_axis: np.ndarray,
@@ -824,11 +706,6 @@ def convolved_sinc_gaussian_filter(
     # BOUNDARY FOLDING: reflect out-of-bound indices
     # ------------------------------------------------
     if flip_side == "left":
-        # domain boundary = 0
-        # any amplitude that ended up in negative indices (< 0) needs reflection about i=0
-        # any amplitude that ended up in indices >= N is out-of-bounds on the right—no folding if "left" boundary only
-        # However, because we only wrote the portion in [global_start, global_end], we haven't placed amplitude <0
-        # or amplitude >=N. We'll handle it explicitly from the "local kernel" or do a second pass.
 
         # We'll do a second pass for the negative portion:
         # negative region = [start_idx, 0), in local coordinates that means local indices < local_start
@@ -897,4 +774,109 @@ def convolved_sinc_gaussian_filter(
     return filter_array
 
 
+def arbitrary_source_and_receiver_positioning(
+    spatial_axis        : np.ndarray,
+    dx                  : float,
+    position            : float,
+    pzt_layer_width     : float,
+    extension           : float = None,
+    beta                : float = 6.31,
+    radius              : int = None,
+    free_surface_left   : float = None,
+    free_surface_right  : float = None    
+) -> np.ndarray:
+    """
+    Implementation in python of the method reported in Hicks 2002:
+    Arbitrary source and receiver positioning in finite-difference
+    schemes using Kaiser windowed sinc functions
+    """
+    from numpy import sinc, kaiser
+    import matplotlib.pyplot as plt
+    if not free_surface_left:
+        free_surface_left  = spatial_axis[0]
+    if not free_surface_right:
+        free_surface_right = spatial_axis[-1]
 
+    free_surface_left_idx  = np.searchsorted(spatial_axis, free_surface_left)
+    free_surface_right_idx = np.searchsorted(spatial_axis, free_surface_right)
+
+    if not radius:
+        radius = round((pzt_layer_width/2) / dx)
+    if not extension:
+        extension = pzt_layer_width
+
+    window_len = 2*radius+1
+    filter_window = kaiser(window_len,beta)
+    filter_window = filter_window - filter_window[0]
+    filter = np.zeros(spatial_axis.shape)
+
+    if position >= spatial_axis[0] and position <= spatial_axis[-1]:
+        pzt_start = position - extension /2
+        pzt_end = position + extension/2
+    else:
+        raise ValueError("Position ouside the spatial axis simulated")
+
+    pzt_positions = np.arange(pzt_start, pzt_end, dx)   
+    finite_spatial_function = np.zeros(spatial_axis.shape)
+    for delta_position in pzt_positions:
+        raw_delta_approx = sinc(spatial_axis-delta_position)
+        delta_position_idx = np.searchsorted(spatial_axis, delta_position)
+        start_idx = delta_position_idx - radius
+        end_idx   = delta_position_idx - radius + window_len
+
+        if start_idx >= free_surface_left_idx and end_idx <= free_surface_right_idx:
+            filter[start_idx:end_idx] = filter_window
+
+        elif start_idx < free_surface_left_idx:
+
+            folding_len = free_surface_left_idx -start_idx
+            folding_window = np.zeros(window_len-folding_len)
+            folding_window[:folding_len+1] = (
+                filter_window[folding_len:2*folding_len+1] 
+                - np.flip(filter_window[:folding_len+1])
+                )
+            folding_window[folding_len:] = filter_window[2*folding_len:]
+            filter[free_surface_left_idx:end_idx] = folding_window
+
+            # plt.plot(spatial_axis,filter)
+            # plt.show()
+        elif end_idx > free_surface_right_idx:
+
+            folding_len = end_idx - free_surface_right_idx
+            folding_window = np.zeros(window_len-folding_len)
+
+            try:
+                folding_window[:folding_len+1] = (
+                    filter_window[folding_len:2*folding_len+1] 
+                    - np.flip(filter_window[:folding_len+1])
+                    )
+            except ValueError:
+                continue
+            folding_window[folding_len:] = filter_window[2*folding_len:]
+            filter[start_idx:free_surface_right_idx] = np.flip(folding_window)
+            # plt.plot(spatial_axis,filter)
+            # plt.show()
+        optimal_delta_approx = raw_delta_approx*filter  
+        finite_spatial_function += optimal_delta_approx 
+
+    return finite_spatial_function
+
+if __name__ == "__main__":
+    import matplotlib.pyplot as plt
+    dx = 0.01
+    assembly_start = -1
+    assembly_end = 11 
+    position = -0.98
+    pzt_layer_width = 0.5
+    spatial_axis = np.arange(assembly_start,assembly_end, dx) 
+    if spatial_axis[-1] < assembly_end:
+        spatial_axis = np.arange(assembly_start,assembly_end+dx, dx) 
+
+    finite_spatial_function = arbitrary_source_and_receiver_positioning(spatial_axis=spatial_axis,
+                                                                        dx=dx,
+                                                                        position=position,
+                                                                        pzt_layer_width=pzt_layer_width,
+                                                                        )
+    
+    plt.plot(spatial_axis,finite_spatial_function)
+    plt.show()
