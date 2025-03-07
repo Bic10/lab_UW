@@ -98,7 +98,6 @@ class VelocityModel1D:
         gouge_velocity: Union[Tuple[float, float], Tuple[np.ndarray, np.ndarray]],
         pzt_velocity: float,
         pla_velocity: float,
-        plotting: bool = False,
         outfile_path: Path = False
     ):
         '''
@@ -150,7 +149,7 @@ class VelocityModel1D:
         self.layer_thicknesses = [
             self.pla_layer_width,
             self.pzt_layer_width,
-            side_block_1 - self.x_transmitter,
+            side_block_1,
             self.h_groove_side,
             gouge_1_length,
             self.h_groove_central,
@@ -158,7 +157,7 @@ class VelocityModel1D:
             self.h_groove_central,
             gouge_2_length,
             self.h_groove_side,
-            side_block_2 - self.x_receiver,
+            side_block_2,
             self.pzt_layer_width,
             self.pla_layer_width
         ]

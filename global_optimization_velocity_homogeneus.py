@@ -16,6 +16,20 @@ from lab_uw.forward_modeling import *
 from lab_uw.plotting import Plotter
 from lab_uw.forward_modeling import ForwardModeler
 
+def min_assembly_velocity(assembly_dict: Dict[str, Any]):
+    return min(assembly_dict["gouge_velocity_1"], 
+            assembly_dict["gouge_velocity_1"], 
+            assembly_dict["side1_params"]["velocity" + wave_type],
+            assembly_dict["side1_params"]["pzt_velocity" + wave_type],
+            assembly_dict["side1_params"]["pla_velocity" + wave_type])
+    
+def max_assembly_velocity(assembly_dict: Dict[str, Any]):
+    return min(assembly_dict["gouge_velocity_1"], 
+            assembly_dict["gouge_velocity_1"], 
+            assembly_dict["side1_params"]["velocity" + wave_type],
+            assembly_dict["side1_params"]["pzt_velocity" + wave_type],
+            assembly_dict["side1_params"]["pla_velocity" + wave_type])
+            
 def update_assembly_dict_with_mech_data(
     assembly_dict: Dict[str, Any],
     mech_data: Tuple,
@@ -23,13 +37,28 @@ def update_assembly_dict_with_mech_data(
     """
     Update assembly_dict with per-waveform mechanical data entry
     """
-    assembly_dict["thickness_gouge_1"]      = mech_data.rgt_lt_mm / 10.0     # thickness in mm -> convert to cm
-    assembly_dict["thickness_gouge_2"]      = mech_data.rgt_lt_mm / 10.0     # for now, layers are assumed to have same thickness
+    assembly_dict["gouge_thickness_1"]      = mech_data.rgt_lt_mm / 10.0     # thickness in mm -> convert to cm
+    assembly_dict["gouge_thickness_2"]      = mech_data.rgt_lt_mm / 10.0     # for now, layers are assumed to have same thickness
     assembly_dict["normal_stress"]          = mech_data.normal_stress_MPa
     assembly_dict["shear_stress"]           = mech_data.shear_stress_MPa
     assembly_dict["ec_disp_mm"]             = mech_data.ec_disp_mm
     assembly_dict["acquisition_time"]       = mech_data.time_s
     assembly_dict["idx_processed_waveform"] = mech_data.Index
+
+    # define assembly sample_dimensions all together. It is usefull for handling forward modeling 
+    assembly_dict["sample_dimensions"]  = [
+                                            side1_params["z_pzt2grove"],
+                                            assembly_dict["gouge_thickness_1"] ,
+                                            central_params["z"],
+                                            assembly_dict["gouge_thickness_2"],
+                                            side2_params["z_pzt2grove"],
+                                        ]
+        
+def update_assembly_dict_with_gouge_velocity(
+    assembly_dict: Dict[str, Any],
+    gouge_tuple: Union[Tuple[float],Tuple[np.ndarray]],
+) -> None:
+    assembly_dict["gouge_velocity_1"], assembly_dict["gouge_velocity_1"] = gouge_tuple
 
 def mechdata_slice4uw_processing(mech_data, sync_peaks, chosen_uw_file, num_waveform2porcess=None):      
     from math import ceil  
@@ -38,8 +67,8 @@ def mechdata_slice4uw_processing(mech_data, sync_peaks, chosen_uw_file, num_wave
     mech_data_slice = mech_data.iloc[start_sync : end_sync].copy()
     if num_waveform2porcess:
         downsampling    = max(1, ceil(len(mech_data_slice)/ num_waveform2porcess)) 
-        mech_data_slice = mech_data_slice.iloc[:: downsampling].reset_index(drop=True)
-    return mech_data_slice
+
+    return mech_data_slice.iloc[:: downsampling].reset_index(drop=True)
 
 def compute_dds_travel_time(
     assembly_dict: Dict[str, Any],
@@ -62,7 +91,7 @@ def compute_dds_travel_time(
           - "side1_params", "side2_params", "central_params" (dicts with keys
             e.g. "z", "z_pzt2grove", "h_grooves", "velocity_p" or velocity_s, etc.)
           - "wave_type" (e.g., "_p" or "_s")
-          - "thickness_gouge_1", "thickness_gouge_2" (in cm)
+          - "gouge_thickness_1", "gouge_thickness_2" (in cm)
         Possibly set by 'update_assembly_dict_with_mech_data' and the block metadata.
     v_gouge_1, v_gouge_2 : float
         Velocities in the two gouge layers (in cm/μs, or consistent units).
@@ -87,29 +116,24 @@ def compute_dds_travel_time(
 
     if v_gouge_1 and v_gouge_2:
         # Gouge thickness contributions
-        thick_g1 = assembly_dict["thickness_gouge_1"]  # in cm
-        thick_g2 = assembly_dict["thickness_gouge_2"]  # in cm
+        thick_g1 = assembly_dict["gouge_thickness_1"]  # in cm
+        thick_g2 = assembly_dict["gouge_thickness_2"]  # in cm
 
         # Groove mixing contributions
         groove_time = (
-            side1_params["h_grooves"] / (side1_params["velocity" + wave_type] + v_gouge_1)
+          side1_params["h_grooves"] / (side1_params["velocity" + wave_type] + v_gouge_1)
         + side2_params["h_grooves"] / (side2_params["velocity" + wave_type] + v_gouge_2)
         + central_params["h_grooves"] / (side1_params["velocity" + wave_type] + v_gouge_1)
         + central_params["h_grooves"] / (side1_params["velocity" + wave_type] + v_gouge_2)
         )
 
         # Sum up total travel time
-        total_time = (
-          steel_only_time
-        + thick_g1 / v_gouge_1
-        + thick_g2 / v_gouge_2
-        + groove_time
+        return (
+          steel_only_time+ thick_g1 / v_gouge_1+ thick_g2 / v_gouge_2+ groove_time
         )
-
-        return total_time
     
     else:
-        print("No velocity gouge passed. Computing steel-only travel time")
+        print("No gouge velocity passed. Computing steel-only travel time")
         return steel_only_time
 
 # Function Definitions
@@ -140,7 +164,7 @@ def process_uw_file(
     velocity_ranges       = []
     L2norm_all_waveforms  = []
     estimated_velocities  = []
-    previous_min_velocity = params["velocity_initial_cm/mus"]
+    previous_best_velocity = params["velocity_initial_cm/mus"]
 
     observed_waveform_data = uw_data_handler.waveform_data
     waveform_metadata = uw_data_handler.metadata
@@ -153,14 +177,14 @@ def process_uw_file(
             observed_waveform       = observed_waveform,
             waveform_metadata       = waveform_metadata,
             outfile_name            = outfile_name,
-            previous_min_velocity   = previous_min_velocity,
+            previous_best_velocity   = previous_best_velocity,
             stf_handler             = stf_handler,
             params                  = params,
             assembly_dict           = assembly_dict
         )
 
         if result["best_gouge_velocity"]:
-            previous_min_velocity = result["best_gouge_velocity"]
+            previous_best_velocity = result["best_gouge_velocity"]
 
         velocity_ranges.append(result["gouge_velocity_list_waveform"])
         L2norm_all_waveforms.append(result["L2norm_waveform"])
@@ -213,7 +237,7 @@ def process_waveform(
     observed_waveform: np.ndarray,
     waveform_metadata: Dict[str,Any],
     outfile_name: str,
-    previous_min_velocity: Optional[float],
+    previous_best_velocity: Optional[float],
     stf_handler : UltrasonicDataHandler,
     params: Dict[str, Any],
     assembly_dict: Dict[str,Any],
@@ -237,8 +261,8 @@ def process_waveform(
         
     # Search around previous velocity
     c_range_waveform  = c_range
-    cmin_waveform     = previous_min_velocity - c_range_waveform
-    cmax_waveform     = previous_min_velocity + c_range_waveform
+    cmin_waveform     = previous_best_velocity - c_range_waveform
+    cmax_waveform     = previous_best_velocity + c_range_waveform
     velocity_step_waveform   = velocity_step
 
     max_travel_time = compute_dds_travel_time(
@@ -279,8 +303,8 @@ def process_waveform(
     num_processes = cpu_count()
 
     def _build_args(gouge_velocity: float):
+        update_assembly_dict_with_gouge_velocity(assembly_dict,(gouge_velocity, gouge_velocity))
         return (
-            (gouge_velocity, gouge_velocity),  # same velocity for both layers
             observed_waveform,
             waveform_time,
             stf_handler,
@@ -327,16 +351,19 @@ def process_waveform(
     else:
         movie_output_path = None
     
-    synthetic_waveform, _,_,_,_,_,_,_,_,_,_,_ = ForwardModeler().dds_forward_simulation(
+    minimum_velocity = params["min_velocity2simulate"] if params["min_velocity2simulate"] else min_assembly_velocity(assembly_dict)
+    maximum_velocity = params["max_velocity2simulate"] if params["max_velocity2simulate"] else max_assembly_velocity(assembly_dict)
+
+    synthetic_waveform,*_ = ForwardModeler().forward_simulation(
+        geometry_type           ="dds",
         observed_time           = waveform_time,
         observed_waveform       = observed_waveform,
         frequency_cutoff        = frequency_cutoff,
         assembly_dict           = assembly_dict,
         stf_handler             = stf_handler,
-        gouge_velocity          = (best_gouge_velocity, best_gouge_velocity),
         misfit_interval         = misfit_interval,
-        minimum_velocity        = None,
-        maximum_velocity        = None,  
+        minimum_velocity        = minimum_velocity,
+        maximum_velocity        = maximum_velocity,  
         normalize_waveform      = True,
         enable_plotting         = save_plot,
         make_movie              = save_movie,
@@ -368,7 +395,6 @@ def process_velocity(args):
     Function to process a single velocity value in multiprocessing.
     """
     (
-        gouge_velocity_tuple,  
         observed_waveform,
         waveform_time,
         stf_handler,
@@ -380,17 +406,20 @@ def process_velocity(args):
     # Unpack parameters
     frequency_cutoff_MHz = params['frequency_cutoff_MHz']
 
+    minimum_velocity = params["min_velocity2simulate"] if params["min_velocity2simulate"] else min_assembly_velocity(assembly_dict)
+    maximum_velocity = params["max_velocity2simulate"] if params["max_velocity2simulate"] else max_assembly_velocity(assembly_dict)
+
     # Call DDS_UW_simulation with gouge_velocity_tuple
-    synthetic_waveform, _,_,_,_,_,_,_,_,_,_,_ = ForwardModeler().dds_forward_simulation(
+    synthetic_waveform,*_ = ForwardModeler().forward_simulation(
+        geometry_type           ="dds",
         observed_time           = waveform_time,
         observed_waveform       = observed_waveform,
         stf_handler             = stf_handler,
         frequency_cutoff        = frequency_cutoff_MHz,
         assembly_dict           = assembly_dict,
-        gouge_velocity          = gouge_velocity_tuple,  # Pass the tuple
         misfit_interval         = misfit_interval,
-        minimum_velocity        = None,
-        maximum_velocity        = None, 
+        minimum_velocity        = minimum_velocity,
+        maximum_velocity        = maximum_velocity, 
         normalize_waveform      = True,
         enable_plotting         = False
     )
@@ -402,7 +431,7 @@ def process_velocity(args):
     )
 
     # Use the first element of the tuple for sorting and returning
-    gouge_velocity_scalar = gouge_velocity_tuple[0]
+    gouge_velocity_scalar = assembly_dict["gouge_velocity_1"]
     print(f"\tVelocity: {1e4*gouge_velocity_scalar:.0f} => Misfit: {L2norm_new:.0f}")
 
     return gouge_velocity_scalar, L2norm_new
@@ -444,6 +473,8 @@ if __name__ == "__main__":
         "velocity_step_cm/mus"      : 0.002,
         "velocity_range_cm/mus"     : 0.01,
         "velocity_initial_cm/mus"   : 0.07,
+        "min_velocity2simulate"     : 0.30,  # cm/mus
+        "max_velocity2simulate"     : 0.60,  # cm/mus
         "plot_save_interval"        : 1,
         "movie_save_interval"       : 10,
         "l2norm_plot_interval"      : 1,
@@ -501,7 +532,7 @@ if __name__ == "__main__":
         # Load & process ultrasonic data and metadata from TSV, with preprocessing
         uw_data_handler = UltrasonicDataHandler.load_and_process_uw(
             infile_path                 = infile_path,
-            zero_out_time               = steel_only_time/2,
+            zero_out_time               = steel_only_time,
             frequency_cutoff_MHz        = params["frequency_cutoff_MHz"],
             maxtime2simulate            = params["maxtime2simulate_mus"],
             number_of_waveforms2process = params["num_waveform2porcess"],

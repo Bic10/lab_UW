@@ -201,7 +201,7 @@ def process_waveform(
     args_list = []
     for iteration in range(num_iteration):
         steel_velocity2simulate = np.random.uniform(low=steel_low, high=steel_high)
-        pzt_velocity2simulate   = np.random.uniform(low=pzt_low, high=pzt_high)
+        pzt_velocity2simulate   = steel_velocity2simulate # np.random.uniform(low=pzt_low, high=pzt_high)
         spreading_factor_tx     = np.random.uniform(low=spread_low, high=spread_high)
         spreading_factor_rx     = np.random.uniform(low=spread_low, high=spread_high)
         position2edge_tx        = np.random.uniform(low=pos_edge_low, high=pos_edge_high)
@@ -284,7 +284,8 @@ def process_waveform(
     movie_output_name = f"{outfile_name}_movie"
     plot_output_path = outdir_path_image / plot_output_name
     movie_output_path = outdir_path_image / movie_output_name
-    synthetic_waveform, *_ = ForwardModeler().block_forward_simulation(
+    synthetic_waveform, *_ = ForwardModeler().forward_simulation(
+        geometry_type="block",
         observed_time=observed_time,
         observed_waveform=observed_waveform,
         stf_handler = stf_handler,
@@ -389,7 +390,8 @@ def process_velocity(args):
     montecarlo["radius_factor_receiver"]        = radius_factor_receiver
 
     # Run forward simulation for this draw
-    synthetic_waveform, *_ = ForwardModeler().block_forward_simulation(
+    synthetic_waveform, *_ = ForwardModeler().forward_simulation(
+        geometry_type="block",
         observed_time=observed_time,
         observed_waveform=observed_waveform,
         stf_handler = stf_handler,
@@ -458,12 +460,14 @@ if __name__ == "__main__":
     assembly_dict["wave_type"] = wave_type
     assembly_dict["transmitter_position"] = 0
     assembly_dict["receiver_position"] = assembly_dict["z"]
+    assembly_dict["sample_dimensions"] = [assembly_dict["z"]] 
+
     # Basic simulation parameters
     params = {
         "maxtime2simulate_mus"      : 30,
         "frequency_cutoff_MHz"      : 6,
         "minimum_SNR"               : 5,
-        "min_velocity2simulate"     : 0.38,  # cm/mus
+        "min_velocity2simulate"     : 0.55,  # cm/mus
         "max_velocity2simulate"     : 0.60,  # cm/mus
         "plot_save_interval"        : 1,
         "movie_save_interval"       : 1,
@@ -480,8 +484,8 @@ if __name__ == "__main__":
         "steel_velocity_high": assembly_dict["velocity" + wave_type]+ 0.02,              
         "pzt_velocity_low": assembly_dict["pzt_velocity" + wave_type], 
         "pzt_velocity_high": assembly_dict["velocity" + wave_type]+ 0.02,
-        "spreading_factor_low" : 1.0,
-        "spreading_factor_high": 1.0,
+        "spreading_factor_low" : 0.00001,
+        "spreading_factor_high": 0.00001,
         # Uniform range for positions relative to edges pzt-steel
         "position2edge_low" : -0.5,
         "position2edge_high": -0.5,
