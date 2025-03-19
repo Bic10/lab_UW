@@ -261,7 +261,7 @@ def iterate_direct_arrival_times(
 def main():
     base_dir = "/home/michele/Desktop/Dottorato/active_source_implementation"
     machine_name = "on_bench"
-    experiment_name = "STF"
+    experiment_name = "STF_ss10_05"
     data_type = "uw_data/data_tsv_files"
     wave_tipe = "_s"
     block_metadata_filename = "blocks_metadata.json"
@@ -286,7 +286,7 @@ def main():
 
     for infile_path in infile_path_list:
         # Load the single file and get the wave/time
-        ultrasonic_handler = UltrasonicDataHandler.make_UW_data(infile_path)
+        ultrasonic_handler = UltrasonicDataHandler.load_UW_data(infile_path)
         data, metadata = ultrasonic_handler.waveform_data, ultrasonic_handler.metadata
         observed_time = metadata['time_ax_waveform']
         # Average all waveforms in that file

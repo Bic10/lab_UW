@@ -1,10 +1,11 @@
 # lab_uw/simulation_setup.py
 import numpy as np
-from typing import Union, Tuple, Optional
-from lab_uw.plotting import Plotter
-from pathlib import Path
-from scipy.signal.windows import kaiser
 from numpy import convolve
+from pathlib import Path
+from abc import ABC, abstractmethod
+from typing import Tuple, Optional, Union, Dict
+
+from lab_uw.plotting import Plotter
 
 class Grid1D:
     def __init__(self, cmin: float, fmax: float, grid_len: float, ppt: int):
@@ -83,7 +84,276 @@ class SimulationTime:
 
         self.num_t = len(self.simulation_time)
 
-class VelocityModel1D:
+class VelocityModel1DBase(ABC):
+    """
+    A base class for building 1D velocity models. 
+    Subclasses must implement the standard method sequence:
+      - build_velocity_model()
+         * compute_layer_positions()
+         * define_region_indices()
+         * initialize_velocity_model()
+         * assign_velocities()
+         * apply_smoothing()
+      - plot()
+
+    Shared attributes:
+    ------------------
+    x : np.ndarray
+        The spatial grid (1D).
+    sample_dimensions : Tuple[float, ...]
+        Dimensional parameters controlling the geometry.
+    pzt_layer_width : float
+        Thickness of the PZT layer(s).
+    pla_layer_width : float
+        Thickness of the PLA layer(s).
+    steel_velocity : float
+        Velocity used for steel regions.
+    pzt_velocity : float
+        Velocity used for PZT regions.
+    pla_velocity : float
+        Velocity used for PLA regions.
+    outfile_path : Optional[Path]
+        If plotting is desired, an output file path can be used.
+
+    Internal:
+    ---------
+    layer_starts : np.ndarray
+        Cumulative boundaries for each layer/region.
+    idx_dict : Dict[str, np.ndarray]
+        Mapping from region name to the array of x-indices in that region.
+    values : np.ndarray
+        Final velocity array for the entire domain.
+    """
+
+    def __init__(
+        self,
+        x: np.ndarray,
+        sample_dimensions: Tuple[float, ...],
+        pzt_layer_width: float,
+        pla_layer_width: float,
+        steel_velocity: float,
+        pzt_velocity: float,
+        pla_velocity: float,
+        outfile_path: Optional[Path] = None
+    ):
+        self.x = x
+        self.sample_dimensions = sample_dimensions
+
+        self.pzt_layer_width = pzt_layer_width
+        self.pla_layer_width = pla_layer_width
+
+        self.steel_velocity = steel_velocity
+        self.pzt_velocity   = pzt_velocity
+        self.pla_velocity   = pla_velocity
+
+        self.outfile_path = outfile_path
+
+        # Data structures populated by the builder methods:
+        self.layer_starts: np.ndarray = None
+        self.idx_dict: Dict[str, np.ndarray] = {}
+        self.values: np.ndarray = None
+
+    @abstractmethod
+    def build_velocity_model(self):
+        pass
+
+    @abstractmethod
+    def compute_layer_positions(self):
+        pass
+
+    @abstractmethod
+    def define_region_indices(self):
+        pass
+
+    @abstractmethod
+    def initialize_velocity_model(self):
+        pass
+
+    @abstractmethod
+    def assign_velocities(self):
+        pass
+
+    @abstractmethod
+    def apply_smoothing_between(self):
+        pass
+
+    def assign_constant_velocity(self, region_name: str, velocity: float):
+        """
+        Assign a uniform velocity to 'region_name' if it exists in self.idx_dict.
+        """
+        indices = self.idx_dict.get(region_name, [])
+        if indices.size:
+            self.values[indices] = velocity
+
+
+    def plot(self, outfile_path: Optional[str] = None):
+        if outfile_path is None:
+            outfile_path = self.outfile_path
+
+        Plotter().plot_velocity_model(
+            x=self.x,
+            c=self.values,
+            layer_starts=self.layer_starts,
+            pzt_layer_width=self.pzt_layer_width,
+            pla_layer_width=self.pla_layer_width,
+            outfile_path=outfile_path
+        )
+
+class VelocityModel1D_SingleBlock(VelocityModel1DBase):
+    """
+    Single-block 1D velocity model:
+      PLA -> PZT -> STEEL_BLOCK -> PZT -> PLA
+    with the 'apply_smoothing(region_from, region_to, n_smooth)' approach.
+    """
+
+    def __init__(
+        self,
+        x: np.ndarray,
+        sample_dimensions: Tuple[float],
+        x_transmitter: float,
+        x_receiver: float,
+        pzt_layer_width: float,
+        pla_layer_width: float,
+        steel_velocity: float,
+        pzt_velocity: float,
+        pla_velocity: float,
+        plotting: bool = True,
+        outfile_path: Optional[Path] = None
+    ):
+        super().__init__(
+            x=x,
+            sample_dimensions=sample_dimensions,
+            pzt_layer_width=pzt_layer_width,
+            pla_layer_width=pla_layer_width,
+            steel_velocity=steel_velocity,
+            pzt_velocity=pzt_velocity,
+            pla_velocity=pla_velocity,
+            outfile_path=outfile_path
+        )
+        self.x_transmitter = x_transmitter
+        self.x_receiver    = x_receiver
+        self.plotting      = plotting
+
+        # Build the model
+        self.build_velocity_model()
+
+    def build_velocity_model(self):
+        self.compute_layer_positions()
+        self.define_region_indices()
+        self.initialize_velocity_model()
+        self.assign_velocities()
+
+    def compute_layer_positions(self):
+        """
+        [PLA, PZT, STEEL_BLOCK, PZT, PLA].
+        Possibly adjust steel length by x_transmitter/x_receiver if desired.
+        """
+        if len(self.sample_dimensions) != 1:
+            raise ValueError("Expected exactly 1 item in sample_dimensions for single-block model.")
+
+        block_total_length = self.sample_dimensions[0]
+        # steel_length = block_total_length - (self.x_transmitter + self.x_receiver)
+        steel_length = block_total_length
+
+        self.layer_thicknesses = [
+            self.pla_layer_width,
+            self.pzt_layer_width,
+            steel_length,
+            self.pzt_layer_width,
+            self.pla_layer_width
+        ]
+        self.layer_starts = np.concatenate(([0.0], np.cumsum(self.layer_thicknesses)))
+
+    def define_region_indices(self):
+        x = self.x
+        regions = ["pla_1", "pzt_1", "steel_block", "pzt_2", "pla_2"]
+        self.idx_dict.clear()
+        for i, region in enumerate(regions):
+            start = self.layer_starts[i]
+            end   = self.layer_starts[i+1]
+            idx = np.where((x >= start) & (x <= end))[0]
+            self.idx_dict[region] = idx
+
+    def initialize_velocity_model(self):
+        self.values = self.steel_velocity * np.ones_like(self.x)
+
+    def assign_velocities(self):
+        self.assign_constant_velocity("pla_1",       self.pla_velocity)
+        self.assign_constant_velocity("pzt_1",       self.pzt_velocity)
+        self.assign_constant_velocity("steel_block", self.steel_velocity)
+        self.assign_constant_velocity("pzt_2",       self.pzt_velocity)
+        self.assign_constant_velocity("pla_2",       self.pla_velocity)
+
+        # Patch final index if needed
+        if len(self.x) > 1:
+            self.values[-1] = self.values[-2]
+
+    def apply_smoothing_between(self, region_from: str, region_to: str, n_smooth: int):
+        """
+        Direct copy of your original single-block 'apply_smoothing':
+        """
+        region_velocity_map = {
+            "pla_1":       self.pla_velocity,
+            "pzt_1":       self.pzt_velocity,
+            "steel_block": self.steel_velocity,
+            "pzt_2":       self.pzt_velocity,
+            "pla_2":       self.pla_velocity
+        }
+
+        if region_from not in self.idx_dict or region_to not in self.idx_dict:
+            return
+
+        idx_from = np.sort(self.idx_dict[region_from])
+        idx_to   = np.sort(self.idx_dict[region_to])
+        if idx_from.size == 0 or idx_to.size == 0:
+            return
+
+        vel_from = region_velocity_map.get(region_from, None)
+        vel_to   = region_velocity_map.get(region_to, None)
+        if vel_from is None or vel_to is None:
+            return
+
+        # Tail = last n_smooth of region_from
+        n_tail = min(n_smooth, idx_from.size)
+        tail   = idx_from[-n_tail:]
+
+        # Head = first n_smooth of region_to
+        n_head = min(n_smooth, idx_to.size)
+        head   = idx_to[:n_head]
+
+        boundary_indices = np.concatenate([tail, head])
+        if boundary_indices.size < 2:
+            return
+
+        # Linear ramp from vel_from to vel_to
+        ramp = np.linspace(vel_from, vel_to, boundary_indices.size)
+        self.values[boundary_indices] = ramp
+
+class VelocityModel1D_DDS(VelocityModel1DBase):
+    """
+    A 1D velocity model for a double-direct-shear (DDS) test sample 
+    that includes grooves, gouge layers, side blocks, central block, etc.
+
+    Layer layout (from left to right):
+        1.  pla_1
+        2.  pzt_1
+        3.  side_block_1
+        4.  groove_sb1
+        5.  gouge_1
+        6.  groove_cb1
+        7.  central_block
+        8.  groove_cb2
+        9.  gouge_2
+        10. groove_sb2
+        11. side_block_2
+        12. pzt_2
+        13. pla_2
+
+    The lengths of each region come from `sample_dimensions` and the various
+    groove/gouge offsets. At the end, we optionally apply smoothing between 
+    two specific boundaries, in the same style as the single-block approach.
+    """
+
     def __init__(
         self,
         x: np.ndarray,
@@ -95,57 +365,75 @@ class VelocityModel1D:
         h_groove_side: float,
         h_groove_central: float,
         steel_velocity: float,
+        # Gouge velocity can be a tuple of floats or arrays: (gouge_1_vel, gouge_2_vel)
         gouge_velocity: Union[Tuple[float, float], Tuple[np.ndarray, np.ndarray]],
         pzt_velocity: float,
         pla_velocity: float,
-        outfile_path: Path = False
+        outfile_path: Optional[Path] = None,
+        plotting: bool = True
     ):
-        '''
-        Initialize the 1D velocity model.
-        '''
+        # Store main attributes
         self.x = x
         self.sample_dimensions = sample_dimensions
-        self.x_transmitter = x_transmitter
-        self.x_receiver = x_receiver
-        self.pzt_layer_width = pzt_layer_width
-        self.pla_layer_width = pla_layer_width
-        self.h_groove_side = h_groove_side
+        self.x_transmitter    = x_transmitter
+        self.x_receiver       = x_receiver
+        self.pzt_layer_width  = pzt_layer_width
+        self.pla_layer_width  = pla_layer_width
+        self.h_groove_side    = h_groove_side
         self.h_groove_central = h_groove_central
+
         self.steel_velocity = steel_velocity
-        self.gouge_velocity = gouge_velocity
-        self.pzt_velocity = pzt_velocity
-        self.pla_velocity = pla_velocity
+        self.gouge_velocity = gouge_velocity  # (gouge_1, gouge_2)
+        self.pzt_velocity   = pzt_velocity
+        self.pla_velocity   = pla_velocity
+
         self.outfile_path = outfile_path
-        self.layer_starts = None
+        self.plotting     = plotting
+
+        # Internals
+        self.layer_thicknesses = []
+        self.layer_starts: np.ndarray = None
         self.idx_dict = {}
-        self.values = None  # Velocity model array
+        self.values: np.ndarray = None
 
         self.build_velocity_model()
 
     def build_velocity_model(self):
-        '''
-        Build the 1D velocity model.
-        '''
+        """
+        Master method that calls all steps in order.
+        """
         self.compute_layer_positions()
         self.define_region_indices()
         self.initialize_velocity_model()
         self.assign_velocities()
-        # self.apply_smoothing()
+
+        # Patch final index if needed
+        if len(self.x) > 1:
+            self.values[-1] = self.values[-2]
+
+        # Now apply smoothing at boundaries you care about:
+        # For example, a boundary from "pzt_1" to "side_block_1"
+        # and from "side_block_2" to "pzt_2":
+        self.apply_smoothing_between("pzt_1", "side_block_1", 10)
+        self.apply_smoothing_between("side_block_2", "pzt_2", 10)
 
     def compute_layer_positions(self):
-        '''
-        Compute layer thicknesses and cumulative starts.
-        '''
-        # Unpack sample dimensions
+        """
+        Calculate thicknesses for the 13 sub-layers:
+          [pla_1, pzt_1, side_block_1, groove_sb1, gouge_1, 
+           groove_cb1, central_block, groove_cb2, gouge_2, 
+           groove_sb2, side_block_2, pzt_2, pla_2]
+        Then compute their cumulative starts in `self.layer_starts`.
+        """
         (side_block_1_total, gouge_1_length,
          central_block_total, gouge_2_length, side_block_2_total) = self.sample_dimensions
 
-        # Adjust block lengths to exclude groove heights
-        side_block_1 = side_block_1_total - self.h_groove_side
-        side_block_2 = side_block_2_total - self.h_groove_side
-        central_block = central_block_total - 2 * self.h_groove_central  # Subtract grooves on both sides
+        # Subtract the groove heights from each steel block portion
+        side_block_1  = side_block_1_total - self.h_groove_side
+        side_block_2  = side_block_2_total - self.h_groove_side
+        central_block = central_block_total - 2.0 * self.h_groove_central
 
-        # Compute cumulative positions along the sample
+        # Build the list of layer thicknesses in order
         self.layer_thicknesses = [
             self.pla_layer_width,
             self.pzt_layer_width,
@@ -161,34 +449,27 @@ class VelocityModel1D:
             self.pzt_layer_width,
             self.pla_layer_width
         ]
+
+        # Now get cumulative starts
         self.layer_starts = np.concatenate(([0.0], np.cumsum(self.layer_thicknesses)))
 
     def define_region_indices(self):
-        '''
-        Define indices for each region.
-        '''
-        x = self.x  # For brevity
-
-        regions = [
-            'pla_1',
-            'pzt_1',
-            'side_block_1',
-            'groove_sb1',
-            'gouge_1',
-            'groove_cb1',
-            'central_block',
-            'groove_cb2',
-            'gouge_2',
-            'groove_sb2',
-            'side_block_2',
-            'pzt_2',
-            'pla_2'
+        """
+        Fill self.idx_dict with each region's x-indices.
+        The region names must match the order used in compute_layer_positions().
+        """
+        x = self.x
+        region_names = [
+            "pla_1", "pzt_1", "side_block_1", "groove_sb1", "gouge_1",
+            "groove_cb1", "central_block", "groove_cb2", "gouge_2",
+            "groove_sb2", "side_block_2", "pzt_2", "pla_2"
         ]
+        self.idx_dict.clear()
 
-        for i, region in enumerate(regions):
+        for i, region in enumerate(region_names):
             start = self.layer_starts[i]
-            end = self.layer_starts[i + 1]
-            indices = np.where((x >= start) & (x < end))[0]
+            end   = self.layer_starts[i + 1]
+            indices = np.where((x >= start) & (x <= end))[0]
             self.idx_dict[region] = indices
 
     def initialize_velocity_model(self):
@@ -257,271 +538,79 @@ class VelocityModel1D:
 
         self.values[indices] = np.linspace(start_vel, end_vel, groove_length)
 
-    def apply_smoothing(self):
-        '''
-        Apply smoothing between pzt_velocity and steel_velocity around transmitter and receiver.
-        '''
-        x = self.x
-
-        # Transmitter smoothing
-        transmitter_smoothing_start = self.layer_starts[1]
-        transmitter_smoothing_end = self.layer_starts[2] + self.pzt_layer_width
-        transmitter_indices = np.where((x >= transmitter_smoothing_start) & (x < transmitter_smoothing_end))[0]
-        if transmitter_indices.size > 0:
-            self.values[transmitter_indices] = np.linspace(
-                self.pzt_velocity, self.steel_velocity, len(transmitter_indices))
-
-        # Receiver smoothing
-        receiver_smoothing_start = self.layer_starts[11]  # Start of PZT layer
-        receiver_smoothing_end = self.layer_starts[12] + self.pzt_layer_width  # End of smoothing region
-        receiver_indices = np.where((x >= receiver_smoothing_start) & (x < receiver_smoothing_end))[0]
-        if receiver_indices.size > 0:
-            self.values[receiver_indices] = np.linspace(
-                self.steel_velocity, self.pzt_velocity, len(receiver_indices))
-
-    def plot(self, outfile_path: Optional[str] = None):
-        '''
-        Plot the velocity model.
-        '''
-        Plotter().plot_velocity_model(
-            x=self.x,
-            c=self.values,
-            layer_starts=self.layer_starts,
-            pzt_layer_width=self.pzt_layer_width,
-            pla_layer_width=self.pla_layer_width,
-            outfile_path=outfile_path
-        )
-
-class VelocityModel1D_SingleBlock:
-    """
-    A simple 1D velocity model for a single block with transmitter on one side
-    and receiver on the other. The block is sandwiched by PLA and PZT layers.
-    
-    Layer layout (from left to right):
-        PLA -> PZT -> STEEL_BLOCK -> PZT -> PLA
-    
-    The STEEL_BLOCK region is adjusted to account for x_transmitter and x_receiver offsets.
-    
-    Attributes
-    ----------
-    x : np.ndarray
-        Spatial grid (e.g., in cm or mm).
-    sample_dimensions : Tuple[float]
-        Expected to have exactly one element: (block_total_length,).
-    x_transmitter : float
-        Offset subtracted from the left boundary of the block for the transmitter.
-    x_receiver : float
-        Offset subtracted from the right boundary of the block for the receiver.
-    pzt_layer_width : float
-        Thickness of PZT layer at each side (transmitter and receiver).
-    pla_layer_width : float
-        Thickness of PLA layer at each side (transmitter and receiver).
-    steel_velocity : float
-        Constant velocity for steel.
-    pzt_velocity : float
-        Constant velocity for PZT.
-    pla_velocity : float
-        Constant velocity for PLA.
-    plotting : bool
-        Whether to produce a plot when the model is built.
-    outfile_path : Optional[Path]
-        If provided and plotting=True, the final velocity model plot is saved here.
-    
-    """
-
-
-    def __init__(
-        self,
-        x: np.ndarray,
-        sample_dimensions: Tuple[float,],
-        x_transmitter: float,
-        x_receiver: float,
-        pzt_layer_width: float,
-        pla_layer_width: float,
-        steel_velocity: float,
-        pzt_velocity: float,
-        pla_velocity: float,
-        plotting: bool = False,
-        outfile_path: Optional[Path] = None
-    ):
-        self.x = x
-        self.sample_dimensions = sample_dimensions  # (block_total_length,)
-        self.x_transmitter = x_transmitter
-        self.x_receiver = x_receiver
-        self.pzt_layer_width = pzt_layer_width
-        self.pla_layer_width = pla_layer_width
-        self.steel_velocity = steel_velocity
-        self.pzt_velocity = pzt_velocity
-        self.pla_velocity = pla_velocity
-        self.plotting = plotting
-        self.outfile_path = outfile_path
-
-        # Internal data containers
-        self.layer_thicknesses = []
-        self.layer_starts = None
-        self.idx_dict = {}
-        self.values = None  # Will hold the final velocity model
-
-        # Build the model
-        self.build_velocity_model()
-
-    def build_velocity_model(self):
-        self.compute_layer_positions()
-        self.define_region_indices()
-        self.initialize_velocity_model()
-        self.assign_velocities()
-
-        # # Now apply smoothing for each boundary you care about:
-        # self.apply_smoothing("pzt_1", "steel_block", 10)
-        # self.apply_smoothing("steel_block", "pzt_2", 10)
-
-    def compute_layer_positions(self):
+    def apply_smoothing_between(self, region_from: str, region_to: str, n_smooth: int):
         """
-        Compute the thicknesses of each layer:
-          [PLA, PZT, STEEL_BLOCK, PZT, PLA]
+        Smooth the boundary transition from `region_from` to `region_to`.
+        This is exactly the single-block style:
 
-        The steel block thickness is adjusted by x_transmitter and x_receiver offsets.
-        """
-        if len(self.sample_dimensions) != 1:
-            raise ValueError("sample_dimensions must have exactly one element (the total block length) for a single-block model.")
-
-        block_total_length = self.sample_dimensions[0]
-        steel_length = block_total_length
-        
-        # Build the layer thickness list
-        self.layer_thicknesses = [
-            self.pla_layer_width,
-            self.pzt_layer_width,
-            steel_length,
-            self.pzt_layer_width,
-            self.pla_layer_width
-        ]
-        # Compute the cumulative starts: [0, layer1, layer1+layer2, ...]
-        self.layer_starts = np.concatenate(([0.0], np.cumsum(self.layer_thicknesses)))
-
-    def define_region_indices(self):
-        """
-        Create a dictionary that maps layer names to the x-grid indices that lie within each layer's start/end.
-        """
-        x = self.x
-        regions = ["pla_1", "pzt_1", "steel_block", "pzt_2", "pla_2"]
-        self.idx_dict.clear()
-
-        for i, region in enumerate(regions):
-            start = self.layer_starts[i]
-            end   = self.layer_starts[i+1]
-
-            indices = np.where((x >= start) & (x <= end))[0]
-
-            self.idx_dict[region] = indices
-
-    def initialize_velocity_model(self):
-        """ Fill the entire velocity array with steel_velocity by default. """
-        self.values = np.ones_like(self.x)
-
-    def assign_velocities(self):
-        """
-        Assign velocities for each of the five regions:
-            pla_1 -> pla_velocity
-            pzt_1 -> pzt_velocity
-            steel_block -> steel_velocity (already assigned by default, but let's be explicit)
-            pzt_2 -> pzt_velocity
-            pla_2 -> pla_velocity
-        """
-        self.assign_constant_velocity("pla_1", self.pla_velocity)
-        self.assign_constant_velocity("pzt_1", self.pzt_velocity)
-        self.assign_constant_velocity("steel_block", self.steel_velocity)
-        self.assign_constant_velocity("pzt_2", self.pzt_velocity)
-        self.assign_constant_velocity("pla_2", self.pla_velocity)
-        #  duct-tape solution for last index non-assignement
-        self.values[-1] = self.values[-2]
-
-    def assign_constant_velocity(self, region_name: str, velocity: float):
-        """ Helper to set a uniform velocity in a specified region. """
-        indices = self.idx_dict.get(region_name, [])
-        if indices.size:
-            self.values[indices] = velocity
-
-    def apply_smoothing(
-        self,
-        region_from: str,
-        region_to: str,
-        n_smooth: int
-    ):
-        """
-        Smooths the boundary transition from 'region_from' to 'region_to' 
-        using up to 'n_smooth' points at the end of region_from and 'n_smooth'
-        points at the start of region_to.
-        
-        1. Retrieves each region’s velocity (pzt_velocity, steel_velocity, etc.) 
-        from a local dictionary that maps region_name -> velocity.
-        2. Finds the last 'n_smooth' indices in region_from and the first 
-        'n_smooth' indices in region_to.
-        3. Builds a linear ramp from region_from's velocity to region_to's velocity
-        across those boundary indices.
-        4. Writes the ramp into self.values for that boundary zone.
+         1) region_velocity_map: region -> float velocity
+         2) tail indices from region_from, head indices from region_to
+         3) linear ramp from velocity_from -> velocity_to
         """
 
-        # A small lookup so we don’t need separate velocity arguments
+        # 1) We define a map from each region to a single float velocity
+        #    for boundary smoothing. If a region uses array velocities,
+        #    we can put None or skip it. 
         region_velocity_map = {
-            "pla_1":       self.pla_velocity,
-            "pzt_1":       self.pzt_velocity,
-            "steel_block": self.steel_velocity,
-            "pzt_2":       self.pzt_velocity,
-            "pla_2":       self.pla_velocity
+            "pla_1":         self.pla_velocity,
+            "pzt_1":         self.pzt_velocity,
+            "side_block_1":  self.steel_velocity,
+            "groove_sb1":    self.steel_velocity,
+            "gouge_1":       None,   # if it's array-based, or pick a float if you want
+            "groove_cb1":    self.steel_velocity,
+            "central_block": self.steel_velocity,
+            "groove_cb2":    self.steel_velocity,
+            "gouge_2":       None,
+            "groove_sb2":    self.steel_velocity,
+            "side_block_2":  self.steel_velocity,
+            "pzt_2":         self.pzt_velocity,
+            "pla_2":         self.pla_velocity
         }
 
+        # 2) Basic checks
         if region_from not in self.idx_dict or region_to not in self.idx_dict:
-            return  # one or both regions don't exist in the idx_dict
-
+            return
         idx_from = self.idx_dict[region_from]
         idx_to   = self.idx_dict[region_to]
         if idx_from.size == 0 or idx_to.size == 0:
-            return  # region(s) are empty => no smoothing
+            return
 
         vel_from = region_velocity_map.get(region_from, None)
         vel_to   = region_velocity_map.get(region_to, None)
-        if vel_from is None or vel_to is None:
-            return  # unknown region => skip
+        # If either is None, skip
+        if not isinstance(vel_from, (int, float)) or not isinstance(vel_to, (int, float)):
+            return
 
-        # Sort the indices so they're in ascending spatial order
+        # 3) Sort the region indices in ascending x-position
         idx_from_sorted = np.sort(idx_from)
         idx_to_sorted   = np.sort(idx_to)
 
-        # Up to n_smooth points at the end of region_from
-        n_tail = min(n_smooth, idx_from_sorted.size)
-        tail   = idx_from_sorted[-n_tail:]  # last portion of region_from
+        # 4) Tail = last n_smooth of 'region_from'
+        tail_size = min(n_smooth, idx_from_sorted.size)
+        tail      = idx_from_sorted[-tail_size:]
 
-        # Up to n_smooth points at the start of region_to
-        n_head = min(n_smooth, idx_to_sorted.size)
-        head   = idx_to_sorted[:n_head]     # first portion of region_to
+        # 5) Head = first n_smooth of 'region_to'
+        head_size = min(n_smooth, idx_to_sorted.size)
+        head      = idx_to_sorted[:head_size]
 
         boundary_indices = np.concatenate([tail, head])
-        if boundary_indices.size < 2:
-            return  # nothing to ramp
+        if len(boundary_indices) < 2:
+            return
 
-        # Build a linear ramp from vel_from to vel_to
-        ramp = np.linspace(vel_from, vel_to, boundary_indices.size)
+        # 6) Build a linear ramp
+        ramp = np.linspace(vel_from, vel_to, len(boundary_indices))
 
+        # 7) Write the ramp into self.values
         self.values[boundary_indices] = ramp
 
-    def plot(self, outfile_path: Optional[str] = None):
-        '''
-        Plot the velocity model.
-        '''
-        Plotter().plot_velocity_model(
-            x=self.x,
-            c=self.values,
-            layer_starts=self.layer_starts,
-            pzt_layer_width=self.pzt_layer_width,
-            pla_layer_width=self.pla_layer_width,
-            outfile_path=outfile_path
-        )
-
 class Source1D:
-    def __init__(self, stf_time: np.ndarray, stf_waveform: np.ndarray, position: float, radius: int, 
-                    extension: float,
-                    pzt_layer_width: float,
+    def __init__(self, stf_time: np.ndarray, 
+                 stf_waveform: np.ndarray,
+                 position: float, 
+                 pzt_layer_width: float,
+                 radius: int, 
+                 extension: float = None,
+
 ):
         '''
         Initialize the 1D source.
@@ -589,9 +678,11 @@ class Source1D:
         )
 
 class Receiver1D:
-    def __init__(self, position: float, radius: int, 
-                    extension: float,
-                    pzt_layer_width: float,
+    def __init__(self, 
+                 position: float, 
+                 pzt_layer_width: float,
+                 radius: int, 
+                 extension: float = None,
                 ):        
         '''
         Initialize the 1D receiver.

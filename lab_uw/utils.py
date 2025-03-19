@@ -6,6 +6,14 @@ from pathlib import Path
 from lab_uw.data_io import UltrasonicDataHandler
 from lab_uw.plotting import InteractivePlotter
 
+def evaluate_snr(waveform_time,observed_waveform, signal_minimum_time):
+    sure_noise_interval = np.where(waveform_time < signal_minimum_time)
+    good_data_interval  = np.where(waveform_time > signal_minimum_time)
+    max_signal          = np.abs(observed_waveform[good_data_interval]).max() if good_data_interval[0].size else 1
+    max_noise           = np.abs(observed_waveform[sure_noise_interval]).max() if sure_noise_interval[0].size else 1
+
+    return max_signal / max_noise 
+
 def pick_arrival_times(
     dir_manager, machine_name, experiment_name, infile_path_list_uw, start_time=0
 ):

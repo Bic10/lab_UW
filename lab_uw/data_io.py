@@ -1,5 +1,8 @@
+# lab_uw/data_io.py
+
 import numpy as np
 import json
+import sys
 import pandas as pd
 from scipy.signal import find_peaks
 import logging
@@ -28,13 +31,151 @@ class UltrasonicDataHandler:
         self.metadata = metadata
 
     @classmethod
+    def load_multi_channel_UW_data(cls, infile_path: Path) -> Dict[str, "UltrasonicDataHandler"]:
+        """
+        Reads a TSV file that may contain multiple channel blocks,
+        returning a dictionary of channel_name -> UltrasonicDataHandler.
+        """
+        channel_dict = {}
+
+        with open(infile_path, "r", encoding='iso8859') as infile:
+            while True:
+                # 1) Read next channel's metadata
+                header_info = cls.extract_next_channel_metadata(infile)
+                if not header_info:
+                    # No more channels found
+                    break
+                (
+                    channel_name,
+                    amplitude_info,
+                    time_info,
+                    axis_info
+                ) = header_info
+
+                offset = float(time_info[0])
+                scale = float(time_info[1])
+                n_samples = int(time_info[2])
+                sampling_rate = float(time_info[3])  # microseconds or whatever
+
+                time_ax_waveform = np.arange(offset, offset + scale*n_samples, sampling_rate)
+
+                # 3) Read waveforms belonging to the current channel
+                waveform_2d = cls.read_waveforms_until_next_channel(infile)
+                data_array = np.array(waveform_2d, dtype=float)
+
+                # 4) Build metadata dict
+                metadata = {
+                    "channel_name": channel_name,
+                    "number_of_samples": n_samples,
+                    "sampling_rate": sampling_rate,
+                    "time_ax_waveform": time_ax_waveform,
+                    # You can add amplitude_info, axis_info, etc.:
+                    "amplitude_info": amplitude_info,
+                    "axis_info": axis_info,
+                }
+
+                # 5) Create an UltrasonicDataHandler for this channel
+                handler = cls(waveform_data=data_array, metadata=metadata)
+
+                # 6) Store in dictionary
+                channel_dict[channel_name] = handler
+
+        return channel_dict
+
+    @staticmethod
+    def extract_next_channel_metadata(infile: TextIO) -> Optional[Tuple[str, List[float], List[float], List[float]]]:
+        """
+        Reads the next 4 lines of channel metadata from the file.
+        Returns (channel_name, amplitude_info, time_info, axis_info)
+        or None if no further channel found.
+        """
+        # Attempt to read the next four lines
+        lines = []
+        for _ in range(4):
+            pos = infile.tell()
+            line = infile.readline()
+            if not line:
+                # EOF or missing lines => no more channels
+                return None
+            # If this is not truly a header line, we might guess we reached next channel
+            # or there's a data line in between. Usually the format is strict, so let's
+            # just gather them for now.
+            lines.append(line.strip())
+
+        # Check that the first line has "channel:"
+        if "channel:" not in lines[0]:
+            # This means those lines are not a valid channel header
+            return None
+
+        # The lines structure presumably:
+        # 0: "Bscan Image from channel:s1p1 ..."
+        # 1: "[Amplitude Scale] ... min:-100%=-2048 max:..."
+        # 2: "[Time Scale] ... offset=0 scale=250 sample=6250 sampling=..."
+        # 3: "[Axis Scale] start=0 end=1 step=0.1"
+
+        general_line = lines[0]
+        amplitude_line = lines[1]
+        time_line = lines[2]
+        axis_line = lines[3]
+
+        # Extract the channel_name
+        # e.g. "Bscan Image from channel:s1p1 ..." => split at "channel:"
+        channel_part = general_line.split("channel:")[1].strip()
+        channel_name = channel_part.split()[0].rstrip(",")  # i.e: 's1p1'
+
+        amplitude_nums = re.findall(r"[-]?\d+\.*\d*", amplitude_line)  # get numeric portions
+        time_nums = re.findall(r"[-]?\d+\.*\d*", time_line)
+        axis_nums = re.findall(r"[-]?\d+\.*\d*", axis_line)
+
+        # Convert each to float
+        amplitude_info = [float(x) for x in amplitude_nums]
+        time_info = [float(x) for x in time_nums]
+        axis_info = [float(x) for x in axis_nums]
+
+        return (channel_name, amplitude_info, time_info, axis_info)
+
+    @staticmethod
+    def read_waveforms_until_next_channel(infile: TextIO) -> List[List[float]]:
+        """
+        Reads waveform lines until we hit another 'Bscan Image from channel:'
+        or EOF. Returns a list of waveforms (each waveform is a list of floats).
+        """
+        waveforms = []
+        while True:
+            pos = infile.tell()
+            line = infile.readline()
+            if not line:
+                # EOF
+                break
+
+            # Check if line looks like the next channel header
+            if "Bscan Image from channel:" in line:
+                # We have gone one line too far. Rewind and stop reading waveforms
+                infile.seek(pos)
+                break
+
+            # Otherwise parse the line as numeric values, if possible:
+            line = line.strip()
+            if not line:
+                continue  # skip blank lines
+            try:
+                row_values = [float(val) for val in line.split()]
+                waveforms.append(row_values)
+            except ValueError:
+                # Possibly a weird line or partial text.  You can decide to break or skip.
+                logger.debug(f"Skipping non-numeric line: {line}")
+                continue
+
+        return waveforms
+    
+    @classmethod
     def load_UW_data(cls, infile_path: Path) -> "UltrasonicDataHandler":
         """
         Creates an UltrasonicDataHandler instance by loading data from a TSV file.
         (Raw ultrasonic waveforms + metadata)
         """
         with open(infile_path, "r", encoding='iso8859') as infile:
-            acquisition_info, time_info = cls.extract_metadata_from_tsv(infile)
+            acquisition_info, time_info, channel_name = cls.extract_metadata_from_tsv(infile)
             number_of_samples = int(time_info[2])
             sampling_rate = time_info[3]  # microseconds
             time_ax_waveform = np.arange(time_info[0], time_info[1], sampling_rate)
@@ -52,7 +193,8 @@ class UltrasonicDataHandler:
                 "time_ax_waveform": time_ax_waveform,
                 "acquisition_frequency": acquisition_frequency,
                 "number_of_waveforms": data.shape[0],
-                "time_ax_acquisition": time_ax_acquisition
+                "time_ax_acquisition": time_ax_acquisition,
+                "channel_name": channel_name
             }
 
         return cls(waveform_data=data, metadata=metadata)
@@ -65,7 +207,7 @@ class UltrasonicDataHandler:
         number_of_waveforms2process: int = None,
         maxtime2simulate: float = 0,
         zero_out_time: float = 0,
-        frequency_cutoff_MHz: float = None,
+        frequency_cutoff: float = None,
         time_ax_acquisition_start: float = None
     ) -> Tuple[np.ndarray, np.ndarray, int, Dict[str, Any]]:
         """
@@ -114,12 +256,12 @@ class UltrasonicDataHandler:
             observed_waveform_data[:, :idx_zero_out] = 0.0
 
         # Lowpass filtering
-        if frequency_cutoff_MHz:
+        if frequency_cutoff:
             signal_processor = SignalProcessor()
             observed_waveform_data, _ = signal_processor.signal2noise_separation_lowpass(
                 waveform_data=observed_waveform_data,
                 metadata=metadata,
-                freq_cut=frequency_cutoff_MHz
+                freq_cut=frequency_cutoff
             )
 
         if time_ax_acquisition_start:
@@ -138,7 +280,7 @@ class UltrasonicDataHandler:
         experiment_name_stf: str,
         data_type_stf: str,
         stf_chosen: str,
-        frequency_cutoff_MHz: float
+        frequency_cutoff: float
     ) -> "UltrasonicDataHandler":
         """
         Creates an UltrasonicDataHandler instance by locating, loading, and processing
@@ -167,7 +309,7 @@ class UltrasonicDataHandler:
         stf_waveform_filt, _ = signal_processor.signal2noise_separation_lowpass(
             waveform_data=stf_waveform_raw,
             metadata=stf_metadata,
-            freq_cut=frequency_cutoff_MHz
+            freq_cut=frequency_cutoff
         )
         stf_waveform = stf_waveform_filt - stf_waveform_filt[0]
 
@@ -186,9 +328,10 @@ class UltrasonicDataHandler:
         time_scale = infile.readline().strip()
         acquisition_scale = infile.readline().strip()
 
+        channel_name = general.split(":")[1]  # Euroscan allowes for saving multiple channels in the same tsv file
         acquisition_info = [float(entry) for entry in re.findall(r"\d+\.*\d*", acquisition_scale)]
         time_info = [float(entry) for entry in re.findall(r"\d+\.*\d*", time_scale)]
-        return acquisition_info, time_info
+        return acquisition_info, time_info, channel_name
 
     @staticmethod
     def read_waveforms(infile: TextIO) -> List[List[float]]:
@@ -198,8 +341,8 @@ class UltrasonicDataHandler:
             if line:
                 try:
                     waveform_list.append([float(value) for value in line.split()])
-                except ValueError:
-                    pass
+                except ValueError:                        
+                    break
         return waveform_list
 
     def load_waveform_json(self, infile_path: Path) -> Tuple[np.ndarray, Dict]:

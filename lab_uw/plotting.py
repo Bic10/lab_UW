@@ -616,7 +616,7 @@ class Plotter:
         ax.tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
         ax.legend(fontsize=self.settings['fontsize_ticks'])
         ax.grid(alpha=0.3)
-
+        ax.set_xlim(left=t[200],right=t[-1])
         fig.tight_layout()
 
         self.output_path_choice(fig=fig, outfile_path=outfile_path)

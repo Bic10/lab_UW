@@ -37,7 +37,7 @@ def process_uw_file(
     # Load and preprocess uw data
     uw_data_handler = UltrasonicDataHandler.load_and_process_uw(
         infile_path=infile_path,
-        frequency_cutoff_MHz=params["frequency_cutoff_MHz"],
+        frequency_cutoff=params["frequency_cutoff"],
         maxtime2simulate=params["maxtime2simulate_mus"],
         number_of_waveforms2process=params["number_of_waveforms2process"]
     )
@@ -182,7 +182,7 @@ def process_waveform(
         outdir_path_image = Path(outdir_path_image[0])
 
     ###### For compatibility with global optimization
-    misfit_interval = np.where(observed_time > 0)[0]
+    misfit_interval = np.where(observed_time >= 0)[0]
 
     # Monte Carlo parameters
     num_iteration = global_search_space["num_iterations"]
@@ -201,7 +201,7 @@ def process_waveform(
     args_list = []
     for iteration in range(num_iteration):
         steel_velocity2simulate = np.random.uniform(low=steel_low, high=steel_high)
-        pzt_velocity2simulate   = steel_velocity2simulate # np.random.uniform(low=pzt_low, high=pzt_high)
+        pzt_velocity2simulate   = np.random.uniform(low=pzt_low, high=pzt_high)
         spreading_factor_tx     = np.random.uniform(low=spread_low, high=spread_high)
         spreading_factor_rx     = np.random.uniform(low=spread_low, high=spread_high)
         position2edge_tx        = np.random.uniform(low=pos_edge_low, high=pos_edge_high)
@@ -284,12 +284,14 @@ def process_waveform(
     movie_output_name = f"{outfile_name}_movie"
     plot_output_path = outdir_path_image / plot_output_name
     movie_output_path = outdir_path_image / movie_output_name
-    synthetic_waveform, *_ = ForwardModeler().forward_simulation(
+
+    simulation = ForwardModeler()
+    simulation.forward_simulation(
         geometry_type="block",
         observed_time=observed_time,
         observed_waveform=observed_waveform,
         stf_handler = stf_handler,
-        frequency_cutoff=params["frequency_cutoff_MHz"],
+        frequency_cutoff=params["frequency_cutoff"],
         assembly_dict=assembly_dict,
         montecarlo=montecarlo,
         misfit_interval=misfit_interval,
@@ -332,6 +334,19 @@ def process_waveform(
     fig.savefig(scatter_plot_path, dpi=150)
     plt.close(fig)
 
+    simulation.run_local_inversion(observed_time=observed_time,
+                                   observed_waveform=observed_waveform,
+                                   misfit_interval=misfit_interval,
+                                   n_iterations=20,
+                                   dc_max_start=0.01,
+                                   reduce_factor=3/2,
+                                   dc_threshold=0.0001,
+                                   minimum_velocity=params["min_velocity2simulate"],
+                                   maximum_velocity=params["max_velocity2simulate"],
+                                   enable_plotting=True,
+                                   plot_output_path=plot_output_path
+                                   )
+    
     # Return final info
     return {
         "velocity_list_waveform": steel_array,
@@ -390,12 +405,13 @@ def process_velocity(args):
     montecarlo["radius_factor_receiver"]        = radius_factor_receiver
 
     # Run forward simulation for this draw
-    synthetic_waveform, *_ = ForwardModeler().forward_simulation(
+    simulation = ForwardModeler()
+    simulation.forward_simulation(
         geometry_type="block",
         observed_time=observed_time,
         observed_waveform=observed_waveform,
         stf_handler = stf_handler,
-        frequency_cutoff=params["frequency_cutoff_MHz"],
+        frequency_cutoff=params["frequency_cutoff"],
         assembly_dict=assembly_dict,
         montecarlo=montecarlo,
         misfit_interval=misfit_interval,
@@ -405,6 +421,8 @@ def process_velocity(args):
         enable_plotting=False
     )
 
+    synthetic_waveform = simulation.forward_results["synthetic_waveform"]
+
     # Calculate misfit
     L2norm_new = compute_misfit(
         observed_waveform=observed_waveform,
@@ -413,6 +431,7 @@ def process_velocity(args):
     )
     
     print((f"\tL2={L2norm_new:.4e}\tSteel={steel_velocity2simulate:.3f}, PZT={pzt_velocity2simulate:.3f}, txspread={spreading_factor_transmitter:.3f}, rxspread={spreading_factor_receiver:.3f}, tx2edge={position2edge_transmitter:.3f}, rx2edge={position2edge_receiver:.3f}, txrad={radius_factor_transmitter:.4f}, rxrad={radius_factor_receiver:.4f}"))
+
 
     return (
         pzt_velocity2simulate,
@@ -433,8 +452,8 @@ if __name__ == "__main__":
 
     # Basic experiment info
     machine_name = "on_bench"
-    experiment_name = "STF"
-    wave_type = "_p"  # e.g., compressional wave
+    experiment_name = "STF_ss10_05"
+    wave_type = "_s"  # e.g., compressional wave
     data_type_uw = f"uw_data/data_tsv_files{wave_type}"
 
     # Create output directories
@@ -446,7 +465,7 @@ if __name__ == "__main__":
     outdir_path_image = dir_manager.make_data_analysis_folders(
         machine_name=machine_name,
         experiment_name=experiment_name,
-        data_types=[f"source_receiver_simulation_parameters_images_and_movie_fixed{wave_type}"]
+        data_types=[f"source_receiver_simulation_parameters{wave_type}_images_and_movie_2025-03-19"]
     )
     print(f"Misfits will be saved at:\n{outdir_path_l2norm[0]}")
 
@@ -464,11 +483,11 @@ if __name__ == "__main__":
 
     # Basic simulation parameters
     params = {
-        "maxtime2simulate_mus"      : 30,
-        "frequency_cutoff_MHz"      : 6,
+        "maxtime2simulate_mus"      : 65,
+        "frequency_cutoff"          : 6,     # MHz
         "minimum_SNR"               : 5,
-        "min_velocity2simulate"     : 0.55,  # cm/mus
-        "max_velocity2simulate"     : 0.60,  # cm/mus
+        "min_velocity2simulate"     : 0.2,  # cm/mus
+        "max_velocity2simulate"     : 0.4,  # cm/mus
         "plot_save_interval"        : 1,
         "movie_save_interval"       : 1,
         "l2norm_plot_interval"      : 1,
@@ -479,19 +498,19 @@ if __name__ == "__main__":
 
     #### MONTE CARLO PARAMETERS DEFINED HERE ####
     global_search_space = {
-        "num_iterations": 1000,  # how many random draws to try
+        "num_iterations": 500,  # how many random draws to try
         "steel_velocity_low": assembly_dict["velocity" + wave_type]- 0.02,
         "steel_velocity_high": assembly_dict["velocity" + wave_type]+ 0.02,              
         "pzt_velocity_low": assembly_dict["pzt_velocity" + wave_type], 
         "pzt_velocity_high": assembly_dict["velocity" + wave_type]+ 0.02,
         "spreading_factor_low" : 0.00001,
-        "spreading_factor_high": 0.00001,
+        "spreading_factor_high": 1,
         # Uniform range for positions relative to edges pzt-steel
-        "position2edge_low" : -0.5,
-        "position2edge_high": -0.5,
+        "position2edge_low" : -0.9,
+        "position2edge_high": 1,
         # how many nodes to use to approximate the tx/rx positions in case they do not correspond precisely to one node
-        "radius_factor_low": 1,
-        "radius_factor_high": 1,
+        "radius_factor_low": 0.002,
+        "radius_factor_high": 2,
     }
 
     # Make UW path list
@@ -499,19 +518,22 @@ if __name__ == "__main__":
         dir_manager.make_infile_path_list(machine_name, experiment_name, data_type=data_type_uw)
     )
 
+    stf_chosen = "width250_volt70"
+
     # Process each UW file
     for infile_path in infile_path_list_uw:
         # Load the source time function
         infile_name = infile_path.name.split(".")[0]
-
+        if infile_name != stf_chosen:
+            continue
         # Load the Source Time Function
         stf_handler = UltrasonicDataHandler.load_stf(
             dir_manager=dir_manager,
-            machine_name_stf="on_bench",
-            experiment_name_stf="STF",
+            machine_name_stf=machine_name,
+            experiment_name_stf=experiment_name,
             data_type_stf="data_analysis/source_time_functions" + wave_type,
-            stf_chosen="width500_volt200_p2p",
-            frequency_cutoff_MHz=params["frequency_cutoff_MHz"]
+            stf_chosen=stf_chosen,
+            frequency_cutoff=params["frequency_cutoff"]
         )
 
         # Run the main simulation routine

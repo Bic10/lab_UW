@@ -8,7 +8,7 @@ from typing import Union, Tuple, Optional, Dict, Any
 
 from lab_uw.simulation_setup import (
     Grid1D,
-    VelocityModel1D,
+    VelocityModel1D_DDS,
     VelocityModel1D_SingleBlock,
     Source1D,
     Receiver1D,
@@ -24,7 +24,6 @@ class ForwardModeler:
     Class for simulating ultrasonic wave propagation under different 1D geometries:
      - "dds": double-direct-shear geometry (two gouge layers)
      - "block": single-block geometry
-     - possibly extend in the future (e.g. "single_direct_shear", "bare_rock", etc.)
     """
 
     def __init__(self, plotter: Optional["Plotter"] = None):
@@ -35,10 +34,11 @@ class ForwardModeler:
             plotter (Plotter, optional): For plotting results.
         """
         self.plotter = plotter or Plotter()
+        self._last_forward_results = None  # Will store the most recent forward-sim results
 
     def forward_simulation(
         self,
-        geometry_type      : str,                        # "dds" or "block"
+        geometry_type      : str,                        
         observed_time      : np.ndarray,
         observed_waveform  : np.ndarray,
         stf_handler        : UltrasonicDataHandler,
@@ -56,7 +56,7 @@ class ForwardModeler:
     ) -> Tuple[
         np.ndarray,  # synthetic_waveform
         np.ndarray,  # wavefield_forward
-        Union[VelocityModel1D, VelocityModel1D_SingleBlock],  # velocity_model_handler
+        Union[VelocityModel1D_DDS, VelocityModel1D_SingleBlock],  # velocity_model_handler
         SimulationTime,
         Grid1D,
         Source1D,
@@ -66,40 +66,12 @@ class ForwardModeler:
         Unifies forward modeling under different 1D geometries ("dds" or "block").
         The method unpacks geometry-specific parameters, builds the velocity model,
         runs the pseudo-spectral simulation, and returns the final results.
-
-        Args:
-            geometry_type (str): "dds" or "block" (extendable for other setups).
-            observed_time, observed_waveform: Measured time axis and waveform.
-            stf_handler: Provides source time function waveforms.
-            frequency_cutoff: High-end frequency for building the grid spacing.
-            assembly_dict: Dictionary containing geometry and velocity info.
-            misfit_interval: Indices over which we might compute misfit (for plotting).
-            gouge_velocity: Only needed if geometry_type=="dds"; otherwise unused.
-            montecarlo: Optional dictionary for randomizing geometry or source/receiver.
-            minimum_velocity, maximum_velocity: If None, attempt to compute from data.
-            normalize_waveform: If True, amplitude-scale synthetic to match observed.
-            enable_plotting, make_movie: Produce plots/movies via self.plotter if True.
-            plot_output_path, movie_output_path: File paths for saving outputs.
-
-        Returns:
-            A tuple of:
-              ( synthetic_waveform,
-                wavefield_forward,
-                velocity_model_handler,
-                sim_time_handler,
-                grid_handler,
-                source,
-                receiver )
         """
-        # -------------------------------------------------------
-        # 1) COMMON: UNPACK SOURCE TIME FUNCTION FROM stf_handler
-        # -------------------------------------------------------
+        # COMMON: UNPACK SOURCE TIME FUNCTION
         stf_waveform = stf_handler.waveform_data
         stf_time     = stf_handler.metadata["time_ax_waveform"]
 
-        # -------------------------------------------------------
-        # 3) MONTECARLO OR DEFAULT PARAMS FOR SOURCE/RECEIVER
-        # -------------------------------------------------------
+        # MONTECARLO OR DEFAULT PARAMS
         if montecarlo:
             spreading_factor_transmitter = montecarlo["spreading_factor_transmitter"]
             spreading_factor_receiver    = montecarlo["spreading_factor_receiver"]
@@ -108,42 +80,39 @@ class ForwardModeler:
             radius_factor_transmitter    = montecarlo["radius_factor_transmitter"]
             radius_factor_receiver       = montecarlo["radius_factor_receiver"]
         else:
-            spreading_factor_transmitter = 1
-            spreading_factor_receiver    = 1
-            position2edge_transmitter    = -0.5
-            position2edge_receiver       = -0.5
-            radius_factor_transmitter    = 0.1
-            radius_factor_receiver       = 0.1
+            spreading_factor_transmitter = 0.00001
+            spreading_factor_receiver    = 0.00001
+            position2edge_transmitter    = 0
+            position2edge_receiver       = 0
+            radius_factor_transmitter    = 1
+            radius_factor_receiver       = 1
 
-        # Assembly dictionary must have the
+        # ASSEMBLY DICT MUST HAVE THE
         wave_type            = assembly_dict["wave_type"]
         sample_dimensions    = assembly_dict["sample_dimensions"]
         transmitter_position = assembly_dict["transmitter_position"]
         receiver_position    = assembly_dict["receiver_position"]
 
-        ################# duct-taper!
-        ########## must move these layers to into sample dimensions
+        # For either "dds" or "block", we retrieve pzt and pla widths:
         if geometry_type.lower() == "dds":
-            # =========== Double-Direct Shear ==============
+            # Double-Direct-Shear geometry
             side1_params      = assembly_dict["side1_params"] 
             side2_params      = assembly_dict["side2_params"] 
-            pzt_layer_width  = side1_params["pzt_layer_width"]
-            pla_layer_width  = side1_params["pla_layer_width"]
-
+            pzt_layer_width   = side1_params["pzt_layer_width"]
+            pla_layer_width   = side1_params["pla_layer_width"]
         elif geometry_type.lower() == "block":
-            # =========== Single Block ==============
+            # Single-block geometry
             pzt_layer_width      = assembly_dict["pzt_layer_width"]     
             pla_layer_width      = assembly_dict["pla_layer_width"] 
-        ##############################################################
+        else:
+            raise ValueError(f"Unknown geometry_type: {geometry_type}.")
 
-        # -------------------------------------------------------
-        # 4) CREATE THE 1D GRID
-        # -------------------------------------------------------
-        total_length = (np.sum(sample_dimensions) 
-                        + 2 * pla_layer_width
-                        + 2 * pzt_layer_width
+        # CREATE THE 1D GRID
+        total_length = (
+            np.sum(sample_dimensions) 
+            + 2 * pla_layer_width
+            + 2 * pzt_layer_width
         )
-        
         grid_handler = Grid1D(
             cmin=minimum_velocity,
             fmax=frequency_cutoff,
@@ -154,9 +123,7 @@ class ForwardModeler:
         dx           = grid_handler.dx
         num_x        = grid_handler.total_grid_points
 
-        # -------------------------------------------------------
-        # 5) DEFINE TIME AXIS
-        # -------------------------------------------------------
+        # DEFINE TIME AXIS
         sim_time_handler = SimulationTime(
             observed_time=observed_time,
             dx=dx,
@@ -167,29 +134,25 @@ class ForwardModeler:
         num_t           = sim_time_handler.num_t
 
         # -------------------------------------------------------
-        # 2) GEOMETRY-SPECIFIC: UNPACK ASSEMBLY, BUILD MODEL
+        # GEOMETRY-SPECIFIC: BUILD MODEL
         # -------------------------------------------------------
         if geometry_type.lower() == "dds":
-            # =========== Double-Direct Shear ==============
-            # (gouge_velocity must be provided)
             try:
                 gouge_velocity_1 = assembly_dict["gouge_velocity_1"]
-                gouge_velocity_2 = assembly_dict["gouge_velocity_1"]
-            except:
-                raise ValueError("`gouge_velocity` is required for DDS geometry.")
-
-            # 2a) Unpack geometry from assembly_dict
-            central_params    = assembly_dict["central_params"] 
-
+                gouge_velocity_2 = assembly_dict["gouge_velocity_2"]
+            except KeyError:
+                raise ValueError("`gouge_velocity_1` and `gouge_velocity_2` are required for DDS geometry.")
+            
+            central_params   = assembly_dict["central_params"]
+            side1_params     = assembly_dict["side1_params"] 
             h_groove_central = central_params["h_grooves"]
             h_groove_side    = side1_params["h_grooves"]
 
-            steel_velocity   = side1_params["velocity" + wave_type]
-            pzt_velocity     = side1_params["pzt_velocity" + wave_type]
-            pla_velocity     = side1_params["pla_velocity" + wave_type]
+            steel_velocity = side1_params["velocity" + wave_type]
+            pzt_velocity   = side1_params["pzt_velocity" + wave_type]
+            pla_velocity   = side1_params["pla_velocity" + wave_type]
 
-            # 2d) Build velocity model
-            velocity_model_handler = VelocityModel1D(
+            velocity_model_handler = VelocityModel1D_DDS(
                 x=spatial_axis,  
                 sample_dimensions=sample_dimensions,
                 x_transmitter=transmitter_position,
@@ -205,12 +168,9 @@ class ForwardModeler:
             )
 
         elif geometry_type.lower() == "block":
-            # =========== Single Block ==============
-            pzt_layer_width      = assembly_dict["pzt_layer_width"]     
-            pla_layer_width      = assembly_dict["pla_layer_width"]     
-            steel_velocity       = assembly_dict["velocity" + wave_type]
-            pzt_velocity         = assembly_dict["pzt_velocity" + wave_type]
-            pla_velocity         = assembly_dict["pla_velocity" + wave_type]
+            steel_velocity = assembly_dict["velocity" + wave_type]
+            pzt_velocity   = assembly_dict["pzt_velocity" + wave_type]
+            pla_velocity   = assembly_dict["pla_velocity" + wave_type]
 
             velocity_model_handler = VelocityModel1D_SingleBlock(
                 x=spatial_axis,
@@ -223,19 +183,13 @@ class ForwardModeler:
                 pzt_velocity=pzt_velocity,
                 pla_velocity=pla_velocity,
             )
-        else:
-            raise ValueError(f"Unknown geometry_type: {geometry_type}. "
-                            f"Must be 'dds' or 'block'.")
-        # -------------------------------------------------------
-        # 6) FILL IN VELOCITY MODEL X-AXIS, EXTRACT ARRAYS
-        # -------------------------------------------------------
+
+        # Store references
         velocity_model_handler.x = spatial_axis
         velocity_model = velocity_model_handler.values
         idx_dict       = velocity_model_handler.idx_dict
 
-        # -------------------------------------------------------
-        # 7) BUILD SOURCE
-        # -------------------------------------------------------
+        # BUILD SOURCE
         transmitter_position_relative = (
             pzt_layer_width
             + position2edge_transmitter * pzt_layer_width
@@ -244,7 +198,7 @@ class ForwardModeler:
         radius_transmitter = floor(radius_factor_transmitter * (pzt_layer_width / 2) / dx)
         extension_transmitter = spreading_factor_transmitter * pzt_layer_width
 
-        source = Source1D(
+        source_handler = Source1D(
             stf_time=stf_time,
             stf_waveform=stf_waveform,
             position=transmitter_position_relative,
@@ -252,12 +206,11 @@ class ForwardModeler:
             extension=extension_transmitter,
             pzt_layer_width=pzt_layer_width
         )
-        source.interpolate_time_function(dt=dt, simulation_time=simulation_time)
-        source.create_spatial_function(spatial_axis=spatial_axis, dx=dx)
+        
+        source_handler.interpolate_time_function(dt=dt, simulation_time=simulation_time)
+        source_handler.create_spatial_function(spatial_axis=spatial_axis, dx=dx)
 
-        # -------------------------------------------------------
-        # 8) BUILD RECEIVER
-        # -------------------------------------------------------
+        # BUILD RECEIVER
         receiver_position_relative = (
             total_length
             - pzt_layer_width
@@ -267,49 +220,39 @@ class ForwardModeler:
         radius_receiver    = floor(radius_factor_receiver * (pzt_layer_width / 2) / dx)
         extension_receiver = spreading_factor_receiver * pzt_layer_width
 
-        receiver = Receiver1D(
+        receiver_handler = Receiver1D(
             position=receiver_position_relative,
             radius=radius_receiver,
             extension=extension_receiver,
             pzt_layer_width=pzt_layer_width
         )
-        receiver.create_spatial_function(spatial_axis=spatial_axis, dx=dx)
-        print(receiver_position_relative)
-        # -------------------------------------------------------
-        # 9) FORWARD MODEL: PSEUDO-SPECTRAL
-        # -------------------------------------------------------
+        receiver_handler.create_spatial_function(spatial_axis=spatial_axis, dx=dx)
+
+        # FORWARD MODEL: PSEUDO-SPECTRAL
         wavefield_forward = pseudospectral_1D(
             num_x=num_x,
             delta_x=dx,
             num_t=num_t,
             delta_t=dt,
-            source_spatial_function=source.spatial_function,
-            source_time_function=source.time_function,
+            source_spatial_function=source_handler.spatial_function,
+            source_time_function=source_handler.time_function,
             velocity_model=velocity_model,
             compute_derivative=False
         )
 
-        # -------------------------------------------------------
-        # 10) EXTRACT SYNTHETIC SIGNAL AT RECEIVER
-        # -------------------------------------------------------
-        simulated_waveform = np.sum(wavefield_forward * receiver.spatial_function, axis=1)
+        # EXTRACT SYNTHETIC SIGNAL AT RECEIVER
+        simulated_waveform = np.sum(wavefield_forward * receiver_handler.spatial_function, axis=1)
 
-        # -------------------------------------------------------
-        # 11) NORMALIZE TO MATCH OBSERVED, IF REQUESTED
-        # -------------------------------------------------------
+        # NORMALIZE IF REQUESTED
         if normalize_waveform and np.max(simulated_waveform) != 0:
             amplitude_scale = np.amax(observed_waveform) / np.amax(simulated_waveform)
             simulated_waveform *= amplitude_scale
 
-        # -------------------------------------------------------
-        # 12) INTERPOLATE ONTO OBSERVED TIME AXIS
-        # -------------------------------------------------------
+        # INTERPOLATE ONTO OBSERVED TIME AXIS
         synthetic_waveform = np.interp(observed_time, simulation_time, simulated_waveform)
 
-        # -------------------------------------------------------
-        # 13) OPTIONAL PLOTTING
-        # -------------------------------------------------------
-        if enable_plotting and plot_output_path:
+        # Optionally do plotting or movie
+        if enable_plotting:
             self.plotter.plot_simulation_waveform(
                 t=observed_time,
                 sp_simulated=synthetic_waveform,
@@ -317,14 +260,10 @@ class ForwardModeler:
                 misfit_interval=misfit_interval,
                 outfile_path=plot_output_path
             )
-            # also plot velocity model
             model_output_name = plot_output_path.name + "_velocity_model"
             model_output_path = plot_output_path.parent / model_output_name
             velocity_model_handler.plot(outfile_path=model_output_path)
 
-        # -------------------------------------------------------
-        # 14) OPTIONAL MOVIE
-        # -------------------------------------------------------
         if make_movie:
             self.plotter.make_movie_from_simulation(
                 outfile_path=movie_output_path,
@@ -336,101 +275,105 @@ class ForwardModeler:
                 idx_dict=idx_dict,
             )
 
-        # -------------------------------------------------------
-        # 15) RETURN RESULTS
-        # -------------------------------------------------------
-        return (
-            synthetic_waveform,
-            wavefield_forward,
-            velocity_model_handler,
-            sim_time_handler,
-            grid_handler,
-            source,
-            receiver
-        )
+        # Store results in the instance so we can reuse them
+        self.forward_results = {
+            "synthetic_waveform":       synthetic_waveform,
+            "wavefield_forward":        wavefield_forward,
+            "velocity_model_handler":   velocity_model_handler,
+            "sim_time_handler":         sim_time_handler,
+            "grid_handler":             grid_handler,
+            "source_handler":           source_handler,
+            "receiver_handler":         receiver_handler,
+        }
 
     def run_local_inversion(
         self,
-        observed_time: np.ndarray,
-        observed_waveform: np.ndarray,
-        misfit_interval: np.ndarray,
-        # Hyperparameters
-        n_iterations: int,
-        dc_max_start: float,
-        reduce_factor: float,
-        dc_threshold: float,
-        minimum_velocity: float,
-        steel_velocity: float,
-        # The same forward-simulation inputs for consistency
-        **forward_args
+        observed_time       : np.ndarray,
+        observed_waveform   : np.ndarray,
+        misfit_interval     : np.ndarray,
+        n_iterations        : int,
+        dc_max_start        : float,
+        reduce_factor       : float,
+        dc_threshold        : float,
+        minimum_velocity    : float,
+        maximum_velocity    : float,
+        normalize_waveform  : bool = True,
+        enable_plotting     : bool = False,
+        plot_output_path    : str = None
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Perform iterative gradient-based local inversion using repeated calls
-        to `forward_simulation`. This method simply orchestrates the optimization.
+        to the pseudo-spectral solver, *without* re-calling forward_simulation.
+        
+        Instead, we rely on the user having already called `forward_simulation(...)`,
+        so that `self._last_forward_results` is populated.
         """
-        (
-        synthetic_waveform,
-        wavefield_forward,
-        velocity_model_handler,
-        sim_time_handler,
-        grid_handler,
-        source,
-        receiver
-        ) = self.forward_simulation(
-            observed_time=observed_time,
-            observed_waveform=observed_waveform,
-            misfit_interval=misfit_interval,
-            **forward_args
-        )
+        # Check we do have forward-simulation results available:
+        if self.forward_results is None:
+            raise RuntimeError(
+                "No forward-simulation results found. Please call `forward_simulation()` first "
+                "so that `run_local_inversion` can use the same wavefield, velocity_model, etc."
+            )
 
-        num_x = grid_handler.total_grid_points
-        delta_x=grid_handler.dx
-        spatial_axis = grid_handler.spatial_axis
+        # Unpack the stored forward-simulation results
+        synthetic_waveform      = self.forward_results["synthetic_waveform"]
+        wavefield_forward       = self.forward_results["wavefield_forward"]
+        velocity_model_handler  = self.forward_results["velocity_model_handler"]
+        sim_time_handler        = self.forward_results["sim_time_handler"]
+        grid_handler            = self.forward_results["grid_handler"]
+        source_handler          = self.forward_results["source_handler"]
+        receiver_handler        = self.forward_results["receiver_handler"]
+
+        # Basic references
+        num_x   = grid_handler.total_grid_points
+        delta_x = grid_handler.dx
         delta_t = sim_time_handler.dt
-        num_t = sim_time_handler.num_t
-        source_spatial_function= source.spatial_function
-        receiver_spatial_function = receiver.spatial_function
-        source_time_function = source.time_function
-        velocity_model = velocity_model_handler.velocity_model
-        idx_dict = velocity_model_handler.idx_dict
+        num_t   = sim_time_handler.num_t
+        spatial_axis = grid_handler.spatial_axis
 
-        # Compute residuals and misfit
+        source_spatial_function   = source_handler.spatial_function
+        source_time_function      = source_handler.time_function
+        receiver_spatial_function = receiver_handler.spatial_function
+
+        velocity_model = velocity_model_handler.values
+        idx_dict       = velocity_model_handler.idx_dict
+
+        # Compute initial misfit
         initial_misfit = compute_misfit(
             observed_waveform=observed_waveform,
             synthetic_waveform=synthetic_waveform,
             misfit_interval=misfit_interval
         )
         print(f"Initial Misfit: {initial_misfit}")
-        # Initialize gradient descent parameters
-        dc_max = dc_max_start
-        misfit_prec = initial_misfit
 
-        # Set the best_velocity_model to the initial velocity model
+        # Initialize gradient descent parameters
+        dc_max       = dc_max_start
+        misfit_prec  = initial_misfit
         best_velocity_model = velocity_model.copy()
 
         for iteration in range(n_iterations):
             print(f"Iteration {iteration + 1}/{n_iterations}")
 
-            # Forward modeling with derivative computation using the current velocity model
+            # Forward modeling with derivative (for gradient)
             wavefield_forward, derivative_wavefield_forward = pseudospectral_1D(
-                num_x = num_x,
+                num_x=num_x,
                 delta_x=delta_x,
-                delta_t = delta_t,
-                num_t = num_t,
-                source_spatial_function= source_spatial_function,
-                source_time_function= source_time_function,
-                velocity_model=velocity_model,  # Use the current velocity model
+                num_t=num_t,
+                delta_t=delta_t,
+                source_spatial_function=source_spatial_function,
+                source_time_function=source_time_function,
+                velocity_model=velocity_model,
                 compute_derivative=True
             )
 
-            # Record the simulated wavefield at the receiver position
+            # Record the simulated wavefield at the receiver
             simulated_waveform = np.sum(wavefield_forward * receiver_spatial_function, axis=1)
-            if normalize_waveform:
+            if normalize_waveform and np.max(simulated_waveform) != 0:
                 amplitude_scale = np.amax(observed_waveform) / np.amax(simulated_waveform)
                 simulated_waveform *= amplitude_scale
 
-            # Interpolate the synthetic waveform onto the observed time axis
-            simulation_time = sim_time_handler
+            # Interpolate onto observed-time axis
+            simulation_time   = sim_time_handler.simulation_time
             synthetic_waveform = np.interp(observed_time, simulation_time, simulated_waveform)
 
             # Compute misfit
@@ -441,78 +384,104 @@ class ForwardModeler:
             )
             print(f"Misfit: {misfit}")
 
-            # Early stopping based on misfit threshold
+            # Check threshold
             if dc_max < dc_threshold:
-                print(f"Gradient reduced to minimum updating step: ({dc_threshold}). Stopped")
+                print(f"Gradient step reduced below threshold ({dc_threshold}). Stopping.")
                 break
 
             if misfit <= misfit_prec:
-                # Misfit decreased, update best model and proceed
-                misfit_prec = misfit
+                # If misfit is better, update best model
+                misfit_prec        = misfit
                 best_velocity_model = velocity_model.copy()
-                print(f"Misfit decreased, saving the current model as the best.")
+                best_synthetic_waveform = synthetic_waveform.copy()
+                print("Misfit decreased, updating best model and best synthetic waveform.")
 
-                # Adjoint modeling for gradient calculation
+                # Create the adjoint source from residual
                 residual = synthetic_waveform[misfit_interval] - observed_waveform[misfit_interval]
-                adj_src_time_function = 2 * residual[::-1]  # Reverse time
+                residual_norm = np.sqrt(np.sum(residual**2))
+                if residual_norm != 0:
+                    adj_src_time_function = np.flipud(residual / residual_norm)
+                else:
+                    adj_src_time_function = np.zeros_like(residual)
 
-                # Create an adjoint source at the receiver's position
-                adjoint_source = Source1D(
+                # adj_src_time_function = np.flipud(residual)  # Reverse in time
+
+                # Adjoint source at the receiver
+                adjoint_source_handler = Source1D(
                     stf_time=observed_time,
                     stf_waveform=adj_src_time_function,
-                    position=receiver.position,  # Use the receiver's position
-                    radius=receiver.radius       # Use the receiver's radius
+                    position=receiver_handler.position,
+                    radius=receiver_handler.radius,
+                    extension= receiver_handler.extension,
+                    pzt_layer_width= receiver_handler.pzt_layer_width
                 )
-                # Interpolate the adjoint source time function
-                adjoint_source.interpolate_time_function(dt=delta_t, simulation_time=simulation_time)
-                # Create the spatial function for the adjoint source
-                adjoint_source.create_spatial_function(spatial_axis=spatial_axis, dx=delta_x)
 
-                # Perform the adjoint wavefield simulation
+                adjoint_source_handler.interpolate_time_function(dt=delta_t, simulation_time=simulation_time)
+                adjoint_source_handler.create_spatial_function(spatial_axis=spatial_axis, dx=delta_x)
+                
+                # Adjoint wavefield
                 wavefield_adjoint = pseudospectral_1D(
                     num_x=num_x,
                     delta_x=delta_x,
                     num_t=num_t,
                     delta_t=delta_t,
-                    source_spatial=adjoint_source.spatial_function,
-                    source_time=adjoint_source.time_function,
-                    velocity_model=velocity_model,  # Use the current velocity model
+                    source_spatial_function=adjoint_source_handler.spatial_function,
+                    source_time_function=adjoint_source_handler.time_function,
+                    velocity_model=velocity_model,
                     compute_derivative=False
                 )
 
-                # Compute the gradient
+                # Compute gradient
                 gradient = np.zeros_like(velocity_model)
                 for t_step in range(num_t):
-                    gradient += (2 / (velocity_model ** 3)) * wavefield_adjoint[t_step, :] * derivative_wavefield_forward[t_step, :]
+                    gradient += (
+                        (2.0 / (velocity_model ** 3.0))
+                        * wavefield_adjoint[t_step, :]
+                        * derivative_wavefield_forward[t_step, :]
+                    )
                 gradient *= delta_t
 
-                # Apply gradient only to specified regions
+                # Zero out everything but the gouge regions
                 gradient_update = np.zeros(num_x)
+                try: 
+                    regions_to_update = np.concatenate([idx_dict["gouge_1"], idx_dict["gouge_2"]])
+                except:
+                    regions_to_update = np.where(spatial_axis>=spatial_axis[0])  # this is very stupid, must fix it
 
-                dc_max = dc_max_start / 5
-                dc_threshold = dc_threshold / 5
-
-                # Apply gradient to selected regions
-                regions_to_update = np.concatenate([idx_dict['gouge_1'], idx_dict['gouge_2']])
                 gradient_update[regions_to_update] = gradient[regions_to_update]
 
-                # Scale gradient
+                # Rescale step
                 dE_max = np.max(np.abs(gradient_update[regions_to_update]))
                 velocity_model[regions_to_update] -= (dc_max / dE_max) * gradient_update[regions_to_update]
 
                 # Clip velocities to physical bounds
-                velocity_min = minimum_velocity  # Minimum velocity
-                velocity_max = steel_velocity  # Maximum velocity is steel_velocity
-                velocity_model[regions_to_update] = np.clip(velocity_model[regions_to_update], velocity_min, velocity_max)
+                velocity_model[regions_to_update] = np.clip(
+                    velocity_model[regions_to_update],
+                    a_min=minimum_velocity,
+                    a_max=maximum_velocity,
+                )
 
             else:
-                # Misfit increased, reduce step size and revert to best model
-                dc_max *= reduce_factor
-                print(f"Misfit increased, reducing maximum gradient magnitude to: {dc_max}")
-                velocity_model = best_velocity_model.copy()  # Revert to the best velocity model
+                # Misfit got worse: reduce step and revert
+                dc_max = dc_max/reduce_factor
+                print(f"Misfit increased, reducing gradient step to {dc_max}")
+                velocity_model = best_velocity_model.copy()
 
-        final_synthetic_waveform = synthetic_waveform.copy()
-        return final_synthetic_waveform, best_velocity_model
+        if enable_plotting:
+            plot_output_name = plot_output_path.name + "_local_inversion"
+            plot_output_path = plot_output_path.parent / plot_output_name
+            self.plotter.plot_simulation_waveform(
+                t=observed_time,
+                sp_simulated=best_synthetic_waveform,
+                sp_recorded=observed_waveform,
+                misfit_interval=misfit_interval,
+                outfile_path=plot_output_path
+            )
+            model_output_name = plot_output_path.name + "_velocity_model"
+            model_output_path = plot_output_path.parent / model_output_name
+            velocity_model_handler.plot(outfile_path=model_output_path)
+        
+        return best_synthetic_waveform, best_velocity_model
 
 
 def pseudospectral_1D(
