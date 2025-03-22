@@ -881,7 +881,6 @@ def arbitrary_source_and_receiver_positioning(
     schemes using Kaiser windowed sinc functions
     """
     from numpy import sinc, kaiser
-    import matplotlib.pyplot as plt
     if not free_surface_left:
         free_surface_left  = spatial_axis[0]
     if not free_surface_right:
@@ -951,6 +950,7 @@ def arbitrary_source_and_receiver_positioning(
 
     return finite_spatial_function
 
+##################################
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
     dx = 0.01

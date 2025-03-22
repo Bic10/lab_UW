@@ -15,7 +15,6 @@ from lab_uw.simulation_setup import (
     SimulationTime
 )
 from lab_uw.plotting import Plotter
-from lab_uw.signal_processing import SignalProcessor
 from lab_uw.data_io import UltrasonicDataHandler
 
 
@@ -184,6 +183,9 @@ class ForwardModeler:
                 pla_velocity=pla_velocity,
             )
 
+            velocity_model_handler.apply_smoothing_between("pzt_1", "steel_block", len(velocity_model_handler.idx_dict["pzt_1"]))
+            velocity_model_handler.apply_smoothing_between("steel_block", "pzt_2", len(velocity_model_handler.idx_dict["pzt_1"]))
+
         # Store references
         velocity_model_handler.x = spatial_axis
         velocity_model = velocity_model_handler.values
@@ -237,19 +239,25 @@ class ForwardModeler:
             source_spatial_function=source_handler.spatial_function,
             source_time_function=source_handler.time_function,
             velocity_model=velocity_model,
-            compute_derivative=False
         )
 
         # EXTRACT SYNTHETIC SIGNAL AT RECEIVER
         simulated_waveform = np.sum(wavefield_forward * receiver_handler.spatial_function, axis=1)
-
-        # NORMALIZE IF REQUESTED
-        if normalize_waveform and np.max(simulated_waveform) != 0:
-            amplitude_scale = np.amax(observed_waveform) / np.amax(simulated_waveform)
-            simulated_waveform *= amplitude_scale
-
         # INTERPOLATE ONTO OBSERVED TIME AXIS
         synthetic_waveform = np.interp(observed_time, simulation_time, simulated_waveform)
+
+        # NORMALIZE IF REQUESTED
+        if normalize_waveform and np.max(synthetic_waveform) != 0:
+            start_A0 = np.searchsorted(observed_time, 15)
+            end_A0 = np.searchsorted(observed_time, 25)
+            A0 = np.amax(observed_waveform[start_A0:end_A0])
+            A1 = np.amax(observed_waveform[3*start_A0:3*start_A0+end_A0])
+            
+            amplitude_scale_A0 = np.amax(synthetic_waveform) / A0
+            amplitude_scale_A1 = np.amax(synthetic_waveform) / A1
+
+            synthetic_waveform[start_A0:end_A0] /= amplitude_scale_A0
+            synthetic_waveform[3*start_A0:3*end_A0+end_A0] /= amplitude_scale_A1
 
         # Optionally do plotting or movie
         if enable_plotting:
@@ -288,138 +296,129 @@ class ForwardModeler:
 
     def run_local_inversion(
         self,
-        observed_time       : np.ndarray,
-        observed_waveform   : np.ndarray,
-        misfit_interval     : np.ndarray,
-        n_iterations        : int,
-        dc_max_start        : float,
-        reduce_factor       : float,
-        dc_threshold        : float,
-        minimum_velocity    : float,
-        maximum_velocity    : float,
-        normalize_waveform  : bool = True,
-        enable_plotting     : bool = False,
-        plot_output_path    : str = None
+        observed_time:         np.ndarray,
+        observed_waveform:     np.ndarray,
+        misfit_interval:       np.ndarray,
+        n_iterations:          int,
+        dc_max_start:          float,
+        reduce_factor:         float,
+        dc_threshold:          float,
+        minimum_velocity:      float,
+        maximum_velocity:      float,
+        normalize_waveform:    bool = True,
+        enable_plotting:       bool = False,
+        plot_output_path:      str   = None,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Perform iterative gradient-based local inversion using repeated calls
-        to the pseudo-spectral solver, *without* re-calling forward_simulation.
-        
-        Instead, we rely on the user having already called `forward_simulation(...)`,
-        so that `self._last_forward_results` is populated.
+        Local inversion that adjusts the velocity_model of a 1D wave equation.
+
+        - Always compute gradient (forward + adjoint) on every iteration.
+        - Accept or revert based on improvement in the misfit.
+
+        Returns
+        -------
+        best_synthetic_waveform : np.ndarray
+            The 1D waveform (sampled at the receiver) for the best model.
+        best_velocity_model : np.ndarray
+            The best velocity model found during the inversion.
         """
-        # Check we do have forward-simulation results available:
+
         if self.forward_results is None:
             raise RuntimeError(
-                "No forward-simulation results found. Please call `forward_simulation()` first "
-                "so that `run_local_inversion` can use the same wavefield, velocity_model, etc."
+                "No forward-simulation results found. Please call `forward_simulation()` first."
             )
 
-        # Unpack the stored forward-simulation results
-        synthetic_waveform      = self.forward_results["synthetic_waveform"]
-        wavefield_forward       = self.forward_results["wavefield_forward"]
-        velocity_model_handler  = self.forward_results["velocity_model_handler"]
-        sim_time_handler        = self.forward_results["sim_time_handler"]
-        grid_handler            = self.forward_results["grid_handler"]
-        source_handler          = self.forward_results["source_handler"]
-        receiver_handler        = self.forward_results["receiver_handler"]
+        # Unpack forward-simulation results
+        initial_synthetic_waveform = self.forward_results["synthetic_waveform"]
+        initial_wavefield_forward  = self.forward_results["wavefield_forward"]
+
+        velocity_model_handler     = self.forward_results["velocity_model_handler"]
+        sim_time_handler           = self.forward_results["sim_time_handler"]
+        grid_handler               = self.forward_results["grid_handler"]
+        source_handler             = self.forward_results["source_handler"]
+        receiver_handler           = self.forward_results["receiver_handler"]
 
         # Basic references
-        num_x   = grid_handler.total_grid_points
-        delta_x = grid_handler.dx
-        delta_t = sim_time_handler.dt
-        num_t   = sim_time_handler.num_t
-        spatial_axis = grid_handler.spatial_axis
+        num_x           = grid_handler.total_grid_points
+        delta_x         = grid_handler.dx
+        delta_t         = sim_time_handler.dt
+        num_t           = sim_time_handler.num_t
+        simulation_time = sim_time_handler.simulation_time
+        spatial_axis    = grid_handler.spatial_axis
 
+        # Source & receiver spatial weighting
         source_spatial_function   = source_handler.spatial_function
-        source_time_function      = source_handler.time_function
         receiver_spatial_function = receiver_handler.spatial_function
 
-        velocity_model = velocity_model_handler.values
-        idx_dict       = velocity_model_handler.idx_dict
+        # We start with the same velocity model used in forward_results
+        initial_velocity_model = velocity_model_handler.values.copy()
+        idx_dict               = velocity_model_handler.idx_dict
 
-        # Compute initial misfit
-        initial_misfit = compute_misfit(
+        # Regions that we allow to update 
+        try: 
+            # Zero out everything but the gouge regions
+            regions_to_update = np.concatenate([idx_dict["gouge_1"], idx_dict["gouge_2"]])
+        except:
+            # regions_to_update = np.where(spatial_axis>=spatial_axis[0])  # this is very stupid, must fix it
+            regions_to_update = np.concatenate([
+                idx_dict["pzt_1"],
+                idx_dict["steel_block"][:len(idx_dict["pzt_1"])],
+                idx_dict["steel_block"][-len(idx_dict["pzt_1"]):],
+                idx_dict["pzt_2"]
+            ])
+
+        # -----------------------------------------------------------------------
+        # (B) COMPUTE THE "BEST" MODEL VARIABLES (same as initial at iteration 0)
+        # -----------------------------------------------------------------------
+        # Best model: velocity, wavefield, derivative wavefield, waveform, misfit
+        best_velocity_model     = initial_velocity_model.copy()
+        best_wavefield_forward  = initial_wavefield_forward
+        best_derivative_wavefield_forward = compute_time_derivative(best_wavefield_forward, delta_t)
+
+        # Extract the best synthetic waveform (already in forward_results)
+        best_synthetic_waveform = initial_synthetic_waveform.copy()
+        best_misfit = compute_misfit(
             observed_waveform=observed_waveform,
-            synthetic_waveform=synthetic_waveform,
-            misfit_interval=misfit_interval
+            synthetic_waveform=best_synthetic_waveform,
+            misfit_interval=misfit_interval,
         )
-        print(f"Initial Misfit: {initial_misfit}")
 
-        # Initialize gradient descent parameters
-        dc_max       = dc_max_start
-        misfit_prec  = initial_misfit
-        best_velocity_model = velocity_model.copy()
+        print(f"Initial misfit: {best_misfit}")
 
+        dc_max = dc_max_start
+        updating = True
         for iteration in range(n_iterations):
             print(f"Iteration {iteration + 1}/{n_iterations}")
 
-            # Forward modeling with derivative (for gradient)
-            wavefield_forward, derivative_wavefield_forward = pseudospectral_1D(
-                num_x=num_x,
-                delta_x=delta_x,
-                num_t=num_t,
-                delta_t=delta_t,
-                source_spatial_function=source_spatial_function,
-                source_time_function=source_time_function,
-                velocity_model=velocity_model,
-                compute_derivative=True
-            )
-
-            # Record the simulated wavefield at the receiver
-            simulated_waveform = np.sum(wavefield_forward * receiver_spatial_function, axis=1)
-            if normalize_waveform and np.max(simulated_waveform) != 0:
-                amplitude_scale = np.amax(observed_waveform) / np.amax(simulated_waveform)
-                simulated_waveform *= amplitude_scale
-
-            # Interpolate onto observed-time axis
-            simulation_time   = sim_time_handler.simulation_time
-            synthetic_waveform = np.interp(observed_time, simulation_time, simulated_waveform)
-
-            # Compute misfit
-            misfit = compute_misfit(
-                observed_waveform=observed_waveform,
-                synthetic_waveform=synthetic_waveform,
-                misfit_interval=misfit_interval
-            )
-            print(f"Misfit: {misfit}")
-
             # Check threshold
             if dc_max < dc_threshold:
-                print(f"Gradient step reduced below threshold ({dc_threshold}). Stopping.")
+                print("Step size dropped below threshold; stopping.")
                 break
 
-            if misfit <= misfit_prec:
-                # If misfit is better, update best model
-                misfit_prec        = misfit
-                best_velocity_model = velocity_model.copy()
-                best_synthetic_waveform = synthetic_waveform.copy()
-                print("Misfit decreased, updating best model and best synthetic waveform.")
+            # Re-initialize the gradient
+            updated_velocity_model = best_velocity_model.copy()
+            if updating:
+                # -------------------------------------------------------------------
+                # 1) Build the "residual" for the adjoint source
+                # -------------------------------------------------------------------
+                # (Compare best synthetic waveform to the observed data)
+                residual = best_synthetic_waveform[misfit_interval] - observed_waveform[misfit_interval]
 
-                # Create the adjoint source from residual
-                residual = synthetic_waveform[misfit_interval] - observed_waveform[misfit_interval]
-                residual_norm = np.sqrt(np.sum(residual**2))
-                if residual_norm != 0:
-                    adj_src_time_function = np.flipud(residual / residual_norm)
-                else:
-                    adj_src_time_function = np.zeros_like(residual)
+                # Time-reversed residual → adjoint source
+                adj_src_time_function = np.flipud(residual)
 
-                # adj_src_time_function = np.flipud(residual)  # Reverse in time
-
-                # Adjoint source at the receiver
+                # Create an adjoint source at the receiver
                 adjoint_source_handler = Source1D(
                     stf_time=observed_time,
                     stf_waveform=adj_src_time_function,
                     position=receiver_handler.position,
                     radius=receiver_handler.radius,
-                    extension= receiver_handler.extension,
-                    pzt_layer_width= receiver_handler.pzt_layer_width
+                    extension=receiver_handler.extension,
+                    pzt_layer_width=receiver_handler.pzt_layer_width
                 )
-
                 adjoint_source_handler.interpolate_time_function(dt=delta_t, simulation_time=simulation_time)
                 adjoint_source_handler.create_spatial_function(spatial_axis=spatial_axis, dx=delta_x)
-                
-                # Adjoint wavefield
+
                 wavefield_adjoint = pseudospectral_1D(
                     num_x=num_x,
                     delta_x=delta_x,
@@ -427,62 +426,117 @@ class ForwardModeler:
                     delta_t=delta_t,
                     source_spatial_function=adjoint_source_handler.spatial_function,
                     source_time_function=adjoint_source_handler.time_function,
-                    velocity_model=velocity_model,
-                    compute_derivative=False
+                    velocity_model=best_velocity_model
                 )
 
-                # Compute gradient
-                gradient = np.zeros_like(velocity_model)
+                # -------------------------------------------------------------------
+                # 2) Compute the gradient wrt velocity (cross-correlation approach)
+                # -------------------------------------------------------------------
+                gradient_vel = np.zeros_like(best_velocity_model)
                 for t_step in range(num_t):
-                    gradient += (
-                        (2.0 / (velocity_model ** 3.0))
+                    # wavefield_adjoint[t_step, :]   <----> backward wavefield
+                    # best_derivative_wavefield_forward[t_step, :] <----> forward derivative
+                    gradient_vel += (
+                        (2.0 / best_velocity_model ** 3.0)
                         * wavefield_adjoint[t_step, :]
-                        * derivative_wavefield_forward[t_step, :]
+                        * best_derivative_wavefield_forward[num_t - 1 - t_step, :]
                     )
-                gradient *= delta_t
 
-                # Zero out everything but the gouge regions
-                gradient_update = np.zeros(num_x)
-                try: 
-                    regions_to_update = np.concatenate([idx_dict["gouge_1"], idx_dict["gouge_2"]])
-                except:
-                    regions_to_update = np.where(spatial_axis>=spatial_axis[0])  # this is very stupid, must fix it
+                gradient_vel *= delta_t
+                # We do a maximum step scale based on the largest gradient
+                dE_max = np.max(np.abs(gradient_vel)) 
 
-                gradient_update[regions_to_update] = gradient[regions_to_update]
+            # -------------------------------------------------------------------
+            # 3) Form the "updated" model by stepping from the best model
+            # -------------------------------------------------------------------
+            step_size = dc_max / dE_max
+            updated_velocity_model[regions_to_update] -= step_size * gradient_vel[regions_to_update]
 
-                # Rescale step
-                dE_max = np.max(np.abs(gradient_update[regions_to_update]))
-                velocity_model[regions_to_update] -= (dc_max / dE_max) * gradient_update[regions_to_update]
+            # Clip to physical limits
+            updated_velocity_model[regions_to_update] = np.clip(
+                updated_velocity_model[regions_to_update],
+                a_min=minimum_velocity,
+                a_max=maximum_velocity
+            )
 
-                # Clip velocities to physical bounds
-                velocity_model[regions_to_update] = np.clip(
-                    velocity_model[regions_to_update],
-                    a_min=minimum_velocity,
-                    a_max=maximum_velocity,
-                )
+            # -------------------------------------------------------------------
+            # 4) Forward modeling with "updated" velocity
+            # -------------------------------------------------------------------
+            wavefield_forward_updated = pseudospectral_1D(
+                num_x=num_x,
+                delta_x=delta_x,
+                num_t=num_t,
+                delta_t=delta_t,
+                source_spatial_function=source_spatial_function,  # same wavelet
+                source_time_function=source_handler.time_function, 
+                velocity_model=updated_velocity_model,
+            )
+            derivative_wavefield_forward_updated = compute_time_derivative(wavefield_forward_updated, delta_t)
 
+            # Extract updated synthetic waveform at the receiver
+            updated_simulated_waveform = np.sum(
+                wavefield_forward_updated * receiver_spatial_function, axis=1
+            )
+
+            updated_synthetic_waveform = np.interp(observed_time, simulation_time, updated_simulated_waveform)
+
+            if normalize_waveform and np.max(updated_synthetic_waveform) != 0:
+                start_A0 = np.searchsorted(observed_time, 15)
+                end_A0 = np.searchsorted(observed_time, 25)
+                A0 = np.amax(observed_waveform[start_A0:end_A0])
+                A1 = np.amax(observed_waveform[3*start_A0:3*start_A0+end_A0])
+                
+                amplitude_scale_A0 = np.amax(updated_synthetic_waveform) / A0
+                amplitude_scale_A1 = np.amax(updated_synthetic_waveform) / A1
+
+                updated_synthetic_waveform[start_A0:end_A0] /= amplitude_scale_A0
+                updated_synthetic_waveform[3*start_A0:3*end_A0+end_A0] /= amplitude_scale_A1
+
+            # Compute updated misfit
+            updated_misfit = compute_misfit(
+                observed_waveform=observed_waveform,
+                synthetic_waveform=updated_synthetic_waveform,
+                misfit_interval=misfit_interval
+            )
+            print(f"    Updated Misfit: {updated_misfit}")
+
+            # -------------------------------------------------------------------
+            # 5) Accept or reject update
+            # -------------------------------------------------------------------
+            if updated_misfit < best_misfit:
+                updating = True
+                # Accept: "updated" becomes the new "best"
+                print("    ✓ Misfit decreased. Accepting update.")
+                best_velocity_model                 = updated_velocity_model
+                best_wavefield_forward              = wavefield_forward_updated
+                best_derivative_wavefield_forward   = derivative_wavefield_forward_updated
+                best_synthetic_waveform             = updated_synthetic_waveform
+                best_misfit                         = updated_misfit
             else:
-                # Misfit got worse: reduce step and revert
-                dc_max = dc_max/reduce_factor
-                print(f"Misfit increased, reducing gradient step to {dc_max}")
-                velocity_model = best_velocity_model.copy()
+                updating = False
+                # Reject: revert to best and reduce step
+                dc_max /= reduce_factor
+                print(f"    ✗ Misfit did not improve. Reverting and reducing step to {dc_max}")
 
         if enable_plotting:
-            plot_output_name = plot_output_path.name + "_local_inversion"
-            plot_output_path = plot_output_path.parent / plot_output_name
-            self.plotter.plot_simulation_waveform(
-                t=observed_time,
-                sp_simulated=best_synthetic_waveform,
-                sp_recorded=observed_waveform,
-                misfit_interval=misfit_interval,
-                outfile_path=plot_output_path
-            )
-            model_output_name = plot_output_path.name + "_velocity_model"
-            model_output_path = plot_output_path.parent / model_output_name
-            velocity_model_handler.plot(outfile_path=model_output_path)
-        
-        return best_synthetic_waveform, best_velocity_model
+            if plot_output_path is not None:
+                plot_output_name = plot_output_path.name + "_local_inversion"
+                plot_output_path = plot_output_path.parent / plot_output_name
 
+                self.plotter.plot_simulation_waveform(
+                    t=observed_time,
+                    sp_simulated=best_synthetic_waveform,
+                    sp_recorded=observed_waveform,
+                    misfit_interval=misfit_interval,
+                    outfile_path=plot_output_path
+                )
+
+                model_output_name = plot_output_path.name + "_velocity_model"
+                model_output_path = plot_output_path.parent / model_output_name
+                velocity_model_handler.values = best_velocity_model
+                velocity_model_handler.plot(outfile_path=model_output_path)
+
+        return best_synthetic_waveform, best_velocity_model
 
 def pseudospectral_1D(
     num_x: int,
@@ -492,56 +546,73 @@ def pseudospectral_1D(
     source_spatial_function: np.ndarray,
     source_time_function: np.ndarray,
     velocity_model: np.ndarray,
-    compute_derivative: bool = False,
-) -> Union[np.ndarray, tuple]:
+) -> np.ndarray:
     """
-    Perform pseudospectral modeling for 1D wave propagation (forward or adjoint).
+    Returns the wavefield as a 2D array of shape (num_t, num_x).
     """
-    # Initialize wavefield arrays
+    import numpy as np
+
     wavefield_current = np.zeros(num_x)
     wavefield_future = np.zeros(num_x)
     wavefield_past = np.zeros(num_x)
     wavefield = np.zeros((num_t, num_x))
-    
-    if compute_derivative:
-        derivative_wavefield = np.zeros(wavefield.shape)  # Derivative wavefield
 
-    # Time-stepping loop
-    time_steps = range(num_t)
-
-    for time_step in time_steps:
-        # Second spatial derivative using Fourier method
-        second_derivative = SignalProcessor().fourier_derivative_2nd(wavefield_current, delta_x)
-
-        # Update wavefield using the finite difference time stepping
+    for time_step in range(num_t):
+        # (Placeholder) Compute second spatial derivative with your method
+        second_derivative = np.gradient(np.gradient(wavefield_current, delta_x), delta_x)
+        
+        # Time stepping
         wavefield_future = (
-            2 * wavefield_current - wavefield_past
+            2 * wavefield_current
+            - wavefield_past
             + (velocity_model ** 2) * (delta_t ** 2) * second_derivative
         )
-
-        # Add source contribution
+        
+        # Source
         wavefield_future += source_spatial_function * source_time_function[time_step] * (delta_t ** 2)
 
-        # Update wavefield states for next iteration
+        # Shift wavefields
         wavefield_past = wavefield_current.copy()
         wavefield_current = wavefield_future.copy()
 
-        # Apply boundary conditions (e.g., Dirichlet boundaries)
+        # Boundary conditions
         wavefield_current[0] = 0
         wavefield_current[-1] = 0
 
-        # Store wavefield at current time step
         wavefield[time_step, :] = wavefield_current
 
-        # Compute derivative wavefield if required
-        if compute_derivative:
-            derivative = (wavefield_future - 2 * wavefield_current + wavefield_past) / (delta_t ** 2)
-            derivative_wavefield[num_t - 1 - time_step, :] = derivative
+    return wavefield
 
-    if compute_derivative:
-        return wavefield, derivative_wavefield
-    else:
-        return wavefield
+def compute_time_derivative(
+    wavefield: np.ndarray,
+    delta_t: float
+) -> np.ndarray:
+    """
+    Compute the second time derivative of the wavefield.
+    wavefield.shape == (num_t, num_x).
+    
+    Returns a 2D array (num_t, num_x), where derivative[t, x] is the
+    second time derivative at time t, position x.
+    """
+    import numpy as np
+
+    num_t, num_x = wavefield.shape
+    derivative = np.zeros_like(wavefield)
+
+    # For each t in [1, num_t-2], compute the 2nd derivative.
+    # This is a typical finite difference: d2u/dt2 ~ (u[t+1] - 2u[t] + u[t-1]) / (delta_t^2)
+    for t in range(1, num_t - 1):
+        derivative[t, :] = (
+            wavefield[t + 1, :]
+            - 2 * wavefield[t, :]
+            + wavefield[t - 1, :]
+        ) / (delta_t ** 2)
+
+    # Depending on your choice of boundary conditions for the time derivative:
+    # derivative[0, :] and derivative[num_t-1, :] might remain zero or might
+    # need a one-sided difference. It depends on your modeling setup.
+
+    return derivative
 
 def compute_misfit(
     observed_waveform: np.ndarray,
@@ -551,4 +622,8 @@ def compute_misfit(
     """
     Compute the L2 norm misfit between observed and synthetic waveforms over a specified interval.
     """
-    return LA.norm(synthetic_waveform[misfit_interval] - observed_waveform[misfit_interval], 2)
+    if np.max(synthetic_waveform) != 0:
+        return LA.norm(synthetic_waveform[misfit_interval] - observed_waveform[misfit_interval], 2)
+    else:
+        # workaround in case something went wrong: misfit is so high this way, this wrong simulation never become the minimum for local inverison
+        return 3 * LA.norm(synthetic_waveform[misfit_interval] - observed_waveform[misfit_interval], 2)

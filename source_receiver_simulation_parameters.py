@@ -1,7 +1,7 @@
 # lab_uw/source_receiver_simulation_parameters.py
 
 from pathlib import Path
-import math
+import time as tm
 import sys
 import pickle
 import time as tm
@@ -32,8 +32,6 @@ def process_uw_file(
     outdir_path_l2norm          = params["outdir_path_l2norm"]
     outdir_path_image           = params["outdir_path_image"]
 
-    start_time = tm.time()
-
     # Load and preprocess uw data
     uw_data_handler = UltrasonicDataHandler.load_and_process_uw(
         infile_path=infile_path,
@@ -60,6 +58,9 @@ def process_uw_file(
         outfile_name = infile_path.stem.split(".")[0] + "_" + str(idx) # it is just a stupid problem: the files are saved with double extension
         outfile_path = outdir_path_l2norm / outfile_name
         # Run the Monte Carlo for this run
+
+        start_time = tm.time()
+
         result = process_waveform(
             observed_waveform   = observed_waveform,
             observed_time       = observed_time,
@@ -69,6 +70,8 @@ def process_uw_file(
             global_search_space = global_search_space,
             outfile_name        = outfile_name,
         )
+
+        print(f"--- {tm.time() - start_time:.2f} seconds for processing {infile_path.name} ---\n")
 
         # Save results to a pickle
         results_pkl = outfile_path.with_suffix(".pkl")
@@ -91,9 +94,6 @@ def process_uw_file(
             "best_L2_misfit": result["best_L2_misfit"]
         }
         all_best_params.append(best_dict)
-
-    # 3) Now we have a list of 100 best solutions. Let's aggregate them.
-    #    We can do a box plot (or any other) to show distribution for each parameter.
 
     # Convert to numpy arrays for convenience
     steel_vals  = np.array([p["best_steel_velocity"] for p in all_best_params])
@@ -118,7 +118,7 @@ def process_uw_file(
 
     # 4) Create a figure with a box plot
     fig, ax = plt.subplots(figsize=(10,6))
-    box = ax.boxplot(param_matrix, patch_artist=True, labels=param_labels, showmeans=True)
+    box = ax.boxplot(param_matrix, patch_artist=True, tick_labels=param_labels, showmeans=True)
 
     # Style the boxplot
     for patch in box['boxes']:
@@ -151,8 +151,6 @@ def process_uw_file(
     hist_path = outdir_path_image / f"{infile_path.stem}_l2_distribution.png"
     fig2.savefig(hist_path, dpi=150)
     plt.close(fig2)
-
-    print(f"--- {tm.time() - start_time:.2f} seconds for processing {infile_path.name} ---\n")
 
 def process_waveform(
     observed_waveform: np.ndarray,
@@ -297,7 +295,7 @@ def process_waveform(
         misfit_interval=misfit_interval,
         minimum_velocity=params["min_velocity2simulate"],
         maximum_velocity=params["max_velocity2simulate"],
-        normalize_waveform=True,
+        normalize_waveform= True,
         enable_plotting=True,
         plot_output_path=plot_output_path,
         movie_output_path=movie_output_path
@@ -334,13 +332,16 @@ def process_waveform(
     fig.savefig(scatter_plot_path, dpi=150)
     plt.close(fig)
 
+    dc_max_start = np.amax(params["max_velocity2simulate"])- assembly_dict["velocity" + wave_type]
+    dc_threshold = 0.01*dc_max_start
+
     simulation.run_local_inversion(observed_time=observed_time,
                                    observed_waveform=observed_waveform,
                                    misfit_interval=misfit_interval,
-                                   n_iterations=20,
-                                   dc_max_start=0.01,
-                                   reduce_factor=3/2,
-                                   dc_threshold=0.0001,
+                                   n_iterations=40,
+                                   dc_max_start=dc_max_start,
+                                   dc_threshold=dc_threshold,
+                                   reduce_factor=10/9,
                                    minimum_velocity=params["min_velocity2simulate"],
                                    maximum_velocity=params["max_velocity2simulate"],
                                    enable_plotting=True,
@@ -430,8 +431,7 @@ def process_velocity(args):
         misfit_interval=misfit_interval
     )
     
-    print((f"\tL2={L2norm_new:.4e}\tSteel={steel_velocity2simulate:.3f}, PZT={pzt_velocity2simulate:.3f}, txspread={spreading_factor_transmitter:.3f}, rxspread={spreading_factor_receiver:.3f}, tx2edge={position2edge_transmitter:.3f}, rx2edge={position2edge_receiver:.3f}, txrad={radius_factor_transmitter:.4f}, rxrad={radius_factor_receiver:.4f}"))
-
+    # print((f"\tL2={L2norm_new:.4e}\tSteel={steel_velocity2simulate:.3f}, PZT={pzt_velocity2simulate:.3f}, txspread={spreading_factor_transmitter:.3f}, rxspread={spreading_factor_receiver:.3f}, tx2edge={position2edge_transmitter:.3f}, rx2edge={position2edge_receiver:.3f}, txrad={radius_factor_transmitter:.4f}, rxrad={radius_factor_receiver:.4f}"))
 
     return (
         pzt_velocity2simulate,
@@ -465,7 +465,7 @@ if __name__ == "__main__":
     outdir_path_image = dir_manager.make_data_analysis_folders(
         machine_name=machine_name,
         experiment_name=experiment_name,
-        data_types=[f"source_receiver_simulation_parameters{wave_type}_images_and_movie_2025-03-19"]
+        data_types=[f"source_receiver_simulation_parameters{wave_type}_images_and_movie_2025-03-22_si_smooth_si_regions_si_geospreading"]
     )
     print(f"Misfits will be saved at:\n{outdir_path_l2norm[0]}")
 
@@ -483,7 +483,7 @@ if __name__ == "__main__":
 
     # Basic simulation parameters
     params = {
-        "maxtime2simulate_mus"      : 65,
+        "maxtime2simulate_mus"      : 60,
         "frequency_cutoff"          : 6,     # MHz
         "minimum_SNR"               : 5,
         "min_velocity2simulate"     : 0.2,  # cm/mus
@@ -499,10 +499,10 @@ if __name__ == "__main__":
     #### MONTE CARLO PARAMETERS DEFINED HERE ####
     global_search_space = {
         "num_iterations": 500,  # how many random draws to try
-        "steel_velocity_low": assembly_dict["velocity" + wave_type]- 0.02,
-        "steel_velocity_high": assembly_dict["velocity" + wave_type]+ 0.02,              
+        "steel_velocity_low": assembly_dict["velocity" + wave_type]- 0.01,
+        "steel_velocity_high": assembly_dict["velocity" + wave_type]+ 0.015,              
         "pzt_velocity_low": assembly_dict["pzt_velocity" + wave_type], 
-        "pzt_velocity_high": assembly_dict["velocity" + wave_type]+ 0.02,
+        "pzt_velocity_high": assembly_dict["velocity" + wave_type]+ 0.015,
         "spreading_factor_low" : 0.00001,
         "spreading_factor_high": 1,
         # Uniform range for positions relative to edges pzt-steel
