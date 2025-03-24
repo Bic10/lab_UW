@@ -1137,6 +1137,59 @@ class Plotter:
         fig.tight_layout()
         self.output_path_choice(fig=fig, outfile_path=outfile_path)
 
+    def plot_original_vs_updated_stf(self,
+                                 t: np.ndarray,
+                                 stf_updated: np.ndarray,
+                                 stf_original: np.ndarray,
+                                 min_time: float,
+                                 max_time : float,
+                                 outfile_path: Optional[str] = None) -> None:
+        """
+        Plot the simulated waveform against the recorded waveform.
+
+        Args:
+            t (np.ndarray): Time array.
+            stf_updated (np.ndarray): Updated Source Time Function.
+            stf_original (np.ndarray): Original STF.
+            outfile_path (str, optional): Path to save the plot.
+
+        Raises:
+            ValueError: If input arrays are not 1D or lengths do not match.
+        """
+        # if not all(arr.ndim == 1 for arr in [t, stf_updated, stf_original]):
+        #     raise ValueError("t, stf_updated, and stf_original must be 1D numpy arrays.")
+        # if not (len(t) == len(stf_updated) == len(stf_original)):
+        #     raise ValueError("t, stf_updated, and stf_original must have the same length.")
+
+        fig, ax = plt.subplots(figsize=self.settings['figure_size'])
+
+        COLORS = {
+            'reseda_green': '#788054',
+            'dutch_white': '#E0D6B4',
+            'khaki': '#CABB9E',
+            'platinum': '#E7E5E2',
+            'black_olive': '#322D1E',
+            'sandybrown': 'sandybrown',
+            'lightgrey': 'lightgrey',
+            'lightsteelblue': 'lightsteelblue',
+            'indianred': 'indianred',
+            'teal': 'teal',
+            'darkslategray': 'darkslategray'
+        }
+        ax.plot(t, stf_original, label="Original STF", color=self.settings['colors']['platinum'], linewidth=2*self.settings['line_width'])
+        ax.plot(t, stf_updated, label="Updated STF", color=self.settings['colors']['indianred'], linewidth=2*self.settings['line_width'],alpha=0.25)
+
+        ax.set_title("Updating Source Time Function with FWI", fontsize=self.settings['fontsize_title'])
+        ax.set_xlabel("Time [$\\mu s$]", fontsize=self.settings['fontsize_labels'])
+        ax.set_ylabel("Amplitude [a.u.]", fontsize=self.settings['fontsize_labels'])
+        ax.tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
+        ax.legend(fontsize=self.settings['fontsize_ticks'])
+        ax.grid(alpha=0.3)
+        ax.set_xlim(left=min_time,right=max_time)
+        fig.tight_layout()
+
+        self.output_path_choice(fig=fig, outfile_path=outfile_path)
+
 class InteractivePlotter(Plotter):
     """
     A specialized Plotter class that provides interactive methods for human-needed operations.

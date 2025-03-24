@@ -48,7 +48,7 @@ def process_uw_file(
     observed_waveform = np.mean(observed_waveform_data, axis=0)
 
     # 2) We'll run the Monte Carlo approach multiple times
-    n_repeats = 10
+    n_repeats = 20
 
     # We will store the best parameters from each run in a list of dicts
     all_best_params = []
@@ -199,7 +199,7 @@ def process_waveform(
     args_list = []
     for iteration in range(num_iteration):
         steel_velocity2simulate = np.random.uniform(low=steel_low, high=steel_high)
-        pzt_velocity2simulate   = np.random.uniform(low=pzt_low, high=pzt_high)
+        pzt_velocity2simulate   = steel_velocity2simulate # np.random.uniform(low=pzt_low, high=pzt_high)
         spreading_factor_tx     = np.random.uniform(low=spread_low, high=spread_high)
         spreading_factor_rx     = np.random.uniform(low=spread_low, high=spread_high)
         position2edge_tx        = np.random.uniform(low=pos_edge_low, high=pos_edge_high)
@@ -334,16 +334,21 @@ def process_waveform(
 
     dc_max_start = np.amax(params["max_velocity2simulate"])- assembly_dict["velocity" + wave_type]
     dc_threshold = 0.01*dc_max_start
+    dw_max_start = np.amax(simulation.forward_results["source_handler"].time_function)
+    ds_max_start = np.amax(simulation.forward_results["source_handler"].spatial_function)
 
     simulation.run_local_inversion(observed_time=observed_time,
                                    observed_waveform=observed_waveform,
                                    misfit_interval=misfit_interval,
-                                   n_iterations=40,
+                                   n_iterations=70,
                                    dc_max_start=dc_max_start,
                                    dc_threshold=dc_threshold,
                                    reduce_factor=10/9,
+                                   dw_max_start=dw_max_start,
+                                   ds_max_start=ds_max_start,
                                    minimum_velocity=params["min_velocity2simulate"],
                                    maximum_velocity=params["max_velocity2simulate"],
+                                   normalize_waveform = True,
                                    enable_plotting=True,
                                    plot_output_path=plot_output_path
                                    )
@@ -465,7 +470,7 @@ if __name__ == "__main__":
     outdir_path_image = dir_manager.make_data_analysis_folders(
         machine_name=machine_name,
         experiment_name=experiment_name,
-        data_types=[f"source_receiver_simulation_parameters{wave_type}_images_and_movie_2025-03-22_si_smooth_si_regions_si_geospreading"]
+        data_types=[f"source_receiver_simulation_parameters{wave_type}_images_and_movie_2025-03-24_only_source_si_smooth_si_geospreading_si_norm_steel=pzt"]
     )
     print(f"Misfits will be saved at:\n{outdir_path_l2norm[0]}")
 
@@ -498,7 +503,7 @@ if __name__ == "__main__":
 
     #### MONTE CARLO PARAMETERS DEFINED HERE ####
     global_search_space = {
-        "num_iterations": 500,  # how many random draws to try
+        "num_iterations": 100,  # how many random draws to try
         "steel_velocity_low": assembly_dict["velocity" + wave_type]- 0.01,
         "steel_velocity_high": assembly_dict["velocity" + wave_type]+ 0.015,              
         "pzt_velocity_low": assembly_dict["pzt_velocity" + wave_type], 
@@ -507,7 +512,7 @@ if __name__ == "__main__":
         "spreading_factor_high": 1,
         # Uniform range for positions relative to edges pzt-steel
         "position2edge_low" : -0.9,
-        "position2edge_high": 1,
+        "position2edge_high": 0,
         # how many nodes to use to approximate the tx/rx positions in case they do not correspond precisely to one node
         "radius_factor_low": 0.002,
         "radius_factor_high": 2,

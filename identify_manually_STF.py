@@ -69,10 +69,6 @@ def compute_reflections_arrival_time(
         tA += 2 * t_start_direct  # next reflection is +2 * direct
     return arrivals
 
-import numpy as np
-
-import numpy as np
-
 def compute_reflections_correlation(
     direct_wave_data: np.ndarray,
     idx_Dstart: int,
