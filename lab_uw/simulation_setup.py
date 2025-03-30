@@ -644,15 +644,7 @@ class Source1D:
         self.time_function[:len(interpolated_stf)] = interpolated_stf
 
     def create_spatial_function(self, spatial_axis: np.ndarray, dx: float):
-        # self.spatial_function = convolved_sinc_gaussian_filter(
-        #     spatial_axis=spatial_axis,
-        #     dx=dx,
-        #     position=self.position,
-        #     pzt_layer_width=self.pzt_layer_width,
-        #     spreading_factor=self.spreading_factor,
-        #     radius=self.radius,
-        #     flip_side=flip_side
-        # )
+
         self.spatial_function = arbitrary_source_and_receiver_positioning(
             spatial_axis=spatial_axis,
             dx=dx,
@@ -698,15 +690,6 @@ class Receiver1D:
         self.spatial_function = None  # Will be set after being created on the grid
 
     def create_spatial_function(self, spatial_axis: np.ndarray, dx: float):
-        # self.spatial_function = convolved_sinc_gaussian_filter(
-        #     spatial_axis=spatial_axis,
-        #     dx=dx,
-        #     position=self.position,
-        #     pzt_layer_width=self.pzt_layer_width,
-        #     spreading_factor=self.spreading_factor,
-        #     radius=self.radius,
-        #     flip_side=flip_side
-        # )
 
         self.spatial_function = arbitrary_source_and_receiver_positioning(
             spatial_axis=spatial_axis,
@@ -716,153 +699,6 @@ class Receiver1D:
             extension=self.extension,
             radius=self.radius,
         )
-
-def convolved_sinc_gaussian_filter(
-    spatial_axis: np.ndarray,
-    dx: float,
-    position: float,
-    pzt_layer_width: float,
-    spreading_factor: float,
-    radius: int,
-    flip_side: str = None,
-) -> np.ndarray:
-    """
-    Create a spatial distribution that is the convolution of a sub-grid Sinc
-    and a Gaussian of std = spreading_factor*(pzt_layer_width/dx). We place this kernel
-    into the global domain array. If 'flip_side' is 'left' or 'right', we reflect
-    (fold) any amplitude that lies beyond the domain boundary (index < 0 or >= N)
-    back inside by mirroring around the boundary index (0 or N-1).
-
-    Parameters
-    ----------
-    spatial_axis : np.ndarray
-        Global x-coordinates, e.g. np.arange(0, L, dx) of length N.
-    dx : float
-        Spatial step size.
-    position : float
-        Sub-grid source location in the same units as spatial_axis.
-    pzt_layer_width : float
-        Physical width of the PZT layer (in the same units). Used to set Gaussian sigma.
-    spreading_factor : float
-        Multiplier for sigma = spreading_factor * (pzt_layer_width / dx).
-    radius : int
-        Kernel half-width in grid points before/after the center node.
-    flip_side : str, optional
-        "left" or "right" => reflect out-of-bound amplitudes about index 0 or N-1.
-        If None, no boundary folding is done.
-
-    Returns
-    -------
-    filter_array : np.ndarray
-        Length N array with the final distribution.
-    """
-    N = len(spatial_axis)
-    grid_indices = spatial_axis / dx
-    position_index = position / dx
-
-    # Nearest integer node
-    closest_node_index = int(round(position_index))
-    frac_offset = position_index - closest_node_index
-
-    # Build local kernel [-radius ... +radius], length = 2*radius+1
-    local_indices = np.arange(2 * radius + 1)
-    x_i = (local_indices - radius) + frac_offset  # sub-grid offset
-
-    # Sinc, plus Gaussian
-    sinc_array = np.sinc(x_i)
-    sigma = spreading_factor * (pzt_layer_width / dx)
-    gaussian_array = np.exp(-0.5 * (x_i / sigma) ** 2)
-
-    # Convolve them (discrete)
-    convolved_local = convolve(sinc_array, gaussian_array, mode='same')  # still length 2*radius+1
-
-    # Place into a global array ignoring boundary for now
-    filter_array = np.zeros(N, dtype=float)
-
-    start_idx = closest_node_index - radius
-    end_idx   = closest_node_index + radius + 1  # slice end is exclusive
-    # local array covers convolved_local[0 : 2*radius+1]
-
-    # Figure out overlap with the domain [0, N)
-    global_start = max(start_idx, 0)
-    global_end   = min(end_idx, N)
-    if global_end > global_start:
-        # The portion inside the domain:
-        local_start = global_start - start_idx
-        local_end   = local_start + (global_end - global_start)
-        filter_array[global_start:global_end] = convolved_local[local_start:local_end]
-
-    # ------------------------------------------------
-    # BOUNDARY FOLDING: reflect out-of-bound indices
-    # ------------------------------------------------
-    if flip_side == "left":
-
-        # We'll do a second pass for the negative portion:
-        # negative region = [start_idx, 0), in local coordinates that means local indices < local_start
-        neg_end = min(start_idx + 2*radius + 1, 0)  # where local kernel ends
-        if neg_end > start_idx:
-            # There's a portion that tries to go below 0
-            num_neg = neg_end - start_idx  # how many negative indices
-            # local portion that is negative is convolved_local[0 : num_neg]
-            # we reflect it about i=0 => new indices = +1, +2, ...
-            # so the global target is [ - (i), ... ] => i' = -(i+1) or i' = -i?
-            # Typically, reflection about 0 means index -1 => +0, -2 => +1, etc.
-            # Let's define i < 0 => i' = -(i+1), for example, so -1 => 0, -2 => 1, ...
-            # We'll do it carefully below:
-
-            # We'll build an array of out-of-bound indices in the global domain:
-            out_of_bounds_i = np.arange(start_idx, neg_end)  # negative region
-            local_index_offset = 0
-
-            # For each i in out_of_bounds_i, find i' in the domain by reflection
-            # i' = -1-i (that is reflection about -0.5, we might want i' = -(i+1)
-            # or reflect about i=0 => i' = -i
-            # There's some nuance. Usually for "mirror boundary" you'd do i' = -1 - i or i' = -i - 2, etc.
-            # Let's do i' = -(i+1) so that i=-1 => i'=0, i=-2 => i'=1, etc.
-            for local_i in out_of_bounds_i:
-                # local_i in [start_idx ... neg_end-1]
-                # figure out local kernel index => local_i - start_idx
-                k = local_i - start_idx
-                amplitude = convolved_local[k]
-                if amplitude == 0.0:
-                    continue
-
-                i_reflected = -(local_i + 1)
-                # i_reflected must be in [0, N). If i_reflected >= N, it's also out-of-bounds
-                if 0 <= i_reflected < N:
-                    filter_array[i_reflected] += amplitude
-                # else ignore or do another reflection if you want multiple folds
-            # done
-
-    elif flip_side == "right":
-        # domain boundary = N-1
-        # amplitude that tries to exceed N-1 gets reflected around i=N-1
-        # i >= N => i' = 2*(N-1) - i, e.g. i=N => i'=N-2
-
-        # Because we wrote [global_start : global_end], anything >= N wasn't written.
-        # We'll do a second pass over the local kernel portion that extends beyond N-1.
-        pos_start = max(end_idx, 0)
-        pos_end = start_idx + (2*radius + 1)  # total local coverage
-
-        if pos_end > N:
-            # There's a portion that extends beyond the domain
-            # We'll build the array of out-of-bound global indices: i in [N, pos_end)
-            out_of_bounds_i = np.arange(N, pos_end)
-            for local_i in out_of_bounds_i:
-                k = local_i - start_idx
-                if 0 <= k < len(convolved_local):
-                    amplitude = convolved_local[k]
-                    if amplitude == 0.0:
-                        continue
-
-                    # reflect about N-1 => i' = 2*(N-1) - i
-                    i_reflected = 2*(N-1) - local_i
-                    if 0 <= i_reflected < N:
-                        filter_array[i_reflected] += amplitude
-                    # else ignore or keep folding, etc.
-
-    return filter_array
-
 
 def arbitrary_source_and_receiver_positioning(
     spatial_axis        : np.ndarray,

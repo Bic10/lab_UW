@@ -304,7 +304,7 @@ class UltrasonicDataHandler:
 
         temp_handler = cls()
         stf_waveform_raw, stf_metadata = temp_handler.load_waveform_json(chosen_stf_path)
-        stf_time = np.array(stf_metadata["time_ax_waveform"])
+        stf_metadata["time_ax_waveform"] = np.array(stf_metadata["time_ax_waveform"])- np.array(stf_metadata["time_ax_waveform"])[0]
         signal_processor = SignalProcessor()
         stf_waveform_filt, _ = signal_processor.signal2noise_separation_lowpass(
             waveform_data=stf_waveform_raw,
@@ -313,12 +313,7 @@ class UltrasonicDataHandler:
         )
         stf_waveform = stf_waveform_filt - stf_waveform_filt[0]
 
-        final_metadata = {
-            "time_ax_waveform": stf_time,
-            "number_of_samples": len(stf_waveform),
-        }
-
-        return cls(waveform_data=stf_waveform, metadata=final_metadata)
+        return cls(waveform_data=stf_waveform, metadata=stf_metadata)
 
     @staticmethod
     def extract_metadata_from_tsv(infile: TextIO) -> Tuple[List[float], List[float]]:

@@ -13,7 +13,7 @@ from lab_uw.directory_manager import DirectoryManager
 from lab_uw.simulation_setup import *
 from lab_uw.forward_modeling import *
 from lab_uw.plotting import Plotter
-from lab_uw.forward_modeling import ForwardModeler
+from lab_uw.forward_modeling import UltrasonicModeler
 from lab_uw.utils import *
 
 def min_assembly_velocity(assembly_dict: Dict[str, Any]):
@@ -368,7 +368,8 @@ def process_waveform(
     minimum_velocity = params["min_velocity2simulate"] if params["min_velocity2simulate"] else min_assembly_velocity(assembly_dict)
     maximum_velocity = params["max_velocity2simulate"] if params["max_velocity2simulate"] else max_assembly_velocity(assembly_dict)
 
-    synthetic_waveform,*_ = ForwardModeler().forward_simulation(
+    simulation = UltrasonicModeler()
+    simulation.forward_simulation(
         geometry_type           ="dds",
         observed_time           = waveform_time,
         observed_waveform       = observed_waveform,
@@ -397,8 +398,6 @@ def process_waveform(
             acquisition_time    = acq_time_label,
             outfile_path        = l2norm_plot_path
         )
-
-    sys.exit("END TEST")
     
     return {
         'gouge_velocity_list' : gouge_velocity_list,
@@ -426,7 +425,8 @@ def process_velocity(args):
     maximum_velocity = params["max_velocity2simulate"] if params["max_velocity2simulate"] else max_assembly_velocity(assembly_dict_guessed)
 
     # Call DDS_UW_simulation with gouge_velocity_tuple
-    synthetic_waveform,*_ = ForwardModeler().forward_simulation(
+    simulation = UltrasonicModeler()
+    simulation.forward_simulation(
         geometry_type           ="dds",
         observed_time           = waveform_time,
         observed_waveform       = observed_waveform,
@@ -443,7 +443,7 @@ def process_velocity(args):
     
     L2norm_new = compute_misfit(
         observed_waveform=observed_waveform,
-        synthetic_waveform=synthetic_waveform,
+        synthetic_waveform=simulation.synthetic_waveform,
         misfit_interval=misfit_interval
     )
 
@@ -506,7 +506,7 @@ if __name__ == "__main__":
         machine_name_stf    = "on_bench",
         experiment_name_stf = "STF_ss10_05",
         data_type_stf       = "data_analysis/source_time_functions" + wave_type,
-        stf_chosen          = "width250_volt35",
+        stf_chosen          = "width250_volt70",
         frequency_cutoff= params["frequency_cutoff"]
     )
 

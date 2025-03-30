@@ -1,14 +1,12 @@
 # lab_uw/plotting.py
 
 from pathlib import Path
-import pickle
 import matplotlib.pyplot as plt
-import numpy as np
 import matplotlib.colors as mcolors
-from matplotlib.patches import Rectangle
-import matplotlib.animation as animation
-from typing import Optional, Dict, Tuple, List, Union
-from matplotlib.widgets import Button
+import numpy as np
+from typing import Optional, Dict, List, Union, Tuple
+from tkinter import Button
+import pickle
 
 class Plotter:
     """
@@ -48,12 +46,6 @@ class Plotter:
     }
 
     def __init__(self, settings: Optional[Dict] = None):
-        """
-        Initialize the Plotter with optional custom settings.
-
-        Args:
-            settings (Dict, optional): Custom plot settings. Defaults to None.
-        """
         if settings is None:
             self.settings = self.DEFAULT_SETTINGS.copy()
         else:
@@ -67,25 +59,14 @@ class Plotter:
     ) -> None:
         """
         Save or display the figure based on the provided outfile_path.
-
-        Args:
-            fig (plt.Figure): The figure object to be saved or shown.
-            outfile_path (Union[str, Path], optional): Path to save the plot. If None, the plot is displayed.
-            format (str, optional): File format for saving the plot. Defaults to self.settings['format'].
         """
         if format is None:
             format = self.settings['format']
 
         if outfile_path:
-            # Ensure outfile_path is a Path object
             outfile_path = Path(outfile_path)
-
-            # Get the filename from the outfile_path
-            outfile_name = outfile_path.name
-            
             if outfile_path.suffix != format:
                 outfile_path = outfile_path.with_suffix(format)
-
             fig.savefig(outfile_path, dpi=300)
             plt.close(fig)
         else:
@@ -101,24 +82,11 @@ class Plotter:
                     ticks_steps_waveforms: float,
                     outfile_path: Optional[str] = None) -> None:
         """
-        Plots stacked waveforms with optional highlighting.
-
-        Args:
-            data (np.ndarray): 2D array representing waveform data (n_waveforms, n_samples).
-            metadata (Dict): Metadata dictionary containing 'time_ax_waveform'.
-            step_wf_to_plot (int): Step size for plotting waveforms.
-            highlight_start (int): Index of the start point for highlighting.
-            highlight_end (int): Index of the end point for highlighting.
-            xlim_plot (float): Limit for the x-axis.
-            ticks_steps_waveforms (float): Step size for ticks on the waveform axis.
-            outfile_path (str, optional): Path to save the plot.
-
-        Raises:
-            ValueError: If data is not a 2D array or if indices are out of bounds.
+        Example method for plotting stacked waveforms with optional highlighting.
         """
         if data.ndim != 2:
             raise ValueError("data must be a 2D numpy array.")
-        if not ('time_ax_waveform' in metadata):
+        if 'time_ax_waveform' not in metadata:
             raise KeyError("metadata must contain 'time_ax_waveform'.")
 
         time_ax_waveform = metadata["time_ax_waveform"]
@@ -131,9 +99,9 @@ class Plotter:
         ymin = 1.3 * np.amin(data_to_plot)
 
         fig, ax = plt.subplots(figsize=self.settings['figure_size'])
-
         ax.plot(time_ax_waveform, data_to_plot.T, color='black', linewidth=0.8, alpha=0.5)
         ax.plot(time_ax_waveform, data[highlight_start:highlight_end].T, color='red')
+
         ax.set_xlabel('Time [$\\mu s$]', fontsize=self.settings['fontsize_labels'])
         ax.set_ylabel('Amplitude [a.u.]', fontsize=self.settings['fontsize_labels'])
         ax.set_xticks(time_ticks_waveforms)
@@ -144,7 +112,6 @@ class Plotter:
         ax.tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
 
         fig.tight_layout()
-
         self.output_path_choice(fig=fig, outfile_path=outfile_path)
 
     def amplitude_map(self,
@@ -1156,26 +1123,12 @@ class Plotter:
         Raises:
             ValueError: If input arrays are not 1D or lengths do not match.
         """
-        # if not all(arr.ndim == 1 for arr in [t, stf_updated, stf_original]):
-        #     raise ValueError("t, stf_updated, and stf_original must be 1D numpy arrays.")
-        # if not (len(t) == len(stf_updated) == len(stf_original)):
-        #     raise ValueError("t, stf_updated, and stf_original must have the same length.")
+        if not all(arr.ndim == 1 for arr in [t, stf_updated, stf_original]):
+            raise ValueError("t, stf_updated, and stf_original must be 1D numpy arrays.")
+        if not (len(t) == len(stf_updated) == len(stf_original)):
+            raise ValueError("t, stf_updated, and stf_original must have the same length.")
 
         fig, ax = plt.subplots(figsize=self.settings['figure_size'])
-
-        COLORS = {
-            'reseda_green': '#788054',
-            'dutch_white': '#E0D6B4',
-            'khaki': '#CABB9E',
-            'platinum': '#E7E5E2',
-            'black_olive': '#322D1E',
-            'sandybrown': 'sandybrown',
-            'lightgrey': 'lightgrey',
-            'lightsteelblue': 'lightsteelblue',
-            'indianred': 'indianred',
-            'teal': 'teal',
-            'darkslategray': 'darkslategray'
-        }
         ax.plot(t, stf_original, label="Original STF", color=self.settings['colors']['platinum'], linewidth=2*self.settings['line_width'])
         ax.plot(t, stf_updated, label="Updated STF", color=self.settings['colors']['indianred'], linewidth=2*self.settings['line_width'],alpha=0.25)
 
@@ -1190,12 +1143,137 @@ class Plotter:
 
         self.output_path_choice(fig=fig, outfile_path=outfile_path)
 
+    def plot_boxplot_parameters(
+        self,
+        param_matrix: np.ndarray,
+        param_labels: List[str],
+        title: str,
+        ylabel: str,
+        outfile_path: Optional[Union[str, Path]] = None
+    ) -> None:
+        """
+        Creates a box plot for the given parameter matrix.
+
+        Args:
+            param_matrix (np.ndarray): Shape (n_runs, n_parameters).
+            param_labels (List[str]): Labels for each parameter (x-axis).
+            title (str): Plot title.
+            ylabel (str): Label for the y-axis.
+            outfile_path (Union[str, Path], optional): If provided, saves plot to file. Otherwise shows it.
+        """
+        fig, ax = plt.subplots(figsize=self.settings['figure_size'])
+        box = ax.boxplot(
+            param_matrix,
+            patch_artist=True,
+            showmeans=True
+            # You can pass any other boxplot kwargs here
+        )
+        # Customize the boxplot
+        for patch in box['boxes']:
+            patch.set(facecolor="lightblue", alpha=0.5)
+        for median in box['medians']:
+            median.set(color="red", linewidth=2)
+        for mean_line in box['means']:
+            mean_line.set(marker="o", markerfacecolor="black", markeredgecolor="black", markersize=5)
+
+        # Set tick labels
+        ax.set_xticks(np.arange(1, len(param_labels) + 1))
+        ax.set_xticklabels(param_labels, rotation=0, fontsize=self.settings['fontsize_ticks'])
+
+        ax.set_title(title, fontsize=self.settings['fontsize_title'], fontname=self.FONT_TYPE)
+        ax.set_ylabel(ylabel, fontsize=self.settings['fontsize_labels'])
+        ax.tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
+
+        fig.tight_layout()
+        self.output_path_choice(fig=fig, outfile_path=outfile_path)
+
+    def plot_histogram_l2_distribution(
+        self,
+        data: np.ndarray,
+        bins: int,
+        title: str,
+        xlabel: str,
+        ylabel: str,
+        outfile_path: Optional[Union[str, Path]] = None
+    ) -> None:
+        """
+        Creates a histogram for the given data.
+
+        Args:
+            data (np.ndarray): 1D array of data values.
+            bins (int): Number of histogram bins.
+            title (str): Plot title.
+            xlabel (str): Label for the x-axis.
+            ylabel (str): Label for the y-axis.
+            outfile_path (Union[str, Path], optional): If provided, saves plot to file. Otherwise shows it.
+        """
+        fig, ax = plt.subplots(figsize=self.settings['figure_size'])
+        ax.hist(data, bins=bins, color="lightgreen", edgecolor="k", alpha=0.7)
+
+        ax.set_title(title, fontsize=self.settings['fontsize_title'], fontname=self.FONT_TYPE)
+        ax.set_xlabel(xlabel, fontsize=self.settings['fontsize_labels'])
+        ax.set_ylabel(ylabel, fontsize=self.settings['fontsize_labels'])
+        ax.tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
+        ax.grid(alpha=0.1)
+
+        fig.tight_layout()
+        self.output_path_choice(fig=fig, outfile_path=outfile_path)
+
+    def plot_scatter_l2_vs_parameters(
+        self,
+        param_list: List[Tuple[str,np.ndarray]],
+        l2_values: np.ndarray,
+        title: str,
+        best_index: int = 0,
+        outfile_path: Optional[Union[str, Path]] = None
+    ) -> None:
+        """
+        Creates scatter plots of L2 misfit vs. each parameter in subplots.
+
+        Args:
+            param_list (List[np.ndarray]): List of arrays, each array is a parameter across runs.
+            l2_values (np.ndarray): L2 misfit array across runs.
+            param_labels (List[str]): Parameter names for each array in param_list.
+            title (str): Plot title.
+            best_index (int, optional): Index that indicates the best (lowest L2). Defaults to 0.
+            outfile_path (Union[str, Path], optional): If provided, saves plot to file. Otherwise shows it.
+        """
+        n_params = len(param_list)
+        # Example layout: 2 rows, 4 columns for up to 8 parameters
+        n_cols = 4
+        n_rows = int(np.ceil(n_params / n_cols))
+
+        fig, axs = plt.subplots(n_rows, n_cols, figsize=self.settings['figure_size'], tight_layout=True)
+        axs = axs.flatten()  # so we can index them linearly
+
+        for i, (label, param_data) in enumerate(param_list):
+            ax = axs[i]
+            ax.scatter(param_data, l2_values, s=30, c="blue", alpha=0.7, edgecolors="k")
+            ax.set_xlabel(label, fontsize=self.settings['fontsize_labels'])
+            ax.set_ylabel("L2 Misfit", fontsize=self.settings['fontsize_labels'])
+
+            # highlight best param with a red star
+            best_val = param_data[best_index]
+            best_l2 = l2_values[best_index]
+            ax.scatter(best_val, best_l2, s=100, c="red", marker="*", zorder=5)
+
+            ax.tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
+            ax.grid(alpha=0.1)
+
+            ax.set_ylim([0.9*np.amin(l2_values),3*np.amin(l2_values)])
+
+        # Hide any leftover subplots if n_params < n_rows * n_cols
+        for j in range(n_params, n_rows * n_cols):
+            axs[j].axis('off')
+
+        fig.suptitle(title, fontsize=self.settings['fontsize_title'], fontname=self.FONT_TYPE)
+        self.output_path_choice(fig=fig, outfile_path=outfile_path)
+
 class InteractivePlotter(Plotter):
     """
     A specialized Plotter class that provides interactive methods for human-needed operations.
     Inherits from Plotter so it has self.settings, etc.
     """
-
     def manual_pick_arrival_times(
         self,
         observed_time: np.ndarray,
@@ -1281,4 +1359,3 @@ class InteractivePlotter(Plotter):
             print(f"Picked times saved to {outfile_path}")
 
         return picked_times
-

@@ -11,7 +11,7 @@ import scipy
 
 ###### INPUT #######
 machine_name = "Brava_2"
-experiment_name = "s0231suw04min_50"
+experiment_name = "s0236"
 data_type = "uw_data/data_tsv_files"
 base_dir = "/home/michele/Desktop/Dottorato/active_source_implementation"
 
@@ -28,7 +28,7 @@ highlight_start = 0
 highlight_end = 0
 xlim_plot = 70
 ticks_steps_waveforms = 5  # [microseconds] plot ticks
-step_wf_to_plot = 1000  # get one waveform each step_wf_to_plot
+step_wf_to_plot = 100  # get one waveform each step_wf_to_plot
 freq_cut = 6  # [Hz] lowpass frequency threshold
 
 # Create instances of Plotter, DataHandler, and DirectoryManager
@@ -55,7 +55,7 @@ for infile_path in sorted(infile_path_list):
         ## Detrend data. Detrending along acquisition time axis (axis=0) highligh changing in the shape of the waveform during the experiment
         # data= scipy.signal.detrend(data=data, axis=-1)
         # data = scipy.signal.detrend(data=data, axis=0, type='constant')
-        # data = scipy.signal.detrend(data=data, axis=0, type='linear')
+        data = scipy.signal.detrend(data=data, axis=0, type='linear')
         
         # Detrend and taper (following McNamara's approach)
         taper_percent = 0.1  # 10% taper
