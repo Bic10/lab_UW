@@ -1,6 +1,7 @@
 # lab_uw/forward_modeling.py
 
 import sys
+import matplotlib.pyplot as plt
 from math import floor
 import numpy as np
 from numpy import linalg as LA
@@ -42,10 +43,11 @@ class UltrasonicModeler:
         observed_waveform  : np.ndarray,
         stf_handler        : UltrasonicDataHandler,
         frequency_cutoff   : float,
-        minimum_velocity   : Optional[float],
-        maximum_velocity   : Optional[float],
+        minimum_velocity   : float,
+        maximum_velocity   : float,
         assembly_dict      : Dict[str, Any],
         misfit_interval    : np.ndarray,
+        maximum_damping    : float = 0,
         montecarlo         : Optional[Dict[str, Any]] = None,
         normalize_waveform : bool = True,
         enable_plotting    : bool = False,
@@ -70,6 +72,7 @@ class UltrasonicModeler:
         self.assembly_dict = assembly_dict
         self.stf_handler = stf_handler
         self.frequency_cutoff = frequency_cutoff
+        self.geometry_type = geometry_type
 
         # MONTECARLO OR DEFAULT PARAMS
         if montecarlo:
@@ -80,10 +83,10 @@ class UltrasonicModeler:
             radius_factor_transmitter    = montecarlo["radius_factor_transmitter"]
             radius_factor_receiver       = montecarlo["radius_factor_receiver"]
         else:
-            spreading_factor_transmitter = 0.00001
-            spreading_factor_receiver    = 0.00001
-            position2edge_transmitter    = 0
-            position2edge_receiver       = 0
+            spreading_factor_transmitter = 1
+            spreading_factor_receiver    = 1
+            position2edge_transmitter    = -0.5
+            position2edge_receiver       = -0.5
             radius_factor_transmitter    = 1
             radius_factor_receiver       = 1
 
@@ -94,18 +97,18 @@ class UltrasonicModeler:
         self.receiver_position    = assembly_dict["receiver_position"]
 
         # For either "dds" or "block", we retrieve pzt and pla widths:
-        if geometry_type.lower() == "dds":
+        if self.geometry_type.lower() == "dds":
             # Double-Direct-Shear geometry
             side1_params      = assembly_dict["side1_params"] 
             side2_params      = assembly_dict["side2_params"] 
             pzt_layer_width   = side1_params["pzt_layer_width"]
             pla_layer_width   = side1_params["pla_layer_width"]
-        elif geometry_type.lower() == "block":
+        elif self.geometry_type.lower() == "block":
             # Single-block geometry
             pzt_layer_width      = assembly_dict["pzt_layer_width"]     
             pla_layer_width      = assembly_dict["pla_layer_width"] 
         else:
-            raise ValueError(f"Unknown geometry_type: {geometry_type}.")
+            raise ValueError(f"Unknown geometry_type: {self.geometry_type}.")
 
         # CREATE THE 1D GRID
         total_length = (
@@ -125,9 +128,10 @@ class UltrasonicModeler:
 
         # DEFINE TIME AXIS
         sim_time_handler = SimulationTime(
-            observed_time=observed_time,
+            observed_time = observed_time,
             dx=dx,
-            max_velocity=maximum_velocity
+            max_velocity  = maximum_velocity,
+            max_alpha     = maximum_damping
         )
         simulation_time = sim_time_handler.simulation_time
         dt              = sim_time_handler.dt
@@ -136,7 +140,7 @@ class UltrasonicModeler:
         # -------------------------------------------------------
         # GEOMETRY-SPECIFIC: BUILD MODEL
         # -------------------------------------------------------
-        if geometry_type.lower() == "dds":
+        if self.geometry_type.lower() == "dds":
             try:
                 gouge_velocity_1 = assembly_dict["gouge_velocity_1"]
                 gouge_velocity_2 = assembly_dict["gouge_velocity_2"]
@@ -167,7 +171,7 @@ class UltrasonicModeler:
                 pla_velocity=pla_velocity,
             )
 
-        elif geometry_type.lower() == "block":
+        elif self.geometry_type.lower() == "block":
             steel_velocity = assembly_dict["velocity" + self.wave_type]
             pzt_velocity   = assembly_dict["pzt_velocity" + self.wave_type]
             pla_velocity   = assembly_dict["pla_velocity" + self.wave_type]
@@ -192,6 +196,11 @@ class UltrasonicModeler:
         velocity_model = velocity_model_handler.values
         idx_dict       = velocity_model_handler.idx_dict
 
+        self.damping_model = np.zeros(velocity_model.shape)
+        if self.geometry_type == "dds":
+            regions_to_update = np.concatenate([idx_dict["gouge_1"], idx_dict["gouge_2"]])
+            self.damping_model[regions_to_update] = maximum_damping
+          
         # BUILD SOURCE
         self.transmitter_position_relative = (
             pzt_layer_width
@@ -232,7 +241,7 @@ class UltrasonicModeler:
         receiver_handler.create_spatial_function(spatial_axis=spatial_axis, dx=dx)
 
         # FORWARD MODEL: PSEUDO-SPECTRAL
-        wavefield_forward = pseudospectral_1D(
+        wavefield_forward = pseudospectral_1D_damped(
             num_x=num_x,
             delta_x=dx,
             num_t=num_t,
@@ -240,6 +249,7 @@ class UltrasonicModeler:
             source_spatial_function=source_handler.spatial_function,
             source_time_function=source_handler.time_function,
             velocity_model=velocity_model,
+            damping_model=self.damping_model
         )
 
         # EXTRACT SYNTHETIC SIGNAL AT RECEIVER
@@ -249,16 +259,23 @@ class UltrasonicModeler:
 
         # NORMALIZE IF REQUESTED
         if normalize_waveform and np.max(synthetic_waveform) != 0:
-            first_arrival = self.assembly_dict["z"] / self.assembly_dict["velocity" + self.wave_type]
+            if self.geometry_type == "block":
+                first_arrival = self.assembly_dict["z"] / self.assembly_dict["velocity" + self.wave_type]
+            
+            elif self.geometry_type == "dds":
+                first_arrival = observed_time[misfit_interval][0]
+    
             stf_duration = self.stf_handler.metadata["time_ax_waveform"][-1]-self.stf_handler.metadata["time_ax_waveform"][0]
 
             start_A0 = np.searchsorted(observed_time, first_arrival)
             end_A0 = np.searchsorted(observed_time, first_arrival + stf_duration)
             A0 = np.amax(observed_waveform[start_A0:end_A0])
-            A1 = np.amax(observed_waveform[3*start_A0:3*start_A0+end_A0])
-
-            synthetic_waveform[3*start_A0:3*end_A0+end_A0] /= A0/A1
-            synthetic_waveform *= np.max(np.abs(observed_waveform)/np.max(np.abs(synthetic_waveform))) 
+            try:
+                A1 = np.amax(observed_waveform[3*start_A0:3*start_A0+end_A0])
+                synthetic_waveform[3*start_A0:3*end_A0+end_A0] /= A0/A1
+            except:
+                pass
+            synthetic_waveform *= np.max(observed_waveform)/np.max(synthetic_waveform) 
 
         # Optionally do plotting or movie
         if enable_plotting:
@@ -301,15 +318,20 @@ class UltrasonicModeler:
         misfit_interval:       np.ndarray,
         n_iterations:          int,
         dc_max_start:          float,
-        reduce_factor:         float,
         dc_threshold:          float,
         dw_max_start:          float,
+        dw_threshold:          float,
         ds_max_start:          float,
+        ds_threshold:          float,
+        reduce_factor:         float,
         minimum_velocity:      float,
         maximum_velocity:      float,
         normalize_waveform:    bool = True,
-        enable_plotting:       bool = False,
-        plot_output_path:      str   = None,
+        enable_plotting    :   bool = False,
+        make_movie         :   bool = False,
+        plot_output_path   :   Optional[str] = None,
+        movie_output_path  :   Optional[str] = "simulation_movie.mp4",
+
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Jointly invert for:
@@ -387,7 +409,10 @@ class UltrasonicModeler:
         best_wavefield_forward           = initial_wavefield_forward
         best_derivative_wavefield_forward = compute_time_derivative(best_wavefield_forward, delta_t)
         best_synthetic_waveform          = initial_synthetic_waveform.copy()
-
+        best_simulated_waveform          = np.sum(
+                best_wavefield_forward * best_receiver_spatial_function, axis=1
+            )
+        
         best_misfit = compute_misfit(
             observed_waveform=observed_waveform,
             synthetic_waveform=best_synthetic_waveform,
@@ -405,7 +430,7 @@ class UltrasonicModeler:
             print(f"Iteration {iteration + 1}/{n_iterations}")
 
             # Check threshold
-            if dc_max < dc_threshold:
+            if (dc_max < dc_threshold) or (dw_max < dw_threshold) or ((ds_max < ds_threshold)):
                 print("Step size dropped below threshold; stopping.")
                 break
 
@@ -419,20 +444,23 @@ class UltrasonicModeler:
                 # -------------------------------------------------------------------
                 # Build "residual" => adjoint source
                 # -------------------------------------------------------------------
+                adj_src_time_function = np.zeros(observed_waveform.shape)
                 residual = best_synthetic_waveform[misfit_interval] - observed_waveform[misfit_interval]
-                adj_src_time_function = np.flipud(residual)
+                adj_src_time_function[misfit_interval] = np.flipud(residual)
+
                 adj_src_time_function = np.interp(simulation_time, observed_time, adj_src_time_function)
 
                 adj_src_spatial_function = updated_receiver_spatial_function
                 # Solve adjoint wavefield with the CURRENT best velocity
-                wavefield_adjoint = pseudospectral_1D(
+                wavefield_adjoint = pseudospectral_1D_damped(
                     num_x=num_x,
                     delta_x=delta_x,
                     num_t=num_t,
                     delta_t=delta_t,
                     source_spatial_function=adj_src_spatial_function,
                     source_time_function=adj_src_time_function,
-                    velocity_model=best_velocity_model
+                    velocity_model=best_velocity_model,
+                    damping_model=self.damping_model
                 )
 
                 # -------------------------------------------------------------------
@@ -515,7 +543,6 @@ class UltrasonicModeler:
                         metadata=self.stf_handler.metadata,
                         freq_cut=self.frequency_cutoff
                     )
-                updated_source_time_function = updated_source_time_function - updated_source_time_function[0]
 
             if ds_max:
                 # -- update spatial distribution s(x) --
@@ -529,7 +556,7 @@ class UltrasonicModeler:
             # Forward modeling with updated parameters
             # -------------------------------------------------------------------
             # Use updated velocity, wavelet, and spatial distribution
-            wavefield_forward_updated = pseudospectral_1D(
+            wavefield_forward_updated = pseudospectral_1D_damped(
                 num_x=num_x,
                 delta_x=delta_x,
                 num_t=num_t,
@@ -537,6 +564,7 @@ class UltrasonicModeler:
                 source_spatial_function=updated_source_spatial_function,
                 source_time_function=updated_source_time_function,
                 velocity_model=updated_velocity_model,
+                damping_model=self.damping_model
             )
             derivative_wavefield_forward_updated = compute_time_derivative(wavefield_forward_updated, delta_t)
 
@@ -547,15 +575,22 @@ class UltrasonicModeler:
             updated_synthetic_waveform = np.interp(observed_time, simulation_time, updated_simulated_waveform)
 
             if normalize_waveform and np.max(updated_synthetic_waveform) != 0:
-                first_arrival = self.assembly_dict["z"] / self.assembly_dict["velocity" + self.wave_type]
+                if self.geometry_type == "block":
+                    first_arrival = self.assembly_dict["z"] / self.assembly_dict["velocity" + self.wave_type]
+            
+                elif self.geometry_type == "dds":
+                    first_arrival = observed_time[misfit_interval][0]
+
                 stf_duration = self.stf_handler.metadata["time_ax_waveform"][-1]-self.stf_handler.metadata["time_ax_waveform"][0]
                 start_A0 = np.searchsorted(observed_time, first_arrival)
                 end_A0 = np.searchsorted(observed_time, first_arrival + stf_duration)
                 A0 = np.amax(observed_waveform[start_A0:end_A0])
-                A1 = np.amax(observed_waveform[3*start_A0:3*start_A0+end_A0])
-
-                updated_synthetic_waveform[3*start_A0:3*end_A0+end_A0] /= A0/A1
-                updated_synthetic_waveform *= np.max(np.abs(observed_waveform)/np.max(np.abs(updated_synthetic_waveform))) 
+                try:
+                    A1 = np.amax(observed_waveform[3*start_A0:3*start_A0+end_A0])
+                    updated_synthetic_waveform[3*start_A0:3*end_A0+end_A0] /= A0/A1
+                except:
+                    pass
+                updated_synthetic_waveform *= np.max(observed_waveform)/np.max(updated_synthetic_waveform)
 
             # Compute updated misfit
             updated_misfit = compute_misfit(
@@ -579,6 +614,8 @@ class UltrasonicModeler:
                 best_wavefield_forward              = wavefield_forward_updated
                 best_derivative_wavefield_forward   = derivative_wavefield_forward_updated
                 best_synthetic_waveform             = updated_synthetic_waveform
+                best_simulated_waveform             = updated_simulated_waveform
+
                 best_misfit                         = updated_misfit
 
             else:
@@ -595,7 +632,7 @@ class UltrasonicModeler:
         self.receiver_handler.spatial_function = best_receiver_spatial_function         
 
         if enable_plotting:
-            if plot_output_path is not None:
+            if plot_output_path:
                 plot_output_name = plot_output_path.name + "_local_inversion"
                 plot_output_path = plot_output_path.parent / plot_output_name
 
@@ -607,22 +644,34 @@ class UltrasonicModeler:
                     outfile_path=plot_output_path
                 )
 
-                model_output_name = plot_output_path.name + "_velocity_model"
-                model_output_path = plot_output_path.parent / model_output_name
+                if dc_max_start:
+                    model_output_name = plot_output_path.name + "_velocity_model"
+                    model_output_path = plot_output_path.parent / model_output_name
+                    self.velocity_model_handler.plot(outfile_path=model_output_path)
 
-                self.velocity_model_handler.plot(outfile_path=model_output_path)
-
-                stf_output_name = plot_output_path.name + "_best_STF"
-                stf_output_path = plot_output_path.parent / stf_output_name
-                self.plotter.plot_original_vs_updated_stf(
-                    t=simulation_time,
-                    stf_updated=best_source_time_function,
-                    stf_original=initial_source_time_function,
-                    min_time=simulation_time[0],
-                    max_time=simulation_time[stf_duration_idx],
-                    outfile_path=stf_output_path) 
+                if dw_max_start:
+                    stf_output_name = plot_output_path.name + "_best_STF"
+                    stf_output_path = plot_output_path.parent / stf_output_name
+                    self.plotter.plot_original_vs_updated_stf(
+                        t=simulation_time,
+                        stf_updated=best_source_time_function,
+                        stf_original=initial_source_time_function,
+                        min_time=simulation_time[0],
+                        max_time=simulation_time[stf_duration_idx],
+                        outfile_path=stf_output_path) 
+                    
+        if make_movie:
+            self.plotter.make_movie_from_simulation(
+                outfile_path=movie_output_path,
+                x=spatial_axis,
+                t=simulation_time,
+                sp_field=best_wavefield_forward,
+                sp_recorded = best_simulated_waveform,
+                sample_dimensions=self.sample_dimensions,
+                idx_dict=idx_dict,
+            )
     
-def pseudospectral_1D(
+def pseudospectral_1D_damped(
     num_x: int,
     delta_x: float,
     num_t: int,
@@ -630,40 +679,69 @@ def pseudospectral_1D(
     source_spatial_function: np.ndarray,
     source_time_function: np.ndarray,
     velocity_model: np.ndarray,
+    damping_model: np.ndarray = None
 ) -> np.ndarray:
     """
-    Returns the wavefield as a 2D array of shape (num_t, num_x).
+    Returns the damped wavefield as a 2D array of shape (num_t, num_x),
+    implementing a Kelvin–Voigt-like wave equation:
+    
+        u_tt = (v^2) u_xx  +  alpha * d/dt(u_xx).
+
+    Here,
+      velocity_model[x] -> c(x),
+      damping_model[x]  -> alpha(x).
+    
+    If damping_model is None, it defaults to 0 (no damping).
     """
-    import numpy as np
 
+    if damping_model is None:
+        damping_model = np.zeros(num_x)
+    
+    # Storage for wavefields
+    wavefield_past    = np.zeros(num_x)
     wavefield_current = np.zeros(num_x)
-    wavefield_future = np.zeros(num_x)
-    wavefield_past = np.zeros(num_x)
-    wavefield = np.zeros((num_t, num_x))
+    wavefield_future  = np.zeros(num_x)
+    wavefield         = np.zeros((num_t, num_x))
 
-    for time_step in range(num_t):
-        # second_derivative = np.gradient(np.gradient(wavefield_current, delta_x), delta_x)
-        second_derivative = SignalProcessor().fourier_derivative_2nd(wavefield_current,delta_x)
+    # We'll also store the previous time-step's 2nd derivative:
+    second_derivative_past = np.zeros(num_x)
+        
+    # Time loop
+    for itime in range(num_t):
+        
+        # --- Compute current second derivative ---
+        second_derivative_current = SignalProcessor().fourier_derivative_2nd(
+            wavefield_current, delta_x
+        )
 
-        # Time stepping
+        # --- Standard wave update (no damping) ---
         wavefield_future = (
-            2 * wavefield_current
+            2.0 * wavefield_current
             - wavefield_past
-            + (velocity_model ** 2) * (delta_t ** 2) * second_derivative
+            + (velocity_model**2) * (delta_t**2) * second_derivative_current
+        )
+
+        # --- Add source term ---
+        wavefield_future += source_spatial_function * source_time_function[itime] * (delta_t**2)
+
+        # --- Kelvin–Voigt damping term ---
+        # alpha(x) * dt * [ second_deriv_current - second_deriv_past ]
+        # provided alpha(x) is small or moderate
+        wavefield_future += (
+            damping_model * delta_t * (second_derivative_current - second_derivative_past)
         )
         
-        # Source
-        wavefield_future += source_spatial_function * source_time_function[time_step] * (delta_t ** 2)
-
-        # Shift wavefields
+        # --- Shift old arrays ---
         wavefield_past = wavefield_current.copy()
         wavefield_current = wavefield_future.copy()
+        second_derivative_past = second_derivative_current.copy()
 
-        # Boundary conditions
-        wavefield_current[0] = 0
-        wavefield_current[-1] = 0
-
-        wavefield[time_step, :] = wavefield_current
+        # Simple boundary conditions (Dirichlet = 0):
+        wavefield_current[0]   = 0.0
+        wavefield_current[-1]  = 0.0
+        
+        # Record snapshot
+        wavefield[itime, :] = wavefield_current
 
     return wavefield
 
@@ -691,10 +769,6 @@ def compute_time_derivative(
             - 2 * wavefield[t, :]
             + wavefield[t - 1, :]
         ) / (delta_t ** 2)
-
-    # Depending on your choice of boundary conditions for the time derivative:
-    # derivative[0, :] and derivative[num_t-1, :] might remain zero or might
-    # need a one-sided difference. It depends on your modeling setup.
 
     return derivative
 

@@ -12,6 +12,7 @@ from pathlib import Path
 
 from lab_uw.directory_manager import DirectoryManager
 from lab_uw.signal_processing import SignalProcessor
+from lab_uw.plotting import Plotter
 
 logger = logging.getLogger(__name__)
 
@@ -291,6 +292,7 @@ class UltrasonicDataHandler:
             experiment_name=experiment_name_stf,
             data_type=data_type_stf
         )
+        
         chosen_stf_path = None
         for infile_stf in infile_path_stf_list:
             if infile_stf.stem == stf_chosen:
@@ -302,9 +304,16 @@ class UltrasonicDataHandler:
                 f"for experiment '{experiment_name_stf}'."
             )
 
-        temp_handler = cls()
-        stf_waveform_raw, stf_metadata = temp_handler.load_waveform_json(chosen_stf_path)
-        stf_metadata["time_ax_waveform"] = np.array(stf_metadata["time_ax_waveform"])- np.array(stf_metadata["time_ax_waveform"])[0]
+        # 1) Instantiate the class
+        stf_handler = cls()
+
+        stf_handler.infile = chosen_stf_path
+
+        stf_waveform_raw, stf_metadata = stf_handler.load_waveform_json(chosen_stf_path)
+        stf_metadata["time_ax_waveform"] = (
+            np.array(stf_metadata["time_ax_waveform"]) 
+            - np.array(stf_metadata["time_ax_waveform"])[0]
+        )
         signal_processor = SignalProcessor()
         stf_waveform_filt, _ = signal_processor.signal2noise_separation_lowpass(
             waveform_data=stf_waveform_raw,
@@ -313,7 +322,10 @@ class UltrasonicDataHandler:
         )
         stf_waveform = stf_waveform_filt - stf_waveform_filt[0]
 
-        return cls(waveform_data=stf_waveform, metadata=stf_metadata)
+        stf_handler.waveform_data = stf_waveform
+        stf_handler.metadata = stf_metadata
+        return stf_handler
+
 
     @staticmethod
     def extract_metadata_from_tsv(infile: TextIO) -> Tuple[List[float], List[float]]:
@@ -365,6 +377,65 @@ class UltrasonicDataHandler:
             return str(value)
         return value
 
+    def compute_amplitude_phase_spectrum(self) -> tuple:
+            """
+            Computes the amplitude and phase spectrum (via FFT) for each waveform
+            stored in `self.waveform_data`.
+
+            Returns
+            -------
+            freq : np.ndarray
+                1D array of frequency bins corresponding to the FFT. The units depend on
+                the units of 'sampling_rate' in metadata. For example, if 'sampling_rate'
+                is in microseconds, `freq` will be in MHz.
+            amplitude_spectrum : np.ndarray
+                2D array of the amplitude spectrum of shape [n_waveforms, n_samples].
+            phase_spectrum : np.ndarray
+                2D array of the phase spectrum in radians of shape [n_waveforms, n_samples].
+            """
+            # Handle the case of empty data
+            if self.waveform_data.size == 0:
+                raise ValueError("No waveform data is present to compute spectra.")
+
+            # If the data is 1D, reshape to 2D for uniform processing
+            data_2d = self.waveform_data
+
+            if self.waveform_data.ndim == 1:
+                n_samples = len(data_2d)  # shape (1, n_samples)
+            else:
+                n_waveforms, n_samples = data_2d.shape  # shape (n_waveforms, n_samples)
+
+            # Retrieve the sampling interval from metadata
+            # e.g. if sampling_rate is in microseconds, freq will be in MHz
+            if "sampling_rate" not in self.metadata:
+                raise KeyError("metadata does not contain 'sampling_rate' key.")
+
+            dt = self.metadata["sampling_rate"]
+
+            # Construct the frequency axis (fftshift not used here; if you prefer a
+            # shifted axis, you can use np.fft.fftshift and np.fft.fftfreq accordingly)
+            self.frequencies = np.fft.rfftfreq(n_samples, d=dt)
+
+            # Compute the FFT along the sample axis
+            try:
+                fft_data = np.fft.rfft(data_2d, axis=1)
+            except:
+                fft_data = np.fft.rfft(data_2d)
+
+            # Compute amplitude and phase
+            self.amplitude_spectrum = np.abs(fft_data)
+            self.phase_spectrum = np.angle(fft_data)
+
+            return self.frequencies, self.amplitude_spectrum, self.phase_spectrum
+
+    def plot_amplitude_and_phase_spectrum(self):
+
+        plotter = Plotter()
+        plotter.filtered_amp_and_phase_spectrum_plot(
+                                             signal_freqs = self.frequencies,
+                                             amp_spectrum = self.amplitude_spectrum,
+                                             phase_spectrum = self.phase_spectrum,
+        )
 ###############################################################################
 # CLASS: MechanicalDataHandler
 ###############################################################################
@@ -490,14 +561,73 @@ class BlockMetadataHandler:
         if block_key not in self._metadata_dict:
             raise KeyError(f"Block '{block_key}' not found in metadata.")
         return self._metadata_dict[block_key]
-    
+
+    def rename_block_key(self, old_key: str, new_key: str) -> None:
+        """
+        Rename a block key in the internal metadata dictionary.
+        
+        Parameters
+        ----------
+        old_key : str
+            Existing block key to rename.
+        new_key : str
+            New block key name to use.
+
+        Raises
+        ------
+        KeyError
+            If old_key is not found.
+        """
+        if old_key not in self._metadata_dict:
+            raise KeyError(f"Block '{old_key}' not found in metadata.")
+        # Move the data under 'old_key' to 'new_key' and remove 'old_key'
+        self._metadata_dict[new_key] = self._metadata_dict.pop(old_key)
+
+    def update_block_params(self, block_key: str, updates: dict) -> None:
+        """
+        Update (or add) parameters for a specific block in the dictionary.
+        
+        Parameters
+        ----------
+        block_key : str
+            The block to be updated (e.g., 'mauro_side1').
+        updates : dict
+            A dictionary of key-value pairs to be merged into that block's metadata.
+            If a key doesn't exist, it will be created; if it does exist, it will be overwritten.
+        """
+        if block_key not in self._metadata_dict:
+            # Optionally raise an error instead of creating a new block:
+            # raise KeyError(f"Block '{block_key}' not found, cannot update.")
+            logger.info(f"Block '{block_key}' not found; creating a new block entry.")
+            self._metadata_dict[block_key] = {}
+
+        for k, v in updates.items():
+            self._metadata_dict[block_key][k] = v
+
+    def save_blocks_metadata(self, config_path: Path) -> None:
+        """
+        Save the internal metadata dictionary to a JSON file.
+
+        Parameters
+        ----------
+        config_path : Path
+            File path at which to save the JSON data.
+        """
+        try:
+            with config_path.open("w") as f:
+                json.dump(self._metadata_dict, f, indent=2)
+            logger.info(f"Block metadata successfully saved to {config_path}")
+        except OSError as e:
+            logger.error(f"Failed to write block metadata to {config_path}: {e}")
+            raise
+
     @classmethod
     def load_blocks_metadata(
         cls,
         dir_manager: Any,
         blocks_metadata_name: str,
         block_keys: Tuple[str, ...]
-        ) -> Tuple[dict, ...]:
+    ) -> Tuple[dict, ...]:
         """
         Class method that:
           1) Builds the path from a DirectoryManager + blocks_metadata_name

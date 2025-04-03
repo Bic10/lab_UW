@@ -1,6 +1,6 @@
 # lab_uw/simulation_setup.py
 import numpy as np
-from numpy import convolve
+import sys
 from pathlib import Path
 from abc import ABC, abstractmethod
 from typing import Tuple, Optional, Union, Dict
@@ -48,7 +48,7 @@ class Grid1D:
         pass
 
 class SimulationTime:
-    def __init__(self, observed_time: np.ndarray, dx: float, max_velocity: float, cfl_factor: float = 0.49):
+    def __init__(self, observed_time: np.ndarray, dx: float, max_velocity: float, max_alpha: float = 0, cfl_factor: float = 0.6):
         '''
         Initialize simulation time variables.
 
@@ -61,20 +61,30 @@ class SimulationTime:
         self.observed_time = observed_time
         self.dx = dx
         self.max_velocity = max_velocity
+        self.max_alpha = max_alpha
         self.cfl_factor = cfl_factor
         self.simulation_time = None
-        # self.dt = None
-        # self.num_t = None
+
         self.prepare_time_variables()
 
     def prepare_time_variables(self):
         '''
         Prepare the time variables for the simulation based on the spatial grid and maximum velocity.
         '''
-        # Calculate the raw time step based on CFL condition
-        dt_raw = (self.cfl_factor * self.dx) / self.max_velocity
         # Extract the data sampling rate from observed_time
         dt_obs = self.observed_time[1] - self.observed_time[0]
+
+        # Calculate the raw time step based on CFL condition
+        if self.max_alpha:
+            # add cretirion for Kelvin–Voigt damping
+            from lab_uw.utils import solve_quadratic_equation
+            A = self.max_velocity**2
+            B = self.max_alpha
+            C = -(self.dx * self.cfl_factor) ** 2
+            solutions = solve_quadratic_equation(A, B, C, real_only=True, positive_only=True)
+            dt_raw = solutions[0]
+        else:
+            dt_raw = (self.cfl_factor * self.dx) / self.max_velocity
 
         # Find the largest submultiple of dt_obs smaller than dt_raw
         self.dt = dt_obs / np.ceil(dt_obs / dt_raw)
@@ -414,8 +424,8 @@ class VelocityModel1D_DDS(VelocityModel1DBase):
         # Now apply smoothing at boundaries you care about:
         # For example, a boundary from "pzt_1" to "side_block_1"
         # and from "side_block_2" to "pzt_2":
-        self.apply_smoothing_between("pzt_1", "side_block_1", 10)
-        self.apply_smoothing_between("side_block_2", "pzt_2", 10)
+        # self.apply_smoothing_between("pzt_1", "side_block_1", 10)
+        # self.apply_smoothing_between("side_block_2", "pzt_2", 10)
 
     def compute_layer_positions(self):
         """

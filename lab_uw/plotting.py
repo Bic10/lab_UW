@@ -3,6 +3,9 @@
 from pathlib import Path
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+from matplotlib.patches import Rectangle
+from matplotlib import animation
+
 import numpy as np
 from typing import Optional, Dict, List, Union, Tuple
 from tkinter import Button
@@ -371,10 +374,10 @@ class Plotter:
     def filtered_amp_and_phase_spectrum_plot(self,
                                              signal_freqs: np.ndarray,
                                              amp_spectrum: np.ndarray,
-                                             phase_spectrum: np.ndarray,
-                                             filtered_amp_spectrum: np.ndarray,
-                                             lowpass_filter: np.ndarray,
-                                             freq_cut: float,
+                                             phase_spectrum: np.ndarray = None,
+                                             filtered_amp_spectrum: np.ndarray = None,
+                                             lowpass_filter: np.ndarray = None,
+                                             freq_cut: float = None,
                                              outfile_path: Optional[str] = None) -> None:
         """
         Plots the filtered amplitude and phase spectrum.
@@ -391,45 +394,40 @@ class Plotter:
         Raises:
             ValueError: If input arrays are not 1D or lengths do not match.
         """
-        arrays = [signal_freqs, amp_spectrum, phase_spectrum, filtered_amp_spectrum, lowpass_filter]
-        if not all(arr.ndim == 1 for arr in arrays):
-            raise ValueError("All input arrays must be 1D numpy arrays.")
-        if not all(len(arr) == len(signal_freqs) for arr in arrays):
-            raise ValueError("All input arrays must have the same length.")
-
-        spectrum_length = len(signal_freqs) // 2
-        amp_spectrum = amp_spectrum[:spectrum_length]
-        phase_spectrum = phase_spectrum[:spectrum_length]
-        filtered_amp_spectrum = filtered_amp_spectrum[:spectrum_length]
-        signal_freqs = signal_freqs[:spectrum_length]
-        lowpass_filter = lowpass_filter[:spectrum_length]
 
         max_freq = signal_freqs[np.argmax(amp_spectrum)]
 
         fig, ax = plt.subplots(2, 1, figsize=self.settings['figure_size'])
 
         ax[0].semilogy(signal_freqs, amp_spectrum, label="Amplitude Spectrum")
-        ax[0].semilogy(signal_freqs, lowpass_filter * np.amax(amp_spectrum), label="Filter Shape")
-        ax[0].semilogy(signal_freqs, filtered_amp_spectrum, label="Filtered Amplitude Spectrum")
         ax[0].vlines(max_freq, np.amin(filtered_amp_spectrum), np.amax(filtered_amp_spectrum), "r", "--",
                      label=f"Max Spectrum = {max_freq:.2f} MHz")
-        ax[0].vlines(freq_cut, np.amin(filtered_amp_spectrum), np.amax(filtered_amp_spectrum), "r", "-",
-                     label=f"Cut-off Frequency = {freq_cut} MHz")
+        
         ax[0].legend(fontsize=self.settings['fontsize_ticks'])
         ax[0].set_xlim([0, np.amax(signal_freqs)])
+        ax[0].set_ylim([0, np.amax(amp_spectrum)])
         ax[0].set_ylabel("Amplitude [a.u.]", fontsize=self.settings['fontsize_labels'])
         ax[0].set_xlabel("Frequency [MHz]", fontsize=self.settings['fontsize_labels'])
         ax[0].set_title("Amplitude Spectrum of a Waveform", fontsize=self.settings['fontsize_title'], fontname=self.FONT_TYPE)
         ax[0].tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
 
-        ax[1].plot(signal_freqs, phase_spectrum)
-        ax[1].set_xlim([0, np.amax(signal_freqs)])
-        ax[1].set_yticks(np.linspace(-np.pi, np.pi, 5))
-        ax[1].set_yticklabels([r'$-\pi$', r'$-\frac{\pi}{2}$', r'$0$', r'$\frac{\pi}{2}$', r'$\pi$'])
-        ax[1].set_ylabel("Phase [rad]", fontsize=self.settings['fontsize_labels'])
-        ax[1].set_xlabel("Frequency [MHz]", fontsize=self.settings['fontsize_labels'])
-        ax[1].set_title("Phase Spectrum of a Waveform", fontsize=self.settings['fontsize_title'], fontname=self.FONT_TYPE)
-        ax[1].tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
+        if filtered_amp_spectrum is not None:
+
+            ax[0].semilogy(signal_freqs, lowpass_filter * np.amax(amp_spectrum), label="Filter Shape")
+            ax[0].semilogy(signal_freqs, filtered_amp_spectrum, label="Filtered Amplitude Spectrum")
+            ax[0].vlines(freq_cut, np.amin(filtered_amp_spectrum), np.amax(filtered_amp_spectrum), "r", "-",
+                        label=f"Cut-off Frequency = {freq_cut} MHz")
+        
+        if phase_spectrum is not None:
+
+            ax[1].plot(signal_freqs, phase_spectrum)
+            ax[1].set_xlim([0, np.amax(signal_freqs)])
+            ax[1].set_yticks(np.linspace(-np.pi, np.pi, 5))
+            ax[1].set_yticklabels([r'$-\pi$', r'$-\frac{\pi}{2}$', r'$0$', r'$\frac{\pi}{2}$', r'$\pi$'])
+            ax[1].set_ylabel("Phase [rad]", fontsize=self.settings['fontsize_labels'])
+            ax[1].set_xlabel("Frequency [MHz]", fontsize=self.settings['fontsize_labels'])
+            ax[1].set_title("Phase Spectrum of a Waveform", fontsize=self.settings['fontsize_title'], fontname=self.FONT_TYPE)
+            ax[1].tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
 
         fig.tight_layout()
 
@@ -1260,7 +1258,7 @@ class Plotter:
             ax.tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
             ax.grid(alpha=0.1)
 
-            ax.set_ylim([0.9*np.amin(l2_values),3*np.amin(l2_values)])
+            ax.set_ylim([0.9*np.amin(l2_values),np.amax(l2_values)])
 
         # Hide any leftover subplots if n_params < n_rows * n_cols
         for j in range(n_params, n_rows * n_cols):

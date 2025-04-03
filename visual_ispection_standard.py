@@ -11,7 +11,7 @@ import scipy
 
 ###### INPUT #######
 machine_name = "Brava_2"
-experiment_name = "s0236"
+experiment_name = "s0242s03anh_30"
 data_type = "uw_data/data_tsv_files"
 base_dir = "/home/michele/Desktop/Dottorato/active_source_implementation"
 
@@ -55,7 +55,7 @@ for infile_path in sorted(infile_path_list):
         ## Detrend data. Detrending along acquisition time axis (axis=0) highligh changing in the shape of the waveform during the experiment
         # data= scipy.signal.detrend(data=data, axis=-1)
         # data = scipy.signal.detrend(data=data, axis=0, type='constant')
-        data = scipy.signal.detrend(data=data, axis=0, type='linear')
+        # data = scipy.signal.detrend(data=data, axis=0, type='linear')
         
         # Detrend and taper (following McNamara's approach)
         taper_percent = 0.1  # 10% taper
