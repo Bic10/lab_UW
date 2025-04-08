@@ -243,15 +243,26 @@ class VelocityModel1D_SingleBlock(VelocityModel1DBase):
         self.x_transmitter = x_transmitter
         self.x_receiver    = x_receiver
         self.plotting      = plotting
+        self.velocity_array: np.ndarray = None
+        self.damping_array: np.ndarray = None
 
         # Build the model
         self.build_velocity_model()
 
     def build_velocity_model(self):
+        """
+        Master method that calls all steps in order.
+        """
         self.compute_layer_positions()
         self.define_region_indices()
         self.initialize_velocity_array()
         self.assign_velocities()
+
+        # Patch final index if needed
+        if len(self.x) > 1:
+            self.velocity_array[-1] = self.velocity_array[-2]
+
+        self.initialize_damping_array()
 
     def compute_layer_positions(self):
         """
@@ -286,6 +297,9 @@ class VelocityModel1D_SingleBlock(VelocityModel1DBase):
 
     def initialize_velocity_array(self):
         self.velocity_array = self.steel_velocity * np.ones_like(self.x)
+
+    def initialize_damping_array(self):
+        self.damping_array = np.zeros_like(self.x)
 
     def assign_velocities(self):
         self.assign_constant_velocity("pla_1",       self.pla_velocity)
