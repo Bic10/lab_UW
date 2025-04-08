@@ -34,7 +34,6 @@ class UltrasonicModeler:
             plotter (Plotter, optional): For plotting results.
         """
         self.plotter = plotter or Plotter()
-        self._last_forward_results = None  # Will store the most recent forward-sim results
 
     def forward_simulation(
         self,
@@ -47,7 +46,7 @@ class UltrasonicModeler:
         maximum_velocity   : float,
         assembly_dict      : Dict[str, Any],
         misfit_interval    : np.ndarray,
-        maximum_damping    : float = 0,
+        maximum_damping    : float = None,
         montecarlo         : Optional[Dict[str, Any]] = None,
         normalize_waveform : bool = True,
         enable_plotting    : bool = False,
@@ -107,6 +106,7 @@ class UltrasonicModeler:
             # Single-block geometry
             pzt_layer_width      = assembly_dict["pzt_layer_width"]     
             pla_layer_width      = assembly_dict["pla_layer_width"] 
+            maximum_damping      = 0
         else:
             raise ValueError(f"Unknown geometry_type: {self.geometry_type}.")
 
@@ -144,6 +144,8 @@ class UltrasonicModeler:
             try:
                 gouge_velocity_1 = assembly_dict["gouge_velocity_1"]
                 gouge_velocity_2 = assembly_dict["gouge_velocity_2"]
+                gouge_damping_1  = assembly_dict["gouge_damping_1"]
+                gouge_damping_2  = assembly_dict["gouge_damping_2"]
             except KeyError:
                 raise ValueError("`gouge_velocity_1` and `gouge_velocity_2` are required for DDS geometry.")
             
@@ -167,6 +169,7 @@ class UltrasonicModeler:
                 h_groove_central=h_groove_central,
                 steel_velocity=steel_velocity,
                 gouge_velocity=(gouge_velocity_1, gouge_velocity_2),
+                gouge_damping=(gouge_damping_1, gouge_damping_2),
                 pzt_velocity=pzt_velocity,
                 pla_velocity=pla_velocity,
             )
@@ -191,16 +194,10 @@ class UltrasonicModeler:
             # velocity_model_handler.apply_smoothing_between("pzt_1", "steel_block", len(velocity_model_handler.idx_dict["pzt_1"]))
             # velocity_model_handler.apply_smoothing_between("steel_block", "pzt_2", len(velocity_model_handler.idx_dict["pzt_1"]))
 
-        # Store references
-        velocity_model_handler.x = spatial_axis
-        velocity_model = velocity_model_handler.values
+        velocity_model = velocity_model_handler.velocity_array
+        damping_model  = velocity_model_handler.damping_array if geometry_type == "dds" else 0
         idx_dict       = velocity_model_handler.idx_dict
 
-        self.damping_model = np.zeros(velocity_model.shape)
-        if self.geometry_type == "dds":
-            regions_to_update = np.concatenate([idx_dict["gouge_1"], idx_dict["gouge_2"]])
-            self.damping_model[regions_to_update] = maximum_damping
-          
         # BUILD SOURCE
         self.transmitter_position_relative = (
             pzt_layer_width
@@ -248,8 +245,8 @@ class UltrasonicModeler:
             delta_t=dt,
             source_spatial_function=source_handler.spatial_function,
             source_time_function=source_handler.time_function,
-            velocity_model=velocity_model,
-            damping_model=self.damping_model
+            velocity_model = velocity_model,
+            damping_model  = damping_model
         )
 
         # EXTRACT SYNTHETIC SIGNAL AT RECEIVER
@@ -286,9 +283,6 @@ class UltrasonicModeler:
                 misfit_interval=misfit_interval,
                 outfile_path=plot_output_path
             )
-            model_output_name = plot_output_path.name + "_velocity_model"
-            model_output_path = plot_output_path.parent / model_output_name
-            velocity_model_handler.plot(outfile_path=model_output_path)
 
         if make_movie:
             self.plotter.make_movie_from_simulation(
@@ -309,8 +303,21 @@ class UltrasonicModeler:
         self.grid_handler           = grid_handler
         self.source_handler         = source_handler
         self.receiver_handler       = receiver_handler
-        
 
+    def compute_misfit(self,
+        observed_waveform: np.ndarray,
+        synthetic_waveform: np.ndarray,
+        misfit_interval: slice
+    ) -> float:
+        """
+        Compute the L2 norm misfit between observed and synthetic waveforms over a specified interval.
+        """
+        if np.max(synthetic_waveform) != 0:
+            return LA.norm(synthetic_waveform[misfit_interval] - observed_waveform[misfit_interval], 2)
+        else:
+            # workaround in case something went wrong: misfit is so high this way, this wrong simulation never become the minimum for local inverison
+            return 3 * LA.norm(synthetic_waveform[misfit_interval] - observed_waveform[misfit_interval], 2)        
+        
     def run_local_inversion(
         self,
         observed_time:         np.ndarray,
@@ -357,13 +364,19 @@ class UltrasonicModeler:
         # === UNPACK FORWARD-SIMULATION RESULTS ===
         # Store results in the instance so we can reuse them
         initial_synthetic_waveform = self.synthetic_waveform
-        initial_wavefield_forward  = self.wavefield_forward
-
+        initial_wavefield_forward  = self.wavefield_forward     
         velocity_model_handler     = self.velocity_model_handler
         sim_time_handler           = self.sim_time_handler
         grid_handler               = self.grid_handler
         source_handler             = self.source_handler
         receiver_handler           = self.receiver_handler
+
+        initial_misfit = self.compute_misfit(
+            observed_waveform=observed_waveform,
+            synthetic_waveform=initial_synthetic_waveform,
+            misfit_interval=misfit_interval,
+        )
+        print(f"Initial misfit: {initial_misfit}")
 
         # Basic references
         num_x           = grid_handler.total_grid_points
@@ -373,19 +386,26 @@ class UltrasonicModeler:
         simulation_time = sim_time_handler.simulation_time
         spatial_axis    = grid_handler.spatial_axis
 
-        # -- We store the initial source time/spatial functions from the forward run --
-        initial_source_time_function   = source_handler.time_function.copy()
-        initial_source_spatial_function = source_handler.spatial_function.copy()
-        
-        initial_receiver_spatial_function = receiver_handler.spatial_function.copy()
-        # We start with the same velocity model used in forward_results
-        initial_velocity_model = velocity_model_handler.values.copy()
-        idx_dict               = velocity_model_handler.idx_dict
+        # Initialize the inversion variables 
+        initial_source_time_function        = source_handler.time_function.copy()
+        initial_source_spatial_function     = source_handler.spatial_function.copy()
+        initial_receiver_spatial_function   = receiver_handler.spatial_function.copy()
+        initial_velocity_model              = velocity_model_handler.velocity_array.copy()
+        initial_damping_model               = velocity_model_handler.damping_array.copy()
+        idx_dict                            = velocity_model_handler.idx_dict
 
         # Regions where velocity is allowed to update
-        try: 
-            regions_to_update = np.concatenate([idx_dict["gouge_1"], idx_dict["gouge_2"]])
-        except:
+        if self.geometry_type == "dds": 
+            # regions_to_update = np.concatenate([idx_dict["gouge_1"], idx_dict["gouge_2"]])
+            regions_to_update = np.concatenate([idx_dict["groove_sb1"], 
+                                                idx_dict["gouge_1"],
+                                                idx_dict["groove_cb1"],
+                                                idx_dict["groove_cb2"],
+                                                idx_dict["gouge_2"],
+                                                idx_dict["groove_sb2"]
+                                            ])
+
+        elif self.geometry_type == "block":
             regions_to_update = np.concatenate([
                 idx_dict["pzt_1"],
                 idx_dict["steel_block"][:len(idx_dict["pzt_1"])],
@@ -393,32 +413,22 @@ class UltrasonicModeler:
                 idx_dict["pzt_2"]
             ])
 
-        stf_duration_idx = np.where(initial_source_time_function!=0)[-1][-1]
+        stf_duration_idx  = np.where(initial_source_time_function!=0)[-1][-1]
         stf_extension_idx = np.where(initial_source_spatial_function!=0)[-1][-1]
-        rx_extension_idx = np.where(initial_receiver_spatial_function!=0)[0][0]
+        rx_extension_idx  = np.where(initial_receiver_spatial_function!=0)[0][0]
 
         # -----------------------------------------------------------------------
         # Store "best" parameters at iteration 0
         # -----------------------------------------------------------------------
         best_velocity_model              = initial_velocity_model.copy()
+        best_damping_model               = initial_damping_model.copy()
         best_source_time_function        = initial_source_time_function.copy()
         best_source_spatial_function     = initial_source_spatial_function.copy()
-
-        best_receiver_spatial_function     = initial_receiver_spatial_function.copy()
-
+        best_receiver_spatial_function   = initial_receiver_spatial_function.copy()
         best_wavefield_forward           = initial_wavefield_forward
-        best_derivative_wavefield_forward = compute_time_derivative(best_wavefield_forward, delta_t)
+        best_derivative_wavefield_forward= compute_time_derivative(best_wavefield_forward, delta_t)
         best_synthetic_waveform          = initial_synthetic_waveform.copy()
-        best_simulated_waveform          = np.sum(
-                best_wavefield_forward * best_receiver_spatial_function, axis=1
-            )
-        
-        best_misfit = compute_misfit(
-            observed_waveform=observed_waveform,
-            synthetic_waveform=best_synthetic_waveform,
-            misfit_interval=misfit_interval,
-        )
-        print(f"Initial misfit: {best_misfit}")
+        best_misfit                      = initial_misfit
 
         # Step-size management
         dc_max = dc_max_start
@@ -453,14 +463,14 @@ class UltrasonicModeler:
                 adj_src_spatial_function = updated_receiver_spatial_function
                 # Solve adjoint wavefield with the CURRENT best velocity
                 wavefield_adjoint = pseudospectral_1D_damped(
-                    num_x=num_x,
-                    delta_x=delta_x,
-                    num_t=num_t,
-                    delta_t=delta_t,
-                    source_spatial_function=adj_src_spatial_function,
-                    source_time_function=adj_src_time_function,
-                    velocity_model=best_velocity_model,
-                    damping_model=self.damping_model
+                    num_x                   = num_x,
+                    delta_x                 = delta_x,
+                    num_t                   = num_t,
+                    delta_t                 = delta_t,
+                    source_spatial_function = adj_src_spatial_function,
+                    source_time_function    = adj_src_time_function,
+                    velocity_model          = best_velocity_model,
+                    damping_model           = best_damping_model
                 )
 
                 # -------------------------------------------------------------------
@@ -557,14 +567,14 @@ class UltrasonicModeler:
             # -------------------------------------------------------------------
             # Use updated velocity, wavelet, and spatial distribution
             wavefield_forward_updated = pseudospectral_1D_damped(
-                num_x=num_x,
-                delta_x=delta_x,
-                num_t=num_t,
-                delta_t=delta_t,
-                source_spatial_function=updated_source_spatial_function,
-                source_time_function=updated_source_time_function,
-                velocity_model=updated_velocity_model,
-                damping_model=self.damping_model
+                num_x                   = num_x,
+                delta_x                 = delta_x,
+                num_t                   = num_t,
+                delta_t                 = delta_t,
+                source_spatial_function = updated_source_spatial_function,
+                source_time_function    = updated_source_time_function,
+                velocity_model          = updated_velocity_model,
+                damping_model           = best_damping_model
             )
             derivative_wavefield_forward_updated = compute_time_derivative(wavefield_forward_updated, delta_t)
 
@@ -593,7 +603,7 @@ class UltrasonicModeler:
                 updated_synthetic_waveform *= np.max(observed_waveform)/np.max(updated_synthetic_waveform)
 
             # Compute updated misfit
-            updated_misfit = compute_misfit(
+            updated_misfit = self.compute_misfit(
                 observed_waveform=observed_waveform,
                 synthetic_waveform=updated_synthetic_waveform,
                 misfit_interval=misfit_interval
@@ -625,11 +635,11 @@ class UltrasonicModeler:
                 ds_max /= reduce_factor
                 print(f"    ✗ No improvement. Reverting & reducing step")
 
-        self.synthetic_waveform                = best_synthetic_waveform
-        self.velocity_model_handler.values     = best_velocity_model
-        self.source_handler.time_function      = best_source_time_function
-        self.source_handler.spatial_function   = best_source_spatial_function
-        self.receiver_handler.spatial_function = best_receiver_spatial_function         
+        self.synthetic_waveform                    = best_synthetic_waveform
+        self.velocity_model_handler.velocity_array = best_velocity_model
+        self.source_handler.time_function          = best_source_time_function
+        self.source_handler.spatial_function       = best_source_spatial_function
+        self.receiver_handler.spatial_function     = best_receiver_spatial_function         
 
         if enable_plotting:
             if plot_output_path:
@@ -660,7 +670,10 @@ class UltrasonicModeler:
                         max_time=simulation_time[stf_duration_idx],
                         outfile_path=stf_output_path) 
                     
-        if make_movie:
+        if (make_movie) and (initial_misfit != best_misfit):
+            movie_output_name = movie_output_path.name + "_local_inversion.mp4"
+            movie_output_path = movie_output_path.parent / movie_output_name
+
             self.plotter.make_movie_from_simulation(
                 outfile_path=movie_output_path,
                 x=spatial_axis,
@@ -672,79 +685,107 @@ class UltrasonicModeler:
             )
     
 def pseudospectral_1D_damped(
-    num_x: int,
+    num_x: int,          # original interior size
     delta_x: float,
     num_t: int,
     delta_t: float,
-    source_spatial_function: np.ndarray,
-    source_time_function: np.ndarray,
-    velocity_model: np.ndarray,
-    damping_model: np.ndarray = None
-) -> np.ndarray:
+    source_spatial_function: np.ndarray,  # length num_x
+    source_time_function: np.ndarray,     # length num_t
+    velocity_model: np.ndarray,           # length num_x
+    damping_model: np.ndarray = None,     # length num_x for Kelvin-Voigt alpha
+    absorbing: np.ndarray = False, # length (num_x+2*N_pad). If None, no boundary damping.
+    N_pad: int = 200,     # number of points to pad on each side
+):
     """
-    Returns the damped wavefield as a 2D array of shape (num_t, num_x),
-    implementing a Kelvin–Voigt-like wave equation:
+    1D wavefield solution on an extended domain so that waves leaving the 
+    interior do not reflect but get damped in the outer zones.
     
-        u_tt = (v^2) u_xx  +  alpha * d/dt(u_xx).
-
-    Here,
-      velocity_model[x] -> c(x),
-      damping_model[x]  -> alpha(x).
+    Returns wavefield of shape (num_t, num_x) containing just the interior slice.
     
-    If damping_model is None, it defaults to 0 (no damping).
+    PDE:  u_tt = v(x)^2 * u_xx  +  alpha(x)* d/dt[u_xx],
+    with optional absorbing zone in the extension.
     """
 
     if damping_model is None:
         damping_model = np.zeros(num_x)
-    
-    # Storage for wavefields
-    wavefield_past    = np.zeros(num_x)
-    wavefield_current = np.zeros(num_x)
-    wavefield_future  = np.zeros(num_x)
-    wavefield         = np.zeros((num_t, num_x))
 
-    # We'll also store the previous time-step's 2nd derivative:
-    second_derivative_past = np.zeros(num_x)
+    if absorbing:
+            # Extended size
+        N_ext = num_x + 2*N_pad
+        
+        # Extend velocity, damping, and allocate wavefields
+        velocity_ext = extend_model(velocity_model, N_pad)  
+        damping_ext  = extend_model(damping_model, N_pad)   
+
+        absorbing_boundary_taper = np.ones(N_ext)
+        z = np.linspace(-1, 6, N_pad)
+        sigma_ext = sigmoid(z)
+        absorbing_boundary_taper[0:N_pad] = sigma_ext
+        absorbing_boundary_taper[-N_pad:] = np.flip(sigma_ext)
+
+        # plt.plot(absorbing_boundary_taper)
+        # plt.scatter(N_pad,absorbing_boundary_taper[N_pad])
+        # plt.show()
+        
+    else:
+        N_pad = 0
+        N_ext = num_x
+        velocity_ext = velocity_model
+        damping_ext = damping_model
+
+    # Storage arrays in the extended domain
+    wave_past    = np.zeros(N_ext)
+    wave_current = np.zeros(N_ext)
+    wave_future  = np.zeros(N_ext)
+    
+    # For storing the interior portion at each time step
+    wavefield_out = np.zeros((num_t, num_x))
+    
+    # Keep track of second derivative at previous time
+    second_deriv_past = np.zeros(N_ext)
         
     # Time loop
     for itime in range(num_t):
-        
-        # --- Compute current second derivative ---
-        second_derivative_current = SignalProcessor().fourier_derivative_2nd(
-            wavefield_current, delta_x
+        # Compute 2nd derivative in extended domain
+        second_deriv_current = SignalProcessor().fourier_derivative_2nd(
+            wave_current, delta_x
+        )        
+
+        # Standard wave update
+        wave_future = (
+            2.0 * wave_current
+            - wave_past
+            + (velocity_ext**2) * (delta_t**2) * second_deriv_current
         )
 
-        # --- Standard wave update (no damping) ---
-        wavefield_future = (
-            2.0 * wavefield_current
-            - wavefield_past
-            + (velocity_model**2) * (delta_t**2) * second_derivative_current
-        )
-
-        # --- Add source term ---
-        wavefield_future += source_spatial_function * source_time_function[itime] * (delta_t**2)
-
-        # --- Kelvin–Voigt damping term ---
-        # alpha(x) * dt * [ second_deriv_current - second_deriv_past ]
-        # provided alpha(x) is small or moderate
-        wavefield_future += (
-            damping_model * delta_t * (second_derivative_current - second_derivative_past)
+        # Add source term *in the interior*
+        # If your source_spatial_function is length num_x, 
+        wave_future[N_pad:N_pad+num_x] += (
+            source_spatial_function * source_time_function[itime] * (delta_t**2)
         )
         
-        # --- Shift old arrays ---
-        wavefield_past = wavefield_current.copy()
-        wavefield_current = wavefield_future.copy()
-        second_derivative_past = second_derivative_current.copy()
+        # Kelvin–Voigt damping term
+        wave_future += damping_ext * delta_t * (second_deriv_current - second_deriv_past)
+    
+        if absorbing:
+            # Absorbing boundary: multiply by exp(-sigma[i] * dt) at all i
+            wave_future *= absorbing_boundary_taper
 
-        # Simple boundary conditions (Dirichlet = 0):
-        wavefield_current[0]   = 0.0
-        wavefield_current[-1]  = 0.0
+        else:
+            # Zero out the edges (Dirichlet), totally reflected boundaries
+            wave_future[0]  = 0.0
+            wave_future[-1] = 0.0
+
+        # Shift old arrays
+        wave_past[:] = wave_current
+        wave_current[:] = wave_future
+        second_deriv_past[:] = second_deriv_current
         
-        # Record snapshot
-        wavefield[itime, :] = wavefield_current
-
-    return wavefield
-
+        # Save the interior slice to output
+        wavefield_out[itime, :] = wave_current[N_pad:N_pad+num_x]
+    
+    return wavefield_out
+    
 def compute_time_derivative(
     wavefield: np.ndarray,
     delta_t: float
@@ -756,7 +797,6 @@ def compute_time_derivative(
     Returns a 2D array (num_t, num_x), where derivative[t, x] is the
     second time derivative at time t, position x.
     """
-    import numpy as np
 
     num_t, num_x = wavefield.shape
     derivative = np.zeros_like(wavefield)
@@ -772,16 +812,28 @@ def compute_time_derivative(
 
     return derivative
 
-def compute_misfit(
-    observed_waveform: np.ndarray,
-    synthetic_waveform: np.ndarray,
-    misfit_interval: slice
-) -> float:
+def extend_model(original_model, N_pad):
     """
-    Compute the L2 norm misfit between observed and synthetic waveforms over a specified interval.
+    Extend a 1D array 'original_model' by N_pad on each side
+    by simply copying boundary values. 
     """
-    if np.max(synthetic_waveform) != 0:
-        return LA.norm(synthetic_waveform[misfit_interval] - observed_waveform[misfit_interval], 2)
-    else:
-        # workaround in case something went wrong: misfit is so high this way, this wrong simulation never become the minimum for local inverison
-        return 3 * LA.norm(synthetic_waveform[misfit_interval] - observed_waveform[misfit_interval], 2)
+    N = len(original_model)
+    N_ext = N + 2*N_pad
+    extended = np.zeros(N_ext)
+    
+    # Fill interior
+    extended[N_pad:N_pad+N] = original_model[:]
+    
+    # Left padding
+    for i in range(N_pad):
+        extended[N_pad - 1 - i] = original_model[0]  # copy left boundary value
+    
+    # Right padding
+    for i in range(N_pad):
+        extended[N_pad+N + i] = original_model[-1]   # copy right boundary value
+    
+    return extended
+
+def sigmoid(z):
+    return 1/(1 + np.exp(-z))
+

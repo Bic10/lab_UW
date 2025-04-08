@@ -48,7 +48,7 @@ class Grid1D:
         pass
 
 class SimulationTime:
-    def __init__(self, observed_time: np.ndarray, dx: float, max_velocity: float, max_alpha: float = 0, cfl_factor: float = 0.6):
+    def __init__(self, observed_time: np.ndarray, dx: float, max_velocity: float, max_alpha: float = 0, cfl_factor: float = 0.4):
         '''
         Initialize simulation time variables.
 
@@ -101,7 +101,7 @@ class VelocityModel1DBase(ABC):
       - build_velocity_model()
          * compute_layer_positions()
          * define_region_indices()
-         * initialize_velocity_model()
+         * initialize_velocity_array()
          * assign_velocities()
          * apply_smoothing()
       - plot()
@@ -131,7 +131,7 @@ class VelocityModel1DBase(ABC):
         Cumulative boundaries for each layer/region.
     idx_dict : Dict[str, np.ndarray]
         Mapping from region name to the array of x-indices in that region.
-    values : np.ndarray
+    velocity_array : np.ndarray
         Final velocity array for the entire domain.
     """
 
@@ -161,7 +161,7 @@ class VelocityModel1DBase(ABC):
         # Data structures populated by the builder methods:
         self.layer_starts: np.ndarray = None
         self.idx_dict: Dict[str, np.ndarray] = {}
-        self.values: np.ndarray = None
+        self.velocity_array: np.ndarray = None
 
     @abstractmethod
     def build_velocity_model(self):
@@ -176,7 +176,7 @@ class VelocityModel1DBase(ABC):
         pass
 
     @abstractmethod
-    def initialize_velocity_model(self):
+    def initialize_velocity_array(self):
         pass
 
     @abstractmethod
@@ -193,7 +193,7 @@ class VelocityModel1DBase(ABC):
         """
         indices = self.idx_dict.get(region_name, [])
         if indices.size:
-            self.values[indices] = velocity
+            self.velocity_array[indices] = velocity
 
 
     def plot(self, outfile_path: Optional[str] = None):
@@ -202,7 +202,7 @@ class VelocityModel1DBase(ABC):
 
         Plotter().plot_velocity_model(
             x=self.x,
-            c=self.values,
+            c=self.velocity_array,
             layer_starts=self.layer_starts,
             pzt_layer_width=self.pzt_layer_width,
             pla_layer_width=self.pla_layer_width,
@@ -250,7 +250,7 @@ class VelocityModel1D_SingleBlock(VelocityModel1DBase):
     def build_velocity_model(self):
         self.compute_layer_positions()
         self.define_region_indices()
-        self.initialize_velocity_model()
+        self.initialize_velocity_array()
         self.assign_velocities()
 
     def compute_layer_positions(self):
@@ -284,8 +284,8 @@ class VelocityModel1D_SingleBlock(VelocityModel1DBase):
             idx = np.where((x >= start) & (x <= end))[0]
             self.idx_dict[region] = idx
 
-    def initialize_velocity_model(self):
-        self.values = self.steel_velocity * np.ones_like(self.x)
+    def initialize_velocity_array(self):
+        self.velocity_array = self.steel_velocity * np.ones_like(self.x)
 
     def assign_velocities(self):
         self.assign_constant_velocity("pla_1",       self.pla_velocity)
@@ -296,7 +296,7 @@ class VelocityModel1D_SingleBlock(VelocityModel1DBase):
 
         # Patch final index if needed
         if len(self.x) > 1:
-            self.values[-1] = self.values[-2]
+            self.velocity_array[-1] = self.velocity_array[-2]
 
     def apply_smoothing_between(self, region_from: str, region_to: str, n_smooth: int):
         """
@@ -337,7 +337,7 @@ class VelocityModel1D_SingleBlock(VelocityModel1DBase):
 
         # Linear ramp from vel_from to vel_to
         ramp = np.linspace(vel_from, vel_to, boundary_indices.size)
-        self.values[boundary_indices] = ramp
+        self.velocity_array[boundary_indices] = ramp
 
 class VelocityModel1D_DDS(VelocityModel1DBase):
     """
@@ -377,6 +377,7 @@ class VelocityModel1D_DDS(VelocityModel1DBase):
         steel_velocity: float,
         # Gouge velocity can be a tuple of floats or arrays: (gouge_1_vel, gouge_2_vel)
         gouge_velocity: Union[Tuple[float, float], Tuple[np.ndarray, np.ndarray]],
+        gouge_damping : Union[Tuple[float, float], Tuple[np.ndarray, np.ndarray]],        
         pzt_velocity: float,
         pla_velocity: float,
         outfile_path: Optional[Path] = None,
@@ -394,6 +395,7 @@ class VelocityModel1D_DDS(VelocityModel1DBase):
 
         self.steel_velocity = steel_velocity
         self.gouge_velocity = gouge_velocity  # (gouge_1, gouge_2)
+        self.gouge_damping  = gouge_damping  
         self.pzt_velocity   = pzt_velocity
         self.pla_velocity   = pla_velocity
 
@@ -404,7 +406,8 @@ class VelocityModel1D_DDS(VelocityModel1DBase):
         self.layer_thicknesses = []
         self.layer_starts: np.ndarray = None
         self.idx_dict = {}
-        self.values: np.ndarray = None
+        self.velocity_array: np.ndarray = None
+        self.damping_array: np.ndarray = None
 
         self.build_velocity_model()
 
@@ -414,18 +417,15 @@ class VelocityModel1D_DDS(VelocityModel1DBase):
         """
         self.compute_layer_positions()
         self.define_region_indices()
-        self.initialize_velocity_model()
+        self.initialize_velocity_array()
         self.assign_velocities()
 
         # Patch final index if needed
         if len(self.x) > 1:
-            self.values[-1] = self.values[-2]
+            self.velocity_array[-1] = self.velocity_array[-2]
 
-        # Now apply smoothing at boundaries you care about:
-        # For example, a boundary from "pzt_1" to "side_block_1"
-        # and from "side_block_2" to "pzt_2":
-        # self.apply_smoothing_between("pzt_1", "side_block_1", 10)
-        # self.apply_smoothing_between("side_block_2", "pzt_2", 10)
+        self.initialize_damping_array()
+        self.assign_damping()
 
     def compute_layer_positions(self):
         """
@@ -482,11 +482,17 @@ class VelocityModel1D_DDS(VelocityModel1DBase):
             indices = np.where((x >= start) & (x <= end))[0]
             self.idx_dict[region] = indices
 
-    def initialize_velocity_model(self):
+    def initialize_velocity_array(self):
         '''
         Initialize the velocity model with default velocities.
         '''
-        self.values = self.steel_velocity * np.ones_like(self.x)
+        self.velocity_array = self.steel_velocity * np.ones_like(self.x)
+
+    def initialize_damping_array(self):
+        '''
+        Initialize the velocity model with default velocities.
+        '''
+        self.damping_array = np.zeros_like(self.x)
 
     def assign_velocities(self):
         '''
@@ -497,25 +503,46 @@ class VelocityModel1D_DDS(VelocityModel1DBase):
         # Side Block 1 remains steel_velocity
 
         self.assign_groove_velocity('groove_sb1', self.gouge_velocity[0], is_start=True)
+        # self.assign_constant_velocity('groove_sb1', self.gouge_velocity[0])
+
         self.assign_gouge_velocity('gouge_1', self.gouge_velocity[0])
+ 
         self.assign_groove_velocity('groove_cb1', self.gouge_velocity[0], is_start=False)
+        # self.assign_constant_velocity('groove_cb1', self.gouge_velocity[0])
 
         self.assign_constant_velocity('central_block', self.steel_velocity)
 
         self.assign_groove_velocity('groove_cb2', self.gouge_velocity[1], is_start=True)
+        # self.assign_constant_velocity('groove_cb2', self.gouge_velocity[1])
+
         self.assign_gouge_velocity('gouge_2', self.gouge_velocity[1])
+
         self.assign_groove_velocity('groove_sb2', self.gouge_velocity[1], is_start=False)
+        # self.assign_constant_velocity('groove_sb2', self.gouge_velocity[1])
 
         # Side Block 2 remains steel_velocity
         self.assign_constant_velocity('pzt_2', self.pzt_velocity)
         self.assign_constant_velocity('pla_2', self.pla_velocity)
+
+    def assign_damping(self):
+        '''
+        Assign damping to the guge region and the ramp to the grooves ones.
+        '''
+
+        self.assign_groove_damping('groove_sb1', self.gouge_damping[0], is_start=True)
+        self.assign_gouge_damping('gouge_1', self.gouge_damping[0])
+        self.assign_groove_damping('groove_cb1', self.gouge_damping[0], is_start=False)
+
+        self.assign_groove_damping('groove_cb2', self.gouge_damping[1], is_start=True)
+        self.assign_gouge_damping('gouge_2', self.gouge_damping[1])
+        self.assign_groove_damping('groove_sb2', self.gouge_damping[1], is_start=False)
 
     def assign_constant_velocity(self, region_name: str, velocity: float):
         '''
         Assign a constant velocity to a region.
         '''
         indices = self.idx_dict.get(region_name, [])
-        self.values[indices] = velocity
+        self.velocity_array[indices] = velocity
 
     def assign_gouge_velocity(self, region_name: str, gouge_velocity: Union[float, np.ndarray]):
         '''
@@ -527,9 +554,23 @@ class VelocityModel1D_DDS(VelocityModel1DBase):
         if isinstance(gouge_velocity, np.ndarray):
             if len(gouge_velocity) != len(indices):
                 raise ValueError(f"Length of gouge_velocity does not match the size of {region_name} region.")
-            self.values[indices] = gouge_velocity
+            self.velocity_array[indices] = gouge_velocity
         else:
-            self.values[indices] = gouge_velocity
+            self.velocity_array[indices] = gouge_velocity
+
+    def assign_gouge_damping(self, region_name: str, gouge_damping: Union[float, np.ndarray]):
+        '''
+        Assign damping to gouge regions.
+        '''
+        indices = self.idx_dict.get(region_name, [])
+        if not indices.size:
+            return
+        if isinstance(gouge_damping, np.ndarray):
+            if len(gouge_damping) != len(indices):
+                raise ValueError(f"Length of gouge_damping does not match the size of {region_name} region.")
+            self.damping_array[indices] = gouge_damping
+        else:
+            self.damping_array[indices] = gouge_damping
 
     def assign_groove_velocity(self, region_name: str, adjacent_velocity: Union[float, np.ndarray], is_start: bool):
         '''
@@ -540,13 +581,30 @@ class VelocityModel1D_DDS(VelocityModel1DBase):
             return
         groove_length = len(indices)
         if groove_length == 1:
-            self.values[indices] = adjacent_velocity[0] if isinstance(adjacent_velocity, np.ndarray) else adjacent_velocity
+            self.velocity_array[indices] = adjacent_velocity[0] if isinstance(adjacent_velocity, np.ndarray) else adjacent_velocity
             return
 
         start_vel = self.steel_velocity if is_start else (adjacent_velocity[-1] if isinstance(adjacent_velocity, np.ndarray) else adjacent_velocity)
         end_vel = (adjacent_velocity[0] if isinstance(adjacent_velocity, np.ndarray) else adjacent_velocity) if is_start else self.steel_velocity
 
-        self.values[indices] = np.linspace(start_vel, end_vel, groove_length)
+        self.velocity_array[indices] = np.linspace(start_vel, end_vel, groove_length)
+
+    def assign_groove_damping(self, region_name: str, adjacent_damping: Union[float, np.ndarray], is_start: bool):
+        '''
+        Assign velocities in groove regions with linear gradients.
+        '''
+        indices = self.idx_dict.get(region_name, [])
+        if not indices.size:
+            return
+        groove_length = len(indices)
+        if groove_length == 1:
+            self.damping_array[indices] = adjacent_damping[0] if isinstance(adjacent_damping, np.ndarray) else adjacent_damping
+            return
+
+        start_damp = 0 if is_start else (adjacent_damping[-1] if isinstance(adjacent_damping, np.ndarray) else adjacent_damping)
+        end_damp = (adjacent_damping[0] if isinstance(adjacent_damping, np.ndarray) else adjacent_damping) if is_start else 0
+
+        self.damping_array[indices] = np.linspace(start_damp, end_damp, groove_length)
 
     def apply_smoothing_between(self, region_from: str, region_to: str, n_smooth: int):
         """
@@ -610,8 +668,8 @@ class VelocityModel1D_DDS(VelocityModel1DBase):
         # 6) Build a linear ramp
         ramp = np.linspace(vel_from, vel_to, len(boundary_indices))
 
-        # 7) Write the ramp into self.values
-        self.values[boundary_indices] = ramp
+        # 7) Write the ramp into self.velocity_array
+        self.velocity_array[boundary_indices] = ramp
 
 class Source1D:
     def __init__(self, stf_time: np.ndarray, 

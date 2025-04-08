@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 
 from lab_uw.data_io import UltrasonicDataHandler, BlockMetadataHandler
 from lab_uw.directory_manager import DirectoryManager
-from lab_uw.forward_modeling import UltrasonicModeler, compute_misfit
+from lab_uw.forward_modeling import UltrasonicModeler
 from lab_uw.plotting import Plotter
 
 def process_uw_file(
@@ -245,7 +245,7 @@ def process_waveform(
         maximum_velocity    = params["max_velocity2simulate"],
         normalize_waveform  = True,
         enable_plotting     = save_plot,
-        make_movie          = save_movie,
+        make_movie          = False,
         plot_output_path    = plot_output_path,
         movie_output_path   = movie_output_path
     )
@@ -312,7 +312,7 @@ def process_waveform(
                                           simulation.source_handler.time_function)
 
     if params["save_local_inversion_STF"]:
-        stf_from_inverison_outfile_name = stf_handler.infile.name 
+        stf_from_inverison_outfile_name = stf_handler.infile.name + "_local_inversion_1"
         stf_from_inverison_outfile_path = stf_handler.infile.parent / stf_from_inverison_outfile_name
 
         stf_handler.save_waveform_json(data = stf_handler.waveform_data, 
@@ -396,7 +396,7 @@ def process_velocity(args):
     synthetic_waveform = simulation.synthetic_waveform
 
     # Calculate misfit
-    L2norm_new = compute_misfit(
+    L2norm_new = simulation.compute_misfit(
         observed_waveform=observed_waveform,
         synthetic_waveform=synthetic_waveform,
         misfit_interval=misfit_interval
@@ -436,7 +436,7 @@ if __name__ == "__main__":
     outdir_path_image = dir_manager.make_data_analysis_folders(
         machine_name=machine_name,
         experiment_name=experiment_name,
-        data_types=[f"source_receiver_simulation_parameters{wave_type}_images_and_movie_2025-04-03_only_STF_60s_stf_bandpass_1"]
+        data_types=[f"source_receiver_simulation_parameters{wave_type}_images_and_movie_2025-04-08_only_STF_60s_stf_bandpass_from_original"]
     )
     print(f"Misfits will be saved at:\n{outdir_path_l2norm[0]}")
 
@@ -471,7 +471,7 @@ if __name__ == "__main__":
 
     #### MONTE CARLO PARAMETERS DEFINED HERE ####
     global_search_space = {
-        "num_iterations": 500,  # how many random draws to try
+        "num_iterations": 2000,  # how many random draws to try
         "steel_velocity_low": 0.315,
         "steel_velocity_high": 0.325,              
         "pzt_velocity_low": params["min_velocity2simulate"], 
@@ -505,7 +505,9 @@ if __name__ == "__main__":
             machine_name_stf=machine_name,
             experiment_name_stf=experiment_name,
             data_type_stf="data_analysis/source_time_functions" + wave_type,
-            stf_chosen=stf_chosen + "_local_inversion",
+            # stf_chosen=stf_chosen + "_local_inversion",
+            stf_chosen=stf_chosen,
+
             frequency_cutoff=params["frequency_cutoff"]
         )
 
@@ -523,8 +525,8 @@ if __name__ == "__main__":
             return y
         
         stf_handler.waveform_data = butter_bandpass_filter(stf_handler.waveform_data, 0.25, 6, 25)
-        plt.plot(stf_handler.waveform_data)
-        plt.show()
+        # plt.plot(stf_handler.waveform_data)
+        # plt.show()
 
         # Run the main simulation routine
         process_uw_file(

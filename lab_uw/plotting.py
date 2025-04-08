@@ -71,7 +71,8 @@ class Plotter:
             if outfile_path.suffix != format:
                 outfile_path = outfile_path.with_suffix(format)
             fig.savefig(outfile_path, dpi=300)
-            plt.close(fig)
+            fig.clf()
+            plt.close()
         else:
             plt.show()
 
@@ -1267,6 +1268,44 @@ class Plotter:
         fig.suptitle(title, fontsize=self.settings['fontsize_title'], fontname=self.FONT_TYPE)
         self.output_path_choice(fig=fig, outfile_path=outfile_path)
 
+    def misfit_map(self,
+                   misfit_grid: np.ndarray,
+                   unique_damps: np.ndarray,
+                   unique_vels: np.ndarray,
+                   outfile_path: Optional[Union[str, Path]] = None) -> None:
+        """
+        Plots a 2D misfit surface given a misfit grid.
+
+        Args:
+            misfit_grid (np.ndarray): The misfit values in a 2D grid.
+            unique_damps (np.ndarray): The array of damping values.
+            unique_vels (np.ndarray): The array of velocity values.
+            outfile_path (str or Path, optional): If provided, the figure will be saved to this path.
+        """
+        fig, ax = plt.subplots(figsize=self.settings['figure_size'])
+        im = ax.imshow(
+            misfit_grid,
+            origin='lower',
+            extent=[
+                min(unique_damps), max(unique_damps),
+                min(unique_vels),  max(unique_vels)
+            ],
+            aspect='auto'
+        )
+
+        cbar = fig.colorbar(im, ax=ax, pad=0.04)
+        cbar.set_label("Misfit (L2 norm)", fontsize=self.settings['fontsize_labels'])
+
+        ax.set_xlabel("Damping", fontsize=self.settings['fontsize_labels'])
+        ax.set_ylabel("Velocity", fontsize=self.settings['fontsize_labels'])
+        ax.set_title("2D Misfit Surface",
+                     fontsize=self.settings['fontsize_title'],
+                     fontname=self.FONT_TYPE)
+        ax.tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
+
+        fig.tight_layout()
+        self.output_path_choice(fig=fig, outfile_path=outfile_path)
+        
 class InteractivePlotter(Plotter):
     """
     A specialized Plotter class that provides interactive methods for human-needed operations.
