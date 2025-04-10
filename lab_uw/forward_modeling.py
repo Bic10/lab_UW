@@ -516,14 +516,8 @@ class UltrasonicModeler:
                 # -------------------------------------------------------------------
                 if dc_max: 
                     gradient_vel = np.zeros_like(best_velocity_model)
-                    for t_step in range(num_t):
-                        # Cross-correlate adjoint[t] with forward[T-1 - t].
-                        gradient_vel += (
-                            (2.0 / best_velocity_model**3.0)
-                            * wavefield_adjoint[t_step, :]
-                            * best_derivative_wavefield_forward[num_t - 1 - t_step, :]
-                        )
-                    gradient_vel *= delta_t
+                    term = (2.0 / best_velocity_model[None, :]**3) * wavefield_adjoint * np.flipud(best_derivative_wavefield_forward)
+                    gradient_vel = np.sum(term, axis=0) * delta_t
                     max_vel_grad = np.max(np.abs(gradient_vel))
 
                 if dw_max:
@@ -531,11 +525,9 @@ class UltrasonicModeler:
                     # GRADIENT wrt source-time function w(t)
                     # -------------------------------------------------------------------
                     gradient_w = np.zeros_like(best_source_time_function)
-                    for t_step in range(num_t):
-                        integrand = wavefield_adjoint[t_step, :] * best_source_spatial_function
-                        gradient_w[num_t-t_step-1] = np.sum(integrand)
+                    temp = wavefield_adjoint @ best_source_spatial_function  # shape => (num_t,)
+                    gradient_w = np.flipud(temp) * delta_t
                     # Multiply by delta_t to approximate integral in continuous form (optional):
-                    gradient_w *= delta_t
                     gradient_w[stf_duration_idx:] = 0
                     max_w_grad   = np.max(np.abs(gradient_w))
                 
@@ -544,13 +536,10 @@ class UltrasonicModeler:
                     # GRADIENT wrt source-spatial function s(x)
                     # -------------------------------------------------------------------
                     gradient_s = np.zeros_like(best_source_spatial_function)
-                    for x_idx in range(num_x):
-                        # wavefield_adjoint[:, x_idx] is at location x
-                        # We multiply by w(t) and sum over t
-                        integrand = wavefield_adjoint[:, x_idx] * best_source_time_function
-                        gradient_s[num_x-x_idx-1] = np.sum(integrand)
-                    # Multiply by delta_t if you want an integral in time:
-                    gradient_s *= delta_x
+                    # wavefield_adjoint => shape (num_t, num_x)
+                    temp = wavefield_adjoint.T @ best_source_time_function  # shape => (num_x,)
+                    gradient_s = np.flipud(temp) * delta_x
+
                     gradient_s[stf_extension_idx:] = 0
                     max_s_grad   = np.max(np.abs(gradient_s))
 
@@ -781,12 +770,14 @@ def pseudospectral_1D_damped(
     wavefield_out = np.zeros((num_t, num_x))
     
     # Keep track of second derivative at previous time
+    # Create or retrieve the SignalProcessor once
+    sp = SignalProcessor()  
     second_deriv_past = np.zeros(N_ext)
         
     # Time loop
     for itime in range(num_t):
         # Compute 2nd derivative in extended domain
-        second_deriv_current = SignalProcessor().fourier_derivative_2nd(
+        second_deriv_current = sp.fourier_derivative_2nd(
             wave_current, delta_x
         )        
 

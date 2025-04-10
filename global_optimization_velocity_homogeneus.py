@@ -302,8 +302,9 @@ def process_waveform(
         velocity_max_waveform   = previous_best_velocity + velocity_range_waveform
         gouge_velocity_list = np.arange(velocity_min_waveform, velocity_max_waveform, velocity_step_waveform)
 
-        damping_range_waveform = 5*previous_best_damping
-        damping_step_waveform  = previous_best_damping
+        # just to avoid that the no-damping possibility stop the possible computation
+        damping_range_waveform = 5*previous_best_damping if previous_best_damping else params["damping_initial_list"][1]
+        damping_step_waveform  = previous_best_damping if previous_best_damping else params["damping_initial_list"][1] 
         damping_min_waveform   = max(previous_best_damping - damping_range_waveform, 0)
         damping_max_waveform   = previous_best_damping + damping_range_waveform
         gouge_damping_list = np.arange(damping_min_waveform, damping_max_waveform, damping_step_waveform)
@@ -499,7 +500,7 @@ def process_waveform(
         plot_output_path     = plot_output_path,
         movie_output_path    = movie_output_path
         )
-        
+
     return {
         'gouge_velocity_list' : gouge_velocity_list,
         'best_gouge_velocity' : best_gouge_velocity,
@@ -616,7 +617,7 @@ if __name__ == "__main__":
         "minimum_SNR"               : 3,            # skip computation until time interval where signal should be is above SNR times surely-only-noise part 
         "velocity_step"             : 0.001,        # [cm/mus] spacing betwee tried gouge velocity
         "velocity_range"            : 0.005,         # [cm/mus] range around previous best velocity of tried gouge velocity
-        "velocity_initial_list"     : np.linspace(0.17,0.22, 5),  # [cm/mus] first guess of best velocity. There is a visual tool for it, if needed
+        "velocity_initial_list"     : np.linspace(0.16,0.22, 5),  # [cm/mus] first guess of best velocity. There is a visual tool for it, if needed
         "min_velocity2simulate"     : None,         # [cm/mus] if not passed, computed by assembly and gouge velocity range
         "max_velocity2simulate"     : None,         # [cm/mus]
         "damping_initial_list"      : np.concatenate([np.zeros(1),np.geomspace(0.00001,0.001, 3)]),

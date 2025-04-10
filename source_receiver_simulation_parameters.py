@@ -423,18 +423,18 @@ if __name__ == "__main__":
     experiment_name = "STF_ss10_05"
     wave_type       = "_s"  # e.g., compressional wave
     data_type_uw    = f"uw_data/data_tsv_files{wave_type}"
-    data_type       = f"simulation_parameters{wave_type}_2025-04-10_only_STF_60s_stf_bandpass_from_original" 
+    outfolder_name     = f"simulation_parameters{wave_type}_2025-04-10_only_STF_60s_stf_bandpass_from_original" 
 
     # Create output directories
     outdir_path_l2norm = dir_manager.make_data_analysis_folders(
         machine_name=machine_name,
         experiment_name=experiment_name,
-        data_types=[data_type]
+        data_types=[outfolder_name]
     )
     outdir_path_image = dir_manager.make_data_analysis_folders(
         machine_name=machine_name,
         experiment_name=experiment_name,
-        data_types=["images_and_movie_" + data_type]
+        data_types=["images_and_movie_" + outfolder_name]
     )
 
     # Basic simulation parameters
@@ -453,7 +453,7 @@ if __name__ == "__main__":
         "number_of_waveforms2process": 10,
         "outdir_path_l2norm"        : outdir_path_l2norm[0],
         "outdir_path_image"         : outdir_path_image[0],
-        "n_iterations"              : 70,
+        "n_iterations"              : 50,
         "reduce_factor"             : 10/9
     }
 
@@ -472,7 +472,7 @@ if __name__ == "__main__":
 
     #### MONTE CARLO PARAMETERS DEFINED HERE ####
     global_search_space = {
-        "num_iterations": 3000,  # how many random draws to try
+        "num_iterations": 1500,  # how many random draws to try
         "steel_velocity_low": 0.315,
         "steel_velocity_high": 0.325,              
         "pzt_velocity_low": params["min_velocity2simulate"], 
