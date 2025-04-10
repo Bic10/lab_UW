@@ -543,13 +543,24 @@ class VelocityModel1D_DDS(VelocityModel1DBase):
         Assign damping to the guge region and the ramp to the grooves ones.
         '''
 
-        self.assign_groove_damping('groove_sb1', self.gouge_damping[0], is_start=True)
-        self.assign_gouge_damping('gouge_1', self.gouge_damping[0])
-        self.assign_groove_damping('groove_cb1', self.gouge_damping[0], is_start=False)
+        # self.assign_groove_damping('groove_sb1', self.gouge_damping[0], is_start=True)
+        self.assign_gouge_damping('groove_sb1', self.gouge_damping[0])
 
-        self.assign_groove_damping('groove_cb2', self.gouge_damping[1], is_start=True)
+        self.assign_gouge_damping('gouge_1', self.gouge_damping[0])
+
+        # self.assign_groove_damping('groove_cb1', self.gouge_damping[0], is_start=False)
+        self.assign_gouge_damping('groove_cb1', self.gouge_damping[0])
+
+        # self.assign_groove_damping('groove_cb2', self.gouge_damping[1], is_start=True)
+        self.assign_gouge_damping('groove_cb2', self.gouge_damping[1])
+
         self.assign_gouge_damping('gouge_2', self.gouge_damping[1])
-        self.assign_groove_damping('groove_sb2', self.gouge_damping[1], is_start=False)
+
+        # self.assign_groove_damping('groove_cb2', self.gouge_damping[1], is_start=True)
+        self.assign_gouge_damping('groove_cb2', self.gouge_damping[1])
+
+        # self.assign_groove_damping('groove_sb2', self.gouge_damping[1], is_start=False)
+        self.assign_gouge_damping('groove_sb2', self.gouge_damping[1])
 
     def assign_constant_velocity(self, region_name: str, velocity: float):
         '''

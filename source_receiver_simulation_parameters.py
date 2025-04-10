@@ -124,6 +124,10 @@ def process_waveform(
     radius_low    = global_search_space["radius_factor_low"]
     radius_high   = global_search_space["radius_factor_high"]
 
+    min_multiplier = global_search_space["min_multiplier"]
+    max_multiplier = global_search_space["max_multiplier"]
+    multiplier_STF_array = np.geomspace(min_multiplier,max_multiplier, num_iteration)
+
     # Build argument list
     args_list = []
     for iteration in range(num_iteration):
@@ -137,6 +141,8 @@ def process_waveform(
         radius_factor_tx        = np.random.uniform(low=radius_low, high=radius_high)
         radius_factor_rx        = np.random.uniform(low=radius_low, high=radius_high)
 
+        multiplier_stf          = multiplier_STF_array[iteration]
+
         args_list.append((
             spreading_factor_tx,
             spreading_factor_rx,
@@ -146,6 +152,7 @@ def process_waveform(
             radius_factor_rx,
             steel_velocity2simulate,
             pzt_velocity2simulate,
+            multiplier_stf,
             observed_waveform,
             misfit_interval,
             observed_time,
@@ -172,6 +179,7 @@ def process_waveform(
     pos_rx_array    = np.array([r[6] for r in results_sorted])
     rad_tx_array    = np.array([r[7] for r in results_sorted])
     rad_rx_array    = np.array([r[8] for r in results_sorted])
+    multiplier_array= np.array([r[9] for r in results_sorted])
 
     # Best solution is the first in sorted list
     best_pzt_velocity          = results_sorted[0][0]
@@ -183,6 +191,7 @@ def process_waveform(
     best_position2edge_rx      = results_sorted[0][6]
     best_radius_factor_tx      = results_sorted[0][7]
     best_radius_factor_rx      = results_sorted[0][8]
+    best_multiplier            = results_sorted[0][9]
 
     print(f"\n{outfile_name}:")
     print(f"  Best Steel Velocity   = {best_steel_velocity:.4f} cm/μs")
@@ -195,6 +204,7 @@ def process_waveform(
     print(f"    pos2edge_rx         = {best_position2edge_rx:.3f}")
     print(f"    radius_factor_tx    = {best_radius_factor_tx:.3f}")
     print(f"    radius_factor_rx    = {best_radius_factor_rx:.3f}")
+    print(f"    multiplier_STF      = {best_multiplier:.3f}")
 
     # # SAVE BEST PZT VELOCITY AND STEEL IN THE BLOCK METADATA FILE
     # handler.update_block_params(
@@ -213,6 +223,7 @@ def process_waveform(
     montecarlo["position2edge_receiver"]        = best_position2edge_rx
     montecarlo["radius_factor_transmitter"]     = best_radius_factor_tx
     montecarlo["radius_factor_receiver"]        = best_radius_factor_rx
+    montecarlo["multiplier_STF"]                = best_multiplier
 
     # Determine if we save plots and/or movies
     save_plot  = (idx_waveform % params["plot_save_interval"] == 0) 
@@ -243,7 +254,7 @@ def process_waveform(
         misfit_interval     = misfit_interval,
         minimum_velocity    = params["min_velocity2simulate"],
         maximum_velocity    = params["max_velocity2simulate"],
-        normalize_waveform  = True,
+        normalize_waveform  = False,
         enable_plotting     = save_plot,
         make_movie          = False,
         plot_output_path    = plot_output_path,
@@ -257,14 +268,15 @@ def process_waveform(
     scatter_title = f"L2 vs. Parameters\n{outfile_name}"
     scatter_outpath = outdir_path_image / f"{outfile_name}_param_vs_L2.png"
     param_list = [
-        ("Steel Velocity (cm/µs)", steel_array),
-        ("PZT Velocity (cm/µs)",   pzt_array),
-        ("Spread Tx",              spread_tx_array),
-        ("Spread Rx",              spread_rx_array),
-        ("Pos2Edge Tx",            pos_tx_array),
-        ("Pos2Edge Rx",            pos_rx_array),
-        ("Radius Factor Tx",       rad_tx_array),
-        ("Radius Factor Rx",       rad_rx_array),
+        # ("Steel Velocity (cm/µs)", steel_array),
+        # ("PZT Velocity (cm/µs)",   pzt_array),
+        # ("Spread Tx",              spread_tx_array),
+        # ("Spread Rx",              spread_rx_array),
+        # ("Pos2Edge Tx",            pos_tx_array),
+        # ("Pos2Edge Rx",            pos_rx_array),
+        # ("Radius Factor Tx",       rad_tx_array),
+        # ("Radius Factor Rx",       rad_rx_array),
+        ("multiplier_STF",           multiplier_array)
     ]
 
     plotter.plot_scatter_l2_vs_parameters(
@@ -298,7 +310,7 @@ def process_waveform(
                                    ds_max_start=ds_max_start,
                                    ds_threshold=ds_threshold,
                                    reduce_factor=params["reduce_factor"],
-                                   normalize_waveform = True,
+                                   normalize_waveform = False,
                                    enable_plotting=True,
                                    plot_output_path=plot_output_path
                                    )
@@ -328,6 +340,7 @@ def process_waveform(
         "best_position2edge_rx": best_position2edge_rx,
         "best_radius_factor_tx": best_radius_factor_tx,
         "best_radius_factor_rx": best_radius_factor_rx,
+        "best_multiplier"      : best_multiplier
     }
 
 def process_velocity(args):
@@ -349,6 +362,7 @@ def process_velocity(args):
         radius_factor_receiver,
         steel_velocity2simulate,
         pzt_velocity2simulate,
+        multiplier_STF,
         observed_waveform,
         misfit_interval,
         observed_time,
@@ -371,6 +385,7 @@ def process_velocity(args):
     montecarlo["position2edge_receiver"]        = position2edge_receiver
     montecarlo["radius_factor_transmitter"]     = radius_factor_transmitter
     montecarlo["radius_factor_receiver"]        = radius_factor_receiver
+    montecarlo["multiplier_STF"]                = multiplier_STF
 
     # Run forward simulation for this draw
     simulation = UltrasonicModeler()
@@ -386,7 +401,7 @@ def process_velocity(args):
         misfit_interval     = misfit_interval,
         minimum_velocity    = params["min_velocity2simulate"],
         maximum_velocity    = params["max_velocity2simulate"],
-        normalize_waveform  = True,
+        normalize_waveform  = False,
         enable_plotting     = False
     )
 
@@ -410,7 +425,8 @@ def process_velocity(args):
         position2edge_transmitter,
         position2edge_receiver,
         radius_factor_transmitter,
-        radius_factor_receiver
+        radius_factor_receiver,
+        multiplier_STF
     )
 
 ################### MAIN ############################
@@ -423,7 +439,8 @@ if __name__ == "__main__":
     experiment_name = "STF_ss10_05"
     wave_type       = "_s"  # e.g., compressional wave
     data_type_uw    = f"uw_data/data_tsv_files{wave_type}"
-    outfolder_name     = f"simulation_parameters{wave_type}_2025-04-10_only_STF_60s_stf_bandpass_from_original" 
+    outfolder_name  = f"simulation_parameters{wave_type}_2025-04-10_only_STF_60s_stf_bandpass_from_original" 
+    outfolder_name  = "set_STF_amplitude"
 
     # Create output directories
     outdir_path_l2norm = dir_manager.make_data_analysis_folders(
@@ -441,8 +458,8 @@ if __name__ == "__main__":
     params = {
         "absorbing"                 : False,
         "save_local_inversion_STF"  : True,
-        "saved_STF_file_name"       : "_local_inversion_pc",   # this string will be added to the "stf_chosen" file name, so to not overdrive the original data
-        "maxtime2simulate"          : 60,   # mus
+        "saved_STF_file_name"       : "_multiplier",   # this string will be added to the "stf_chosen" file name, so to not overdrive the original data
+        "maxtime2simulate"          : 30,   # mus
         "frequency_cutoff"          : 6,     # MHz
         "minimum_SNR"               : 5,
         "min_velocity2simulate"     : 0.2,  # cm/mus
@@ -453,7 +470,7 @@ if __name__ == "__main__":
         "number_of_waveforms2process": 10,
         "outdir_path_l2norm"        : outdir_path_l2norm[0],
         "outdir_path_image"         : outdir_path_image[0],
-        "n_iterations"              : 50,
+        "n_iterations"              : 1,
         "reduce_factor"             : 10/9
     }
 
@@ -472,19 +489,21 @@ if __name__ == "__main__":
 
     #### MONTE CARLO PARAMETERS DEFINED HERE ####
     global_search_space = {
-        "num_iterations": 1500,  # how many random draws to try
-        "steel_velocity_low": 0.315,
-        "steel_velocity_high": 0.325,              
-        "pzt_velocity_low": params["min_velocity2simulate"], 
-        "pzt_velocity_high": params["max_velocity2simulate"],
-        "spreading_factor_low" : 0.2,
+        "num_iterations"       : 10,  # how many random draws to try
+        "steel_velocity_low"   : assembly_dict["velocity" + wave_type],
+        "steel_velocity_high"  : assembly_dict["velocity" + wave_type],              
+        "pzt_velocity_low"     : assembly_dict["pzt_velocity" + wave_type], 
+        "pzt_velocity_high"    : assembly_dict["pzt_velocity" + wave_type],
+        "spreading_factor_low" : 1.0,
         "spreading_factor_high": 1.0,
         # Uniform range for positions relative to edges pzt-steel
-        "position2edge_low" : -0.5,
-        "position2edge_high": +0.5,
+        "position2edge_low"    : -0.5,
+        "position2edge_high"   : -0.5,
         # how many nodes to use to approximate the tx/rx positions in case they do not correspond precisely to one node
-        "radius_factor_low": 0.3,
-        "radius_factor_high": 2.,
+        "radius_factor_low"    : 1.0,
+        "radius_factor_high"   : 1.0,
+        "min_multiplier"       : 0.1,
+        "max_multiplier"       : 1.5
     }
 
     # Make UW path list
@@ -506,28 +525,12 @@ if __name__ == "__main__":
             machine_name_stf=machine_name,
             experiment_name_stf=experiment_name,
             data_type_stf="data_analysis/source_time_functions" + wave_type,
-            # stf_chosen=stf_chosen + "_local_inversion",
-            stf_chosen=stf_chosen,
-
-            frequency_cutoff=params["frequency_cutoff"]
+            stf_chosen= "width250_volt70_local_inversion_bigboss",
+            # stf_chosen=stf_chosen,
+            frequency_cutoff= 12.5  # LEAVE THE NIQUIST, BUT FIX IT! SOMEHOW THE LOWPASS IS WRONG, IT DISTORTS THE WAVE
         )
 
-        freq, amplitude, phase = stf_handler.compute_amplitude_phase_spectrum()
-
-        # stf_handler.plot_amplitude_and_phase_spectrum()
-        from scipy.signal import butter, lfilter
-
-        def butter_bandpass(lowcut, highcut, fs, order=5):
-            return butter(order, [lowcut, highcut], fs=fs, btype='band')
-
-        def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
-            b, a = butter_bandpass(lowcut, highcut, fs, order=order)
-            y = lfilter(b, a, data)
-            return y
-        
-        stf_handler.waveform_data = butter_bandpass_filter(stf_handler.waveform_data, 0.25, 6, 25)
-        # plt.plot(stf_handler.waveform_data)
-        # plt.show()
+        # freq, amplitude, phase = stf_handler.compute_amplitude_phase_spectrum()
 
         # Run the main simulation routine
         process_uw_file(

@@ -592,7 +592,7 @@ if __name__ == "__main__":
     data_type_uw    = "uw_data/data_tsv_files" # + wave_type
     data_type_mech  = "mechanical_data"
     mech_file_name  = f"{experiment_name}_data_rp"
-    data_type       = "test"
+    data_type       = "test_global"
     # data_type       = "global_search" + wave_type + "_2025_04_09_stf_original_absorbing_1_groovegouge"
 
     # Create output directories
@@ -610,7 +610,7 @@ if __name__ == "__main__":
 
     # Basic simulation parameters 
     params = {
-        "absorbing"                 : True,
+        "absorbing"                 : False,
         "num_waveform2process"      : 20,         # int, equespatially waveforms to sample for processing
         "maxtime2simulate"          : 70,           # [mus]
         "frequency_cutoff"          : 4,            # [MHz] low pass onserved data and simulate up to this frequency
@@ -620,7 +620,7 @@ if __name__ == "__main__":
         "velocity_initial_list"     : np.linspace(0.16,0.22, 5),  # [cm/mus] first guess of best velocity. There is a visual tool for it, if needed
         "min_velocity2simulate"     : None,         # [cm/mus] if not passed, computed by assembly and gouge velocity range
         "max_velocity2simulate"     : None,         # [cm/mus]
-        "damping_initial_list"      : np.concatenate([np.zeros(1),np.geomspace(0.00001,0.001, 3)]),
+        "damping_initial_list"      : np.concatenate([np.zeros(1),np.geomspace(0.00001,0.001, 5)]),
         "plot_save_interval"        : 1,
         "movie_save_interval"       : 1,
         "l2norm_plot_interval"      : 1,

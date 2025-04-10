@@ -96,6 +96,8 @@ class UltrasonicModeler:
             position2edge_receiver       = montecarlo["position2edge_receiver"]
             radius_factor_transmitter    = montecarlo["radius_factor_transmitter"]
             radius_factor_receiver       = montecarlo["radius_factor_receiver"]
+            multiplier_STF               = montecarlo["multiplier_STF"]
+
         else:
             spreading_factor_transmitter = 1
             spreading_factor_receiver    = 1
@@ -117,6 +119,7 @@ class UltrasonicModeler:
             side2_params      = assembly_dict["side2_params"] 
             pzt_layer_width   = side1_params["pzt_layer_width"]
             pla_layer_width   = side1_params["pla_layer_width"]
+
         elif self.geometry_type.lower() == "block":
             # Single-block geometry
             pzt_layer_width      = assembly_dict["pzt_layer_width"]     
@@ -224,7 +227,7 @@ class UltrasonicModeler:
 
         source_handler = Source1D(
             stf_time=stf_handler.metadata["time_ax_waveform"],
-            stf_waveform=stf_handler.waveform_data,
+            stf_waveform=stf_handler.waveform_data * multiplier_STF ,
             position=self.transmitter_position_relative,
             radius=radius_transmitter,
             extension=extension_transmitter,
@@ -289,6 +292,9 @@ class UltrasonicModeler:
             except:
                 pass
             synthetic_waveform *= np.max(observed_waveform)/np.max(synthetic_waveform) 
+
+        # else: 
+        #     synthetic_waveform *=  1
 
         # Optionally do plotting or movie
         if enable_plotting:
@@ -463,7 +469,7 @@ class UltrasonicModeler:
         best_source_spatial_function     = initial_source_spatial_function.copy()
         best_receiver_spatial_function   = initial_receiver_spatial_function.copy()
         best_wavefield_forward           = initial_wavefield_forward
-        best_derivative_wavefield_forward= compute_time_derivative(best_wavefield_forward, delta_t)
+        best_second_derivative_wavefield= compute_second_derivative(best_wavefield_forward, delta_t)
         best_synthetic_waveform          = initial_synthetic_waveform.copy()
         best_misfit                      = initial_misfit
 
@@ -516,7 +522,7 @@ class UltrasonicModeler:
                 # -------------------------------------------------------------------
                 if dc_max: 
                     gradient_vel = np.zeros_like(best_velocity_model)
-                    term = (2.0 / best_velocity_model[None, :]**3) * wavefield_adjoint * np.flipud(best_derivative_wavefield_forward)
+                    term = (2.0 / best_velocity_model[None, :]**3) * wavefield_adjoint * np.flipud(best_second_derivative_wavefield)
                     gradient_vel = np.sum(term, axis=0) * delta_t
                     max_vel_grad = np.max(np.abs(gradient_vel))
 
@@ -569,6 +575,9 @@ class UltrasonicModeler:
                     a_max=maximum_velocity
                 )
 
+                # velo = np.mean(updated_velocity_model[regions_to_update])
+                # print(velo)
+
             if dw_max:
                 # -- update wavelet w(t) --
                 step_size_w   = dw_max / (max_w_grad + 1e-15)
@@ -604,7 +613,7 @@ class UltrasonicModeler:
                 damping_model           = best_damping_model,
                 absorbing               = absorbing
             )
-            derivative_wavefield_forward_updated = compute_time_derivative(wavefield_forward_updated, delta_t)
+            second_derivative_wavefield_updated = compute_second_derivative(wavefield_forward_updated, delta_t)
 
             # Extract updated synthetic waveform
             updated_simulated_waveform = np.sum(
@@ -630,6 +639,9 @@ class UltrasonicModeler:
                     pass
                 updated_synthetic_waveform *= np.max(observed_waveform)/np.max(updated_synthetic_waveform)
 
+            # else: 
+            #     updated_synthetic_waveform *=  1
+
             # Compute updated misfit
             updated_misfit = self.compute_misfit(
                 observed_waveform=observed_waveform,
@@ -650,7 +662,7 @@ class UltrasonicModeler:
                 best_receiver_spatial_function      = updated_receiver_spatial_function
 
                 best_wavefield_forward              = wavefield_forward_updated
-                best_derivative_wavefield_forward   = derivative_wavefield_forward_updated
+                best_second_derivative_wavefield    = second_derivative_wavefield_updated
                 best_synthetic_waveform             = updated_synthetic_waveform
                 best_simulated_waveform             = updated_simulated_waveform
 
@@ -816,30 +828,39 @@ def pseudospectral_1D_damped(
     
     return wavefield_out
     
-def compute_time_derivative(
-    wavefield: np.ndarray,
-    delta_t: float
-) -> np.ndarray:
+def compute_second_derivative(wavefield: np.ndarray, delta_t: float) -> np.ndarray:
     """
-    Compute the second time derivative of the wavefield.
+    Compute the second time derivative of the wavefield using finite differences.
     wavefield.shape == (num_t, num_x).
-    
+
     Returns a 2D array (num_t, num_x), where derivative[t, x] is the
     second time derivative at time t, position x.
     """
+    derivative = np.zeros_like(wavefield)
+    
+    # Vectorized finite difference: d2u/dt2 ~ (u[t+1] - 2u[t] + u[t-1]) / (delta_t^2)
+    derivative[1:-1] = (
+        wavefield[2:] - 2 * wavefield[1:-1] + wavefield[:-2]
+    ) / (delta_t ** 2)
+    
+    return derivative
 
-    num_t, num_x = wavefield.shape
+def compute_first_derivative(wavefield: np.ndarray, delta_t: float) -> np.ndarray:
+    """
+    Compute the first time derivative of the wavefield using a centered finite difference.
+    wavefield.shape == (num_t, num_x).
+
+    Returns a 2D array (num_t, num_x), where derivative[t, x] is the
+    first time derivative at time t, position x.
+    """
     derivative = np.zeros_like(wavefield)
 
-    # For each t in [1, num_t-2], compute the 2nd derivative.
-    # This is a typical finite difference: d2u/dt2 ~ (u[t+1] - 2u[t] + u[t-1]) / (delta_t^2)
-    for t in range(1, num_t - 1):
-        derivative[t, :] = (
-            wavefield[t + 1, :]
-            - 2 * wavefield[t, :]
-            + wavefield[t - 1, :]
-        ) / (delta_t ** 2)
+    # Centered difference: du/dt ~ (u[t+1] - u[t-1]) / (2 * delta_t)
+    derivative[1:-1] = (wavefield[2:] - wavefield[:-2]) / (2 * delta_t)
 
+    # The boundaries (t=0 or t=num_t-1) are left at zero or a specific scheme could be applied
+    # if you want better boundary treatment.
+    
     return derivative
 
 def extend_model(original_model, N_pad):

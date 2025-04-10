@@ -17,6 +17,7 @@ from lab_uw.forward_modeling import *
 from lab_uw.plotting import Plotter
 from lab_uw.forward_modeling import UltrasonicModeler
 from lab_uw.utils import *
+from global_optimization_velocity_homogeneus import *
 
 def min_assembly_velocity(assembly_dict: Dict[str, Any]):
     return min(assembly_dict["gouge_velocity_1"], 
@@ -168,7 +169,7 @@ def process_uw_file(
   # Derive output filenames using pathlib
     outdir_path_l2norm = params["outdir_path_l2norm"]
     outdir_path_image  = params["outdir_path_image"]
-    outfile_name = infile_path.name.split(".")[0] + "_global_search_waveform"
+    outfile_name = infile_path.name.split(".")[0]
     outfile_path = outdir_path_l2norm / outfile_name
     start_time = tm.time()
  
@@ -203,11 +204,24 @@ def process_uw_file(
                     "estimated_damping"     : result["best_gouge_damping"]
                 }, f)
 
+            idx_dict = simulation.velocity_model_handler.idx_dict
+            velocity_model = simulation.velocity_model_handler.velocity_array
+            regions_to_update = np.concatenate([idx_dict["groove_sb1"], 
+                                    idx_dict["gouge_1"],
+                                    idx_dict["groove_cb1"],
+                                    idx_dict["groove_cb2"],
+                                    idx_dict["gouge_2"],
+                                    idx_dict["groove_sb2"]
+                                ])
+            
+            velo = np.mean(velocity_model[regions_to_update])
+            print(velo)
+
             first_waveform = False
 
         else:
             # dc_max_start = 0
-            dc_max_start = 0.1 * assembly_dict["velocity" + wave_type]
+            dc_max_start = 0.1 * velo
             dc_threshold = 0.01*dc_max_start
 
             dw_max_start = 0
@@ -221,7 +235,37 @@ def process_uw_file(
             ############################################################################
             # LOCAL INVERSION
             ############################################################################    
+            plot_save_interval     = params['plot_save_interval']
+            movie_save_interval    = params['movie_save_interval']
+            outdir_path_image      = params['outdir_path_image']
 
+            acquisition_time       = assembly_dict["acquisition_time"] # contain the time, referred to the start of the experiment, when the waveforms are acquired
+            acq_time_label         = str(round(acquisition_time,5)).replace(".",",")
+            idx_processed_waveform = assembly_dict["idx_processed_waveform"]
+
+            # Construct output paths
+            # Determine if we save plots and/or movies
+            save_plot  = (idx_processed_waveform % plot_save_interval == 0) 
+            save_movie = (idx_processed_waveform % movie_save_interval == 0) 
+
+            best_gouge_damping = np.sum(simulation.velocity_model_handler.damping_array[regions_to_update]) 
+            best_gouge_velocity = velo
+            damping_label = str(round(best_gouge_damping,5)).replace(".",",")
+
+            if save_plot:
+                plot_output_name = f"{outfile_name}_waveform_{acq_time_label}_vel_{1e4*best_gouge_velocity:.0f}_damping_{damping_label}"
+                plot_output_path = outdir_path_image / plot_output_name
+            else:
+                plot_output_path = None
+
+            if save_movie:
+
+                movie_output_name = f"{outfile_name}_waveform_{acq_time_label}_vel_{1e4*best_gouge_velocity:.0f}_damping_{damping_label}.mp4"
+                movie_output_path = outdir_path_image / movie_output_name
+            else:
+                movie_output_path = None
+
+            simulation.observed_waveform = observed_waveform
             simulation.run_local_inversion(
                 n_iterations         = params["n_iterations"],
                 reduce_factor        = params["reduce_factor"],
@@ -231,9 +275,24 @@ def process_uw_file(
                 dw_threshold         = dw_threshold,
                 ds_max_start         = ds_max_start,
                 ds_threshold         = ds_threshold,
-                normalize_waveform   = True,
+                enable_plotting      = save_plot,
+                plot_output_path     = plot_output_path,
+                normalize_waveform   = False,
                 make_movie           = False,
             )
+
+            idx_dict = simulation.velocity_model_handler.idx_dict
+            velocity_model = simulation.velocity_model_handler.velocity_array
+            regions_to_update = np.concatenate([idx_dict["groove_sb1"], 
+                                    idx_dict["gouge_1"],
+                                    idx_dict["groove_cb1"],
+                                    idx_dict["groove_cb2"],
+                                    idx_dict["gouge_2"],
+                                    idx_dict["groove_sb2"]
+                                ])
+            
+            velo = np.mean(velocity_model[regions_to_update])
+            print(velo)
 
     # # Plot velocity & stress vs. ec_disp
     # plotter = Plotter()
@@ -424,6 +483,7 @@ def global_search_waveform(
 
     simulation = UltrasonicModeler()
     simulation.forward_simulation(
+        absorbing               = params["absorbing"],
         geometry_type           ="dds",
         observed_time           = observed_time,
         observed_waveform       = observed_waveform,
@@ -434,13 +494,44 @@ def global_search_waveform(
         minimum_velocity        = minimum_velocity,
         maximum_velocity        = maximum_velocity,  
         maximum_damping         = maximum_damping,
-        normalize_waveform      = True,
+        normalize_waveform      = False,
         enable_plotting         = save_plot,
         make_movie              = False,
         plot_output_path        = plot_output_path,
         movie_output_path       = movie_output_path
     )
 
+    ############################################################################
+    # LOCAL INVERSION
+    ############################################################################    
+    # dc_max_start = 0
+    dc_max_start = 0.1 * assembly_dict["velocity" + wave_type]
+    dc_threshold = 0.01*dc_max_start
+
+    dw_max_start = 0
+    # dw_max_start = np.amax(simulation.source_handler.time_function)
+    dw_threshold = 0.01*dw_max_start
+
+    ds_max_start = 0
+    # ds_max_start = np.amax(simulation.source_handler.spatial_function)
+    ds_threshold = 0.01*ds_max_start
+
+    simulation.run_local_inversion(
+        n_iterations         = params["n_iterations"],
+        dc_max_start         = dc_max_start,
+        dc_threshold         = dc_threshold,
+        dw_max_start         = dw_max_start,
+        dw_threshold         = dw_threshold,
+        ds_max_start         = ds_max_start,
+        ds_threshold         = ds_threshold,
+        reduce_factor        = params["reduce_factor"],
+        normalize_waveform   = False,
+        enable_plotting      = save_plot,
+        make_movie           = False,
+        plot_output_path     = plot_output_path,
+        movie_output_path    = movie_output_path
+        )
+    
     return (simulation,
             {
         'gouge_velocity_list' : gouge_velocity_list,
@@ -478,6 +569,7 @@ def global_search_run(args):
     # Call DDS_UW_simulation with gouge_velocity_tuple
     simulation = UltrasonicModeler()
     simulation.forward_simulation(
+        absorbing               = params["absorbing"],
         geometry_type           ="dds",
         observed_time           = observed_time,
         observed_waveform       = observed_waveform,
@@ -488,8 +580,8 @@ def global_search_run(args):
         minimum_velocity        = minimum_velocity,
         maximum_velocity        = maximum_velocity, 
         maximum_damping         = maximum_damping, 
-        normalize_waveform      = True,
-        enable_plotting         = False,
+        normalize_waveform      = False,
+        enable_plotting         = True,
         plot_output_path        = plot_output_path
     )
     
@@ -533,32 +625,34 @@ if __name__ == "__main__":
     data_type_uw    = "uw_data/data_tsv_files" # + wave_type
     data_type_mech  = "mechanical_data"
     mech_file_name  = f"{experiment_name}_data_rp"
-    data_type       = "local_inversion" + wave_type + "_2025_04_10_stf_local_inversion_absorbing_2_groovegouge_test"
+    outfolder_name  = "local_inversion" + wave_type + "_2025_04_11_stf_local_inversion_freesurface_2_groovegouge"
+    outfolder_name  = "test_local_nonorm"     
     # Create output directories
     outdir_path_l2norm = dir_manager.make_data_analysis_folders(
         machine_name    = machine_name,
         experiment_name = experiment_name,
-        data_types      = [data_type]
+        data_types      = [outfolder_name]
     )
 
     outdir_path_image = dir_manager.make_data_analysis_folders(
         machine_name    = machine_name,
         experiment_name = experiment_name,
-        data_types      = [data_type + "_images_and_movie"]
+        data_types      = [outfolder_name + "_images_and_movie"]
     )
 
     # Basic simulation parameters 
     params = {
+        "absorbing"                 : False,
         "num_waveform2process"      : 20,         # int, equespatially waveforms to sample for processing
         "maxtime2simulate"          : 70,           # [mus]
         "frequency_cutoff"          : 4,            # [MHz] low pass onserved data and simulate up to this frequency
         "minimum_SNR"               : 3,            # skip computation until time interval where signal should be is above SNR times surely-only-noise part 
         "velocity_step"             : 0.001,        # [cm/mus] spacing betwee tried gouge velocity
         "velocity_range"            : 0.005,         # [cm/mus] range around previous best velocity of tried gouge velocity
-        "velocity_initial_list"     : np.linspace(0.17,0.180, 5),  # [cm/mus] first guess of best velocity. There is a visual tool for it, if needed
-        "min_velocity2simulate"     : None,         # [cm/mus] if not passed, computed by assembly and gouge velocity range
-        "max_velocity2simulate"     : None,         # [cm/mus]
-        "damping_initial_list"      : np.concatenate([np.zeros(1),np.geomspace(0.00001,0.001, 2)]),
+        "velocity_initial_list"     : np.linspace(0.20,0.24, 5),  # [cm/mus] first guess of best velocity. There is a visual tool for it, if needed
+        "min_velocity2simulate"     : 0.13,         # [cm/mus] if not passed, computed by assembly and gouge velocity range
+        "max_velocity2simulate"     : 0.4,         # [cm/mus]
+        "damping_initial_list"      : np.concatenate([np.zeros(1),np.geomspace(0.00001,0.001, 5)]),
         "plot_save_interval"        : 1,
         "movie_save_interval"       : 1,
         "l2norm_plot_interval"      : 1,
