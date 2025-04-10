@@ -173,11 +173,14 @@ def process_uw_file(
 
     start_time = tm.time()
  
-    # 3) Prepare for the loop
-    velocity_ranges       = []
+    # Prepare for the loop
     L2norm_all_waveforms  = []
+    velocity_ranges       = []
     estimated_velocities  = []
+    damping_ranges        = []
+    estimated_damping     = []
     previous_best_velocity = None
+    previous_best_damping = None
 
     observed_waveform_data = uw_data_handler.waveform_data
     waveform_metadata = uw_data_handler.metadata
@@ -191,6 +194,7 @@ def process_uw_file(
             waveform_metadata       = waveform_metadata,
             outfile_name            = outfile_name,
             previous_best_velocity  = previous_best_velocity,
+            previous_best_damping   = previous_best_damping,
             stf_handler             = stf_handler,
             params                  = params,
             assembly_dict           = assembly_dict
@@ -198,18 +202,23 @@ def process_uw_file(
 
         if result["best_gouge_velocity"]:
             previous_best_velocity = result["best_gouge_velocity"]
+            previous_best_damping = result["best_gouge_damping"]
 
         velocity_ranges.append(result["gouge_velocity_list"])
-        L2norm_all_waveforms.append(result["L2norm_waveform_list"])
         estimated_velocities.append(result["best_gouge_velocity"])
+        damping_ranges.append(result["gouge_damping_list"])
+        estimated_velocities.append(result["best_gouge_damping"])
+        L2norm_all_waveforms.append(result["L2norm_waveform_list"])
 
     # Save results
     results_pkl = outfile_path.with_suffix(".pkl")
     with open(results_pkl, "wb") as f:
         pickle.dump({
-            "L2norm_all_waveforms": L2norm_all_waveforms,
-            "velocity_ranges": velocity_ranges,
-            "estimated_velocities": estimated_velocities
+            "L2norm_all_waveforms"  : L2norm_all_waveforms,
+            "velocity_ranges"       : velocity_ranges,
+            "estimated_velocities"  : estimated_velocities,
+            "damping_ranges"        : damping_ranges,
+            "estimated_damping"     : estimated_damping
         }, f)
 
     # Plot velocity & stress vs. ec_disp
@@ -249,10 +258,11 @@ def process_waveform(
     observed_waveform: np.ndarray,
     waveform_metadata: Dict[str,Any],
     outfile_name: str,
-    previous_best_velocity: Union[float, np.ndarray],
     stf_handler : UltrasonicDataHandler,
     params: Dict[str, Any],
     assembly_dict: Dict[str,Any],
+    previous_best_velocity: Union[float, np.ndarray],
+    previous_best_damping:  Union[float, np.ndarray],
 ) -> Dict[str, Union[float, np.ndarray, None]]:
 
     # Unpack needed dictionaries entries
@@ -261,7 +271,7 @@ def process_waveform(
     frequency_cutoff       = params['frequency_cutoff']
     minimum_SNR            = params['minimum_SNR']
     velocity_step          = params['velocity_step']
-    c_range                = params['velocity_range']
+    velocity_range         = params['velocity_range']
     plot_save_interval     = params['plot_save_interval']
     movie_save_interval    = params['movie_save_interval']
     l2norm_plot_interval   = params['l2norm_plot_interval']
@@ -286,18 +296,24 @@ def process_waveform(
     # Generate velocity array
     
     if previous_best_velocity:
-        c_range_waveform  = c_range
-        cmin_waveform     = previous_best_velocity - c_range_waveform
-        cmax_waveform     = previous_best_velocity + c_range_waveform
-        velocity_step_waveform   = velocity_step
-        gouge_velocity_list = np.arange(cmin_waveform, cmax_waveform, velocity_step_waveform)
-        print(f"Velocity range = [{cmin_waveform:.4f}, {cmax_waveform:.4f}] with step={velocity_step_waveform:.4f}")
-        if cmin_waveform < 0:
+        velocity_range_waveform = velocity_range
+        velocity_step_waveform  = velocity_step
+        velocity_min_waveform   = previous_best_velocity - velocity_range_waveform
+        velocity_max_waveform   = previous_best_velocity + velocity_range_waveform
+        gouge_velocity_list = np.arange(velocity_min_waveform, velocity_max_waveform, velocity_step_waveform)
+
+        damping_range_waveform = 5*previous_best_damping
+        damping_step_waveform  = previous_best_damping
+        damping_min_waveform   = max(previous_best_damping - damping_range_waveform, 0)
+        damping_max_waveform   = previous_best_damping + damping_range_waveform
+        gouge_damping_list = np.arange(damping_min_waveform, damping_max_waveform, damping_step_waveform)
+
+        print(f"Velocity range = [{velocity_min_waveform:.4f}, {velocity_max_waveform:.4f}] with step={velocity_step_waveform:.4f}")
+        if velocity_min_waveform < 0:
             sys.exit("Trying to compute for NEGATIVE gouge velocity. Killed!")
     else:
         gouge_velocity_list = params["velocity_initial_list"]
-
-    gouge_damping_list = params["damping_initial_list"]
+        gouge_damping_list  = params["damping_initial_list"]
   
     # Misfit_interval is choosen according to STF len
     stf_time = stf_handler.metadata["time_ax_waveform"]
@@ -339,11 +355,11 @@ def process_waveform(
         results = pool.map(process_velocity, args_list)
 
     # Sort results by velocity
-    results_sorted = sorted(results, key=lambda x: x[0])
-    gouge_velocity_list = np.array([res[0] for res in results_sorted])
-    L2norm_waveform_list = np.array([res[1] for res in results_sorted])
-    misfit_interval_list = np.array([res[2] for res in results_sorted])
-    gouge_damping_list = np.array([res[3] for res in results_sorted])
+    results_sorted          = sorted(results, key=lambda x: x[0])
+    gouge_velocity_list     = np.array([res[0] for res in results_sorted])
+    L2norm_waveform_list    = np.array([res[1] for res in results_sorted])
+    misfit_interval_list    = np.array([res[2] for res in results_sorted])
+    gouge_damping_list      = np.array([res[3] for res in results_sorted])
 
     # Possibly plot L2 norm vs. velocity
     save_l2norm_plot = (idx_processed_waveform % l2norm_plot_interval == 0) 
@@ -435,7 +451,8 @@ def process_waveform(
 
     simulation = UltrasonicModeler()
     simulation.forward_simulation(
-        geometry_type           ="dds",
+        absorbing               = params["absorbing"],
+        geometry_type           = "dds",
         observed_time           = observed_time,
         observed_waveform       = observed_waveform,
         frequency_cutoff        = frequency_cutoff,
@@ -457,7 +474,7 @@ def process_waveform(
     ############################################################################    
     # dc_max_start = 0
     dc_max_start = 0.1 * assembly_dict["velocity" + wave_type]
-    dc_threshold = 0.005*dc_max_start
+    dc_threshold = 0.01*dc_max_start
 
     dw_max_start = 0
     # dw_max_start = np.amax(simulation.source_handler.time_function)
@@ -467,30 +484,28 @@ def process_waveform(
     # ds_max_start = np.amax(simulation.source_handler.spatial_function)
     ds_threshold = 0.01*ds_max_start
 
-    simulation.run_local_inversion(observed_time        = observed_time,
-                                   observed_waveform    = observed_waveform,
-                                   misfit_interval      = misfit_interval,
-                                   n_iterations         = 70,
-                                   dc_max_start         = dc_max_start,
-                                   dc_threshold         = dc_threshold,
-                                   dw_max_start         = dw_max_start,
-                                   dw_threshold         = dw_threshold,
-                                   ds_max_start         = ds_max_start,
-                                   ds_threshold         = ds_threshold,
-                                   reduce_factor        = 10/9,
-                                   minimum_velocity     = minimum_velocity,
-                                   maximum_velocity     = maximum_velocity,
-                                   normalize_waveform   = True,
-                                   enable_plotting      = save_plot,
-                                   make_movie           = False,
-                                   plot_output_path     = plot_output_path,
-                                   movie_output_path    = movie_output_path
-                                   )
+    simulation.run_local_inversion(
+        n_iterations         = params["n_iterations"],
+        dc_max_start         = dc_max_start,
+        dc_threshold         = dc_threshold,
+        dw_max_start         = dw_max_start,
+        dw_threshold         = dw_threshold,
+        ds_max_start         = ds_max_start,
+        ds_threshold         = ds_threshold,
+        reduce_factor        = params["reduce_factor"],
+        normalize_waveform   = True,
+        enable_plotting      = save_plot,
+        make_movie           = False,
+        plot_output_path     = plot_output_path,
+        movie_output_path    = movie_output_path
+        )
         
     return {
         'gouge_velocity_list' : gouge_velocity_list,
-        'L2norm_waveform_list': L2norm_waveform_list,
         'best_gouge_velocity' : best_gouge_velocity,
+        'gouge_damping_list'  : gouge_damping_list,
+        'best_gouge_damping'  : best_gouge_damping,
+        'L2norm_waveform_list': L2norm_waveform_list,
     }
 
 def process_velocity(args):
@@ -520,7 +535,8 @@ def process_velocity(args):
     # Call DDS_UW_simulation with gouge_velocity_tuple
     simulation = UltrasonicModeler()
     simulation.forward_simulation(
-        geometry_type           ="dds",
+        absorbing               = params["absorbing"],
+        geometry_type           = "dds",
         observed_time           = observed_time,
         observed_waveform       = observed_waveform,
         stf_handler             = stf_handler,
@@ -531,7 +547,7 @@ def process_velocity(args):
         maximum_velocity        = maximum_velocity, 
         maximum_damping         = maximum_damping, 
         normalize_waveform      = True,
-        enable_plotting         = True,
+        enable_plotting         = False,
         plot_output_path        = plot_output_path
     )
     
@@ -541,7 +557,17 @@ def process_velocity(args):
         misfit_interval=misfit_interval
     )
 
-    # Use the first element of the tuple for sorting and returning
+    # simulation.compute_amplitude_and_phase_spectrum(
+    #     observed_time      = observed_time,
+    #     synthetic_waveform = simulation.synthetic_waveform
+    # )
+
+    # observed_amp_spectrum = np.abs(np.fft.rfft(observed_waveform))
+
+    # plt.plot(simulation.frequencies, observed_amp_spectrum)
+    # plt.plot(simulation.frequencies, simulation.amplitude_spectrum)
+    # plt.show()
+
     gouge_velocity = assembly_dict_guessed["gouge_velocity_1"]
     gouge_damping  = assembly_dict_guessed["gouge_damping_1"]
 
@@ -560,42 +586,47 @@ if __name__ == "__main__":
     
     # Basic experiment info
     machine_name    = "Brava_2"
-    experiment_name = "s0236suw03anh_30"
+    experiment_name = "s0244suwanh3_30"
     wave_type       = "_s"    # that "_" is ugly, but needed
     data_type_uw    = "uw_data/data_tsv_files" # + wave_type
     data_type_mech  = "mechanical_data"
     mech_file_name  = f"{experiment_name}_data_rp"
+    data_type       = "test"
+    # data_type       = "global_search" + wave_type + "_2025_04_09_stf_original_absorbing_1_groovegouge"
 
     # Create output directories
     outdir_path_l2norm = dir_manager.make_data_analysis_folders(
         machine_name    = machine_name,
         experiment_name = experiment_name,
-        data_types      = ["global_optimization_velocity" + wave_type]
+        data_types      = [data_type]
     )
 
     outdir_path_image = dir_manager.make_data_analysis_folders(
         machine_name    = machine_name,
         experiment_name = experiment_name,
-        data_types      = ["optimization_velocity_images_and_movie" + wave_type + "_2025_04_08_stf_local_inversion_reverse_absorbing_1_grooveramp_allsim"]
+        data_types      = [data_type + "_images_and_movie"]
     )
 
     # Basic simulation parameters 
     params = {
+        "absorbing"                 : True,
         "num_waveform2process"      : 20,         # int, equespatially waveforms to sample for processing
         "maxtime2simulate"          : 70,           # [mus]
         "frequency_cutoff"          : 4,            # [MHz] low pass onserved data and simulate up to this frequency
         "minimum_SNR"               : 3,            # skip computation until time interval where signal should be is above SNR times surely-only-noise part 
-        "velocity_step"             : 0.002,        # [cm/mus] spacing betwee tried gouge velocity
-        "velocity_range"            : 0.01,         # [cm/mus] range around previous best velocity of tried gouge velocity
-        "velocity_initial_list"     : np.linspace(0.10,0.12, 50),  # [cm/mus] first guess of best velocity. There is a visual tool for it, if needed
+        "velocity_step"             : 0.001,        # [cm/mus] spacing betwee tried gouge velocity
+        "velocity_range"            : 0.005,         # [cm/mus] range around previous best velocity of tried gouge velocity
+        "velocity_initial_list"     : np.linspace(0.17,0.22, 5),  # [cm/mus] first guess of best velocity. There is a visual tool for it, if needed
         "min_velocity2simulate"     : None,         # [cm/mus] if not passed, computed by assembly and gouge velocity range
         "max_velocity2simulate"     : None,         # [cm/mus]
-        "damping_initial_list"      : np.concatenate([np.zeros(1),np.geomspace(0.00001,0.001, 20)]),
+        "damping_initial_list"      : np.concatenate([np.zeros(1),np.geomspace(0.00001,0.001, 3)]),
         "plot_save_interval"        : 1,
         "movie_save_interval"       : 1,
         "l2norm_plot_interval"      : 1,
         "outdir_path_l2norm"        : outdir_path_l2norm[0],
-        "outdir_path_image"         : outdir_path_image[0]
+        "outdir_path_image"         : outdir_path_image[0],
+        "n_iterations"              : 7,
+        "reduce_factor"             : 10/9
     }
 
     # Load the Source Time Function
@@ -609,7 +640,7 @@ if __name__ == "__main__":
         frequency_cutoff= params["frequency_cutoff"]
     )
 
-    stf_handler.waveform_data = -stf_handler.waveform_data
+    # stf_handler.waveform_data = -stf_handler.waveform_data
 
     # Load Mechanical Data
     mech_data, sync_data, sync_peaks = MechanicalDataHandler.locate_and_load_data(

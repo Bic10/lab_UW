@@ -46,6 +46,7 @@ class UltrasonicModeler:
         maximum_velocity   : float,
         assembly_dict      : Dict[str, Any],
         misfit_interval    : np.ndarray,
+        absorbing          : bool = False,
         maximum_damping    : float = None,
         montecarlo         : Optional[Dict[str, Any]] = None,
         normalize_waveform : bool = True,
@@ -68,10 +69,24 @@ class UltrasonicModeler:
         runs the pseudo-spectral simulation, and returns the final results.
         """
 
-        self.assembly_dict = assembly_dict
-        self.stf_handler = stf_handler
-        self.frequency_cutoff = frequency_cutoff
-        self.geometry_type = geometry_type
+        # Explicitly assign each argument to `self`
+        self.geometry_type       = geometry_type
+        self.observed_time       = observed_time
+        self.observed_waveform   = observed_waveform
+        self.stf_handler         = stf_handler
+        self.frequency_cutoff    = frequency_cutoff
+        self.minimum_velocity    = minimum_velocity
+        self.maximum_velocity    = maximum_velocity
+        self.assembly_dict       = assembly_dict
+        self.misfit_interval     = misfit_interval
+        self.absorbing           = absorbing
+        self.maximum_damping     = maximum_damping
+        self.montecarlo          = montecarlo
+        self.normalize_waveform  = normalize_waveform
+        self.enable_plotting     = enable_plotting
+        self.make_movie          = make_movie
+        self.plot_output_path    = plot_output_path
+        self.movie_output_path   = movie_output_path
 
         # MONTECARLO OR DEFAULT PARAMS
         if montecarlo:
@@ -246,7 +261,8 @@ class UltrasonicModeler:
             source_spatial_function=source_handler.spatial_function,
             source_time_function=source_handler.time_function,
             velocity_model = velocity_model,
-            damping_model  = damping_model
+            damping_model  = damping_model,
+            absorbing      = absorbing
         )
 
         # EXTRACT SYNTHETIC SIGNAL AT RECEIVER
@@ -317,12 +333,27 @@ class UltrasonicModeler:
         else:
             # workaround in case something went wrong: misfit is so high this way, this wrong simulation never become the minimum for local inverison
             return 3 * LA.norm(synthetic_waveform[misfit_interval] - observed_waveform[misfit_interval], 2)        
-        
+
+    def compute_amplitude_and_phase_spectrum(self, 
+                                    observed_time     : np.ndarray,
+                                    synthetic_waveform: np.ndarray,
+                                    ) -> tuple:
+            
+            n_samples = len(observed_time)
+            dt = observed_time[1]-observed_time[0]
+            self.frequencies = np.fft.rfftfreq(n_samples, d=dt)
+
+            # Compute the FFT along the sample axis
+            fft_data = np.fft.rfft(synthetic_waveform)
+
+            # Compute amplitude and phase
+            self.amplitude_spectrum = np.abs(fft_data)
+            self.phase_spectrum = np.angle(fft_data)
+
+            return self.frequencies, self.amplitude_spectrum, self.phase_spectrum
+    
     def run_local_inversion(
         self,
-        observed_time:         np.ndarray,
-        observed_waveform:     np.ndarray,
-        misfit_interval:       np.ndarray,
         n_iterations:          int,
         dc_max_start:          float,
         dc_threshold:          float,
@@ -331,15 +362,13 @@ class UltrasonicModeler:
         ds_max_start:          float,
         ds_threshold:          float,
         reduce_factor:         float,
-        minimum_velocity:      float,
-        maximum_velocity:      float,
-        normalize_waveform:    bool = True,
-        enable_plotting    :   bool = False,
+        normalize_waveform :   bool = True,
+        enable_plotting    :   bool = True,
         make_movie         :   bool = False,
         plot_output_path   :   Optional[str] = None,
         movie_output_path  :   Optional[str] = "simulation_movie.mp4",
 
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> None:
         """
         Jointly invert for:
         1) velocity_model(x)
@@ -363,6 +392,10 @@ class UltrasonicModeler:
 
         # === UNPACK FORWARD-SIMULATION RESULTS ===
         # Store results in the instance so we can reuse them
+        minimum_velocity           = self.minimum_velocity 
+        maximum_velocity           = self.maximum_velocity
+        absorbing                  = self.absorbing
+
         initial_synthetic_waveform = self.synthetic_waveform
         initial_wavefield_forward  = self.wavefield_forward     
         velocity_model_handler     = self.velocity_model_handler
@@ -370,6 +403,10 @@ class UltrasonicModeler:
         grid_handler               = self.grid_handler
         source_handler             = self.source_handler
         receiver_handler           = self.receiver_handler
+
+        observed_time              = self.observed_time
+        observed_waveform          = self.observed_waveform
+        misfit_interval            = self.misfit_interval
 
         initial_misfit = self.compute_misfit(
             observed_waveform=observed_waveform,
@@ -470,7 +507,8 @@ class UltrasonicModeler:
                     source_spatial_function = adj_src_spatial_function,
                     source_time_function    = adj_src_time_function,
                     velocity_model          = best_velocity_model,
-                    damping_model           = best_damping_model
+                    damping_model           = best_damping_model,
+                    absorbing=absorbing
                 )
 
                 # -------------------------------------------------------------------
@@ -574,7 +612,8 @@ class UltrasonicModeler:
                 source_spatial_function = updated_source_spatial_function,
                 source_time_function    = updated_source_time_function,
                 velocity_model          = updated_velocity_model,
-                damping_model           = best_damping_model
+                damping_model           = best_damping_model,
+                absorbing               = absorbing
             )
             derivative_wavefield_forward_updated = compute_time_derivative(wavefield_forward_updated, delta_t)
 

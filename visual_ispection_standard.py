@@ -11,7 +11,7 @@ import scipy
 
 ###### INPUT #######
 machine_name = "Brava_2"
-experiment_name = "s0242s03anh_30"
+experiment_name = "s0233suw03anh_35"
 data_type = "uw_data/data_tsv_files"
 base_dir = "/home/michele/Desktop/Dottorato/active_source_implementation"
 

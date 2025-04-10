@@ -48,7 +48,7 @@ def process_uw_file(
     observed_waveform = np.mean(observed_waveform_data, axis=0)
 
     # 2) We'll run the Monte Carlo approach multiple times
-    n_repeats = 10
+    n_repeats = 20
 
     # We will store the best parameters from each run in a list of dicts
     # all_best_params = []
@@ -289,19 +289,15 @@ def process_waveform(
     # ds_max_start = np.amax(simulation.source_handler.spatial_function)
     ds_threshold = 0.01*ds_max_start
 
-    simulation.run_local_inversion(observed_time=observed_time,
-                                   observed_waveform=observed_waveform,
-                                   misfit_interval=misfit_interval,
-                                   n_iterations=70,
+    simulation.run_local_inversion(
+                                   n_iterations=params["n_iterations"],
                                    dc_max_start=dc_max_start,
                                    dc_threshold=dc_threshold,
                                    dw_max_start=dw_max_start,
                                    dw_threshold=dw_threshold,
                                    ds_max_start=ds_max_start,
                                    ds_threshold=ds_threshold,
-                                   reduce_factor=10/9,
-                                   minimum_velocity=params["min_velocity2simulate"],
-                                   maximum_velocity=params["max_velocity2simulate"],
+                                   reduce_factor=params["reduce_factor"],
                                    normalize_waveform = True,
                                    enable_plotting=True,
                                    plot_output_path=plot_output_path
@@ -312,7 +308,7 @@ def process_waveform(
                                           simulation.source_handler.time_function)
 
     if params["save_local_inversion_STF"]:
-        stf_from_inverison_outfile_name = stf_handler.infile.name + "_local_inversion_1"
+        stf_from_inverison_outfile_name = stf_handler.infile.name + params["saved_STF_file_name"]
         stf_from_inverison_outfile_path = stf_handler.infile.parent / stf_from_inverison_outfile_name
 
         stf_handler.save_waveform_json(data = stf_handler.waveform_data, 
@@ -379,18 +375,19 @@ def process_velocity(args):
     # Run forward simulation for this draw
     simulation = UltrasonicModeler()
     simulation.forward_simulation(
-        geometry_type="block",
-        observed_time=observed_time,
-        observed_waveform=observed_waveform,
-        stf_handler = stf_handler,
-        frequency_cutoff=params["frequency_cutoff"],
-        assembly_dict=assembly_dict,
-        montecarlo=montecarlo,
-        misfit_interval=misfit_interval,
-        minimum_velocity=params["min_velocity2simulate"],
-        maximum_velocity=params["max_velocity2simulate"],
-        normalize_waveform=True,
-        enable_plotting=False
+        absorbing           = params["absorbing"],
+        geometry_type       = "block",
+        observed_time       = observed_time,
+        observed_waveform   = observed_waveform,
+        stf_handler         = stf_handler,
+        frequency_cutoff    = params["frequency_cutoff"],
+        assembly_dict       = assembly_dict,
+        montecarlo          = montecarlo,
+        misfit_interval     = misfit_interval,
+        minimum_velocity    = params["min_velocity2simulate"],
+        maximum_velocity    = params["max_velocity2simulate"],
+        normalize_waveform  = True,
+        enable_plotting     = False
     )
 
     synthetic_waveform = simulation.synthetic_waveform
@@ -422,23 +419,43 @@ if __name__ == "__main__":
     dir_manager = DirectoryManager()
 
     # Basic experiment info
-    machine_name = "on_bench"
+    machine_name    = "on_bench"
     experiment_name = "STF_ss10_05"
-    wave_type = "_s"  # e.g., compressional wave
-    data_type_uw = f"uw_data/data_tsv_files{wave_type}"
+    wave_type       = "_s"  # e.g., compressional wave
+    data_type_uw    = f"uw_data/data_tsv_files{wave_type}"
+    data_type       = f"simulation_parameters{wave_type}_2025-04-10_only_STF_60s_stf_bandpass_from_original" 
 
     # Create output directories
     outdir_path_l2norm = dir_manager.make_data_analysis_folders(
         machine_name=machine_name,
         experiment_name=experiment_name,
-        data_types=[f"source_receiver_simulation_parameters{wave_type}"]
+        data_types=[data_type]
     )
     outdir_path_image = dir_manager.make_data_analysis_folders(
         machine_name=machine_name,
         experiment_name=experiment_name,
-        data_types=[f"source_receiver_simulation_parameters{wave_type}_images_and_movie_2025-04-08_only_STF_60s_stf_bandpass_from_original"]
+        data_types=["images_and_movie_" + data_type]
     )
-    print(f"Misfits will be saved at:\n{outdir_path_l2norm[0]}")
+
+    # Basic simulation parameters
+    params = {
+        "absorbing"                 : False,
+        "save_local_inversion_STF"  : True,
+        "saved_STF_file_name"       : "_local_inversion_pc",   # this string will be added to the "stf_chosen" file name, so to not overdrive the original data
+        "maxtime2simulate"          : 60,   # mus
+        "frequency_cutoff"          : 6,     # MHz
+        "minimum_SNR"               : 5,
+        "min_velocity2simulate"     : 0.2,  # cm/mus
+        "max_velocity2simulate"     : 0.4,  # cm/mus
+        "plot_save_interval"        : 1,
+        "movie_save_interval"       : 1000,
+        "l2norm_plot_interval"      : 1,
+        "number_of_waveforms2process": 10,
+        "outdir_path_l2norm"        : outdir_path_l2norm[0],
+        "outdir_path_image"         : outdir_path_image[0],
+        "n_iterations"              : 70,
+        "reduce_factor"             : 10/9
+    }
 
     # Build dictionary with assembly metadata
     block = BlockMetadataHandler.load_blocks_metadata(
@@ -453,37 +470,21 @@ if __name__ == "__main__":
     assembly_dict["receiver_position"] = assembly_dict["z"]
     assembly_dict["sample_dimensions"] = [assembly_dict["z"]] 
 
-    # Basic simulation parameters
-    params = {
-        "save_local_inversion_STF"  : True,
-        "maxtime2simulate"          : 60,   # mus
-        "frequency_cutoff"          : 6,     # MHz
-        "minimum_SNR"               : 5,
-        "min_velocity2simulate"     : 0.2,  # cm/mus
-        "max_velocity2simulate"     : 0.4,  # cm/mus
-        "plot_save_interval"        : 1,
-        "movie_save_interval"       : 1000,
-        "l2norm_plot_interval"      : 1,
-        "number_of_waveforms2process": 10,
-        "outdir_path_l2norm": outdir_path_l2norm[0],
-        "outdir_path_image": outdir_path_image[0]
-    }
-
     #### MONTE CARLO PARAMETERS DEFINED HERE ####
     global_search_space = {
-        "num_iterations": 2000,  # how many random draws to try
+        "num_iterations": 3000,  # how many random draws to try
         "steel_velocity_low": 0.315,
         "steel_velocity_high": 0.325,              
         "pzt_velocity_low": params["min_velocity2simulate"], 
         "pzt_velocity_high": params["max_velocity2simulate"],
-        "spreading_factor_low" : 1.0,
+        "spreading_factor_low" : 0.2,
         "spreading_factor_high": 1.0,
         # Uniform range for positions relative to edges pzt-steel
         "position2edge_low" : -0.5,
-        "position2edge_high": -0.5,
+        "position2edge_high": +0.5,
         # how many nodes to use to approximate the tx/rx positions in case they do not correspond precisely to one node
-        "radius_factor_low": 1.,
-        "radius_factor_high": 1.,
+        "radius_factor_low": 0.3,
+        "radius_factor_high": 2.,
     }
 
     # Make UW path list
