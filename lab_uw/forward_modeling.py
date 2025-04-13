@@ -120,12 +120,15 @@ class UltrasonicModeler:
             side2_params      = assembly_dict["side2_params"] 
             pzt_layer_width   = side1_params["pzt_layer_width"]
             pla_layer_width   = side1_params["pla_layer_width"]
+            self.acquisition_time = self.assembly_dict["acquisition_time"] # contain the time, referred to the start of the experiment, when the waveforms are acquired
 
         elif self.geometry_type.lower() == "block":
             # Single-block geometry
             pzt_layer_width      = assembly_dict["pzt_layer_width"]     
             pla_layer_width      = assembly_dict["pla_layer_width"] 
-            maximum_damping      = 0
+            maximum_damping      = 0.
+            self.acquisition_time= 0.
+
         else:
             raise ValueError(f"Unknown geometry_type: {self.geometry_type}.")
 
@@ -197,6 +200,10 @@ class UltrasonicModeler:
             steel_velocity = assembly_dict["velocity" + self.wave_type]
             pzt_velocity   = assembly_dict["pzt_velocity" + self.wave_type]
             pla_velocity   = assembly_dict["pla_velocity" + self.wave_type]
+            gouge_velocity_1 = 0.
+            gouge_velocity_2 = 0.
+            gouge_damping_1  = 0.
+            gouge_damping_2  = 0.
 
             velocity_model_handler = VelocityModel1D_SingleBlock(
                 x=spatial_axis,
@@ -209,9 +216,6 @@ class UltrasonicModeler:
                 pzt_velocity=pzt_velocity,
                 pla_velocity=pla_velocity,
             )
-
-            # velocity_model_handler.apply_smoothing_between("pzt_1", "steel_block", len(velocity_model_handler.idx_dict["pzt_1"]))
-            # velocity_model_handler.apply_smoothing_between("steel_block", "pzt_2", len(velocity_model_handler.idx_dict["pzt_1"]))
 
         velocity_model = velocity_model_handler.velocity_array
         damping_model  = velocity_model_handler.damping_array if geometry_type == "dds" else 0
@@ -237,10 +241,6 @@ class UltrasonicModeler:
         
         source_handler.interpolate_time_function(dt=dt, simulation_time=simulation_time)
         source_handler.create_spatial_function(spatial_axis=spatial_axis, dx=dx)
-
-        # correct for geo spreading the numbers come fro the amplitude and distance of the block experiment (400 u.a. and 5 cm)
-        # if geometry_type == "dds":
-        #     source_handler.time_function *= (5/5)*side1_params["z_pzt2grove"] 
 
         # BUILD RECEIVER
         self.receiver_position_relative = (
@@ -296,20 +296,43 @@ class UltrasonicModeler:
                 synthetic_waveform[3*start_A0:3*end_A0+end_A0] /= A0/A1
             except:
                 pass
-            synthetic_waveform *= np.sum(observed_waveform[misfit_interval])/np.sum(synthetic_waveform[misfit_interval]) 
+            synthetic_waveform *= np.sum(np.abs(observed_waveform[misfit_interval]))/np.sum(np.abs(synthetic_waveform[misfit_interval])) 
 
-        # else: 
-        #     synthetic_waveform *=  1
+        #-------------------------------------------
+        # COMPUTE MISFIT
+        #-------------------------------------------
+        L2norm = self.compute_misfit(
+            observed_waveform   = observed_waveform,
+            synthetic_waveform  = synthetic_waveform,
+            misfit_interval     = misfit_interval
+        )
+
+        # Store results in the instance so we can reuse them
+        self.synthetic_waveform     = synthetic_waveform
+        self.wavefield_forward      = wavefield_forward
+        self.velocity_model_handler = velocity_model_handler
+        self.sim_time_handler       = sim_time_handler
+        self.grid_handler           = grid_handler
+        self.source_handler         = source_handler
+        self.receiver_handler       = receiver_handler
+        self.misfit                 = L2norm
 
         # Optionally do plotting or movie
         if enable_plotting:
+            damping_label = str(round(gouge_damping_1,5)).replace(".",",")
+            velocity_label = str(round(1e4*gouge_velocity_1,0)).replace(".",",")
+            acq_time_label   = str(round(self.acquisition_time,5)).replace(".",",")
+            label = f"_acq_time_{acq_time_label}_vel_{velocity_label}_damping_{damping_label}_global_search_misfit_{self.misfit:.0f}_waveform"
+
+            plot_output_name = plot_output_path.name + label
+            plot_output_path = plot_output_path.parent / plot_output_name
             self.plotter.plot_simulation_waveform(
-                t=observed_time,
-                sp_simulated=synthetic_waveform,
-                sp_recorded=observed_waveform,
-                misfit_interval=misfit_interval,
-                outfile_path=plot_output_path
-            )
+            t=observed_time,
+            sp_simulated=synthetic_waveform,
+            sp_recorded=observed_waveform,
+            misfit_interval=misfit_interval,
+            outfile_path=plot_output_path
+        )
 
         if make_movie:
             self.plotter.make_movie_from_simulation(
@@ -322,14 +345,6 @@ class UltrasonicModeler:
                 idx_dict=idx_dict,
             )
 
-        # Store results in the instance so we can reuse them
-        self.synthetic_waveform     = synthetic_waveform
-        self.wavefield_forward      = wavefield_forward
-        self.velocity_model_handler = velocity_model_handler
-        self.sim_time_handler       = sim_time_handler
-        self.grid_handler           = grid_handler
-        self.source_handler         = source_handler
-        self.receiver_handler       = receiver_handler
 
     def compute_misfit(self,
         observed_waveform: np.ndarray,
@@ -366,15 +381,15 @@ class UltrasonicModeler:
     def run_local_inversion(
         self,
         n_iterations:          int,
-        dc_max_start:          float,
-        dc_threshold:          float,
-        da_max_start:          float,
-        da_threshold:          float,
-        dw_max_start:          float,
-        dw_threshold:          float,
-        ds_max_start:          float,
-        ds_threshold:          float,
-        reduce_factor:         float,
+        dc_max_start:          float = 0,
+        dc_threshold:          float = 0,
+        da_max_start:          float = 0,
+        da_threshold:          float = 0,
+        dw_max_start:          float = 0,
+        dw_threshold:          float = 0,
+        ds_max_start:          float = 0,
+        ds_threshold:          float = 0,
+        reduce_factor:         float = 1/2,
         normalize_waveform :   bool = True,
         enable_plotting    :   bool = True,
         make_movie         :   bool = False,
@@ -408,11 +423,8 @@ class UltrasonicModeler:
         observed_waveform          = self.observed_waveform
         misfit_interval            = self.misfit_interval
 
-        initial_misfit = self.compute_misfit(
-            observed_waveform=observed_waveform,
-            synthetic_waveform=initial_synthetic_waveform,
-            misfit_interval=misfit_interval,
-        )
+        initial_misfit             = self.misfit
+
         print(f"Initial misfit: {initial_misfit}")
 
         # Basic references
@@ -641,13 +653,13 @@ class UltrasonicModeler:
                 stf_duration = self.stf_handler.metadata["time_ax_waveform"][-1]-self.stf_handler.metadata["time_ax_waveform"][0]
                 start_A0 = np.searchsorted(observed_time, first_arrival)
                 end_A0 = np.searchsorted(observed_time, first_arrival + stf_duration)
-                A0 = np.amax(observed_waveform[start_A0:end_A0])
+                A0 = np.amax(np.abs(observed_waveform[start_A0:end_A0]))
                 try:
-                    A1 = np.amax(observed_waveform[3*start_A0:3*start_A0+end_A0])
+                    A1 = np.amax(np.abs(observed_waveform[3*start_A0:3*start_A0+end_A0]))
                     updated_synthetic_waveform[3*start_A0:3*end_A0+end_A0] /= A0/A1
                 except:
                     pass
-                updated_synthetic_waveform *= np.sum(observed_waveform[misfit_interval])/np.sum(updated_synthetic_waveform[misfit_interval])
+                updated_synthetic_waveform *= np.sum(abs(observed_waveform[misfit_interval]))/np.sum(np.abs(updated_synthetic_waveform[misfit_interval]))
 
             # Compute updated misfit
             updated_misfit = self.compute_misfit(
@@ -693,10 +705,18 @@ class UltrasonicModeler:
         self.source_handler.time_function          = best_source_time_function
         self.source_handler.spatial_function       = best_source_spatial_function
         self.receiver_handler.spatial_function     = best_receiver_spatial_function         
+        self.misfit                                = best_misfit
 
+        self.average_gouge_damping    = np.mean(self.velocity_model_handler.damping_array[regions_to_update]) 
+        self.average_gouge_velocity   = np.mean(self.velocity_model_handler.velocity_array[regions_to_update]) 
+    
         if enable_plotting:
             if plot_output_path:
-                plot_output_name = plot_output_path.name + "_local_inversion"
+                acq_time_label   = str(round(self.acquisition_time,5)).replace(".",",")
+                damping_label    = str(round(self.average_gouge_damping,5)).replace(".",",")
+                velocity_label   = str(round(1e4*self.average_gouge_velocity,5)).replace(".",",")  
+                label = f"_acq_time_{acq_time_label}_vel_{velocity_label}_damping_{damping_label}_FWI_misfit_{best_misfit:.0f}_waveform"
+                plot_output_name = plot_output_path.name + label
                 plot_output_path = plot_output_path.parent / plot_output_name
 
                 self.plotter.plot_simulation_waveform(
@@ -708,12 +728,12 @@ class UltrasonicModeler:
                 )
 
                 if dc_max_start:
-                    model_output_name = plot_output_path.name + "_velocity_model"
+                    model_output_name = plot_output_path.name.replace("_waveform","_velocity_model")
                     model_output_path = plot_output_path.parent / model_output_name
                     self.velocity_model_handler.plot(model=self.velocity_model_handler.velocity_array, outfile_path=model_output_path)
 
                 if da_max_start:
-                    model_output_name = plot_output_path.name + "_damping_model"
+                    model_output_name = plot_output_path.name.replace("_waveform","_damping_model")
                     model_output_path = plot_output_path.parent / model_output_name
                     self.velocity_model_handler.plot(model=self.velocity_model_handler.damping_array, outfile_path=model_output_path)
 

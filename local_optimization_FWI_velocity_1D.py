@@ -204,33 +204,15 @@ def process_uw_file(
                     "estimated_damping"     : result["best_gouge_damping"]
                 }, f)
 
-            idx_dict = simulation.velocity_model_handler.idx_dict
-            velocity_model = simulation.velocity_model_handler.velocity_array
-            damping_model = simulation.velocity_model_handler.damping_array
-
-            regions_to_update = np.concatenate([idx_dict["groove_sb1"], 
-                                    idx_dict["gouge_1"],
-                                    idx_dict["groove_cb1"],
-                                    idx_dict["groove_cb2"],
-                                    idx_dict["gouge_2"],
-                                    idx_dict["groove_sb2"]
-                                ])
-            
-            velo = np.mean(velocity_model[regions_to_update])
-            damp = np.mean(damping_model[regions_to_update])
-
-            print(velo)
-            print(damp)
-
             first_waveform = False
 
         else:
             # dc_max_start = 0
-            dc_max_start = 0.1 * velo
+            dc_max_start = 0.1 * simulation.average_gouge_velocity
             dc_threshold = 0.01*dc_max_start
 
             # da_max_start = 0
-            da_max_start = 0.1 * damp
+            da_max_start = 0.1 * simulation.average_gouge_damping
             da_threshold = 0.01* da_max_start
 
             dw_max_start = 0
@@ -247,32 +229,16 @@ def process_uw_file(
             plot_save_interval     = params['plot_save_interval']
             movie_save_interval    = params['movie_save_interval']
             outdir_path_image      = params['outdir_path_image']
-
-            acquisition_time       = assembly_dict["acquisition_time"] # contain the time, referred to the start of the experiment, when the waveforms are acquired
-            acq_time_label         = str(round(acquisition_time,5)).replace(".",",")
             idx_processed_waveform = assembly_dict["idx_processed_waveform"]
 
             # Construct output paths
             # Determine if we save plots and/or movies
             save_plot  = (idx_processed_waveform % plot_save_interval == 0) 
             save_movie = (idx_processed_waveform % movie_save_interval == 0) 
-
-            best_gouge_damping = np.mean(simulation.velocity_model_handler.damping_array[regions_to_update]) 
-            best_gouge_velocity = velo
-            damping_label = str(round(best_gouge_damping,5)).replace(".",",")
-
+        
             if save_plot:
-                plot_output_name = f"{outfile_name}_waveform_{acq_time_label}_vel_{1e4*best_gouge_velocity:.0f}_damping_{damping_label}"
+                plot_output_name = f"{outfile_name}_rec_n__{idx_processed_waveform}"
                 plot_output_path = outdir_path_image / plot_output_name
-            else:
-                plot_output_path = None
-
-            if save_movie:
-
-                movie_output_name = f"{outfile_name}_waveform_{acq_time_label}_vel_{1e4*best_gouge_velocity:.0f}_damping_{damping_label}.mp4"
-                movie_output_path = outdir_path_image / movie_output_name
-            else:
-                movie_output_path = None
 
             simulation.observed_waveform = observed_waveform
             simulation.run_local_inversion(
@@ -291,50 +257,6 @@ def process_uw_file(
                 normalize_waveform   = True,
                 make_movie           = False,
             )
-
-            idx_dict = simulation.velocity_model_handler.idx_dict
-            velocity_model = simulation.velocity_model_handler.velocity_array
-            regions_to_update = np.concatenate([idx_dict["groove_sb1"], 
-                                    idx_dict["gouge_1"],
-                                    idx_dict["groove_cb1"],
-                                    idx_dict["groove_cb2"],
-                                    idx_dict["gouge_2"],
-                                    idx_dict["groove_sb2"]
-                                ])
-            
-            velo = np.mean(velocity_model[regions_to_update])
-            print(velo)
-
-    # # Plot velocity & stress vs. ec_disp
-    # plotter = Plotter()
-    # plot_name_ec_disp = f"{outfile_name}_velocity_stress_vs_ec_disp"
-    # plot_path_ec_disp = outdir_path_image / plot_name_ec_disp
-    # plotter.plot_velocity_and_stresses(
-    #     x_values        = mechanical_dataframe["ec_disp_mm"],
-    #     velocities      = np.array(estimated_velocities),
-    #     normal_stress   = mechanical_dataframe["normal_stress_MPa"].values,
-    #     shear_stress    = mechanical_dataframe["shear_stress_MPa"].values,
-    #     x_label         = "ec_disp_mm",
-    #     velocity_label  = "Gouge Velocity (cm/µs)",
-    #     stress_labels   = ("Normal Stress (MPa)", "Shear Stress (MPa)"),
-    #     title           = "Gouge Velocity and Stress vs ec_disp_mm",
-    #     outfile_path    = plot_path_ec_disp
-    # )
-
-    # # Plot velocity & stress vs. time_s
-    # plot_name_time = f"{outfile_name}_velocity_stress_vs_time"
-    # plot_path_time = outdir_path_image / plot_name_time
-    # plotter.plot_velocity_and_stresses(
-    #     x_values        = mechanical_dataframe["time_s"],
-    #     velocities      = np.array(estimated_velocities),
-    #     normal_stress   = mechanical_dataframe["normal_stress_MPa"].values,
-    #     shear_stress    = mechanical_dataframe["shear_stress_MPa"].values,
-    #     x_label         = "time_s",
-    #     velocity_label  = "Gouge Velocity (cm/µs)",
-    #     stress_labels   = ("Normal Stress (MPa)", "Shear Stress (MPa)"),
-    #     title           = "Gouge Velocity and Stress vs time_s",
-    #     outfile_path    = plot_path_time
-    # )
 
     print(f"--- {tm.time() - start_time:.2f} seconds for processing {infile_path.name} ---")
 
@@ -476,14 +398,14 @@ def global_search_waveform(
 
     # Construct output paths
     if save_plot:
-        plot_output_name = f"{outfile_name}_waveform_{acq_time_label}_vel_{1e4*best_gouge_velocity:.0f}_damping_{damping_label}"
+        plot_output_name = f"{outfile_name}_rec_n_{idx_processed_waveform}"
         plot_output_path = outdir_path_image / plot_output_name
     else:
         plot_output_path = None
 
     if save_movie:
 
-        movie_output_name = f"{outfile_name}_waveform_{acq_time_label}_vel_{1e4*best_gouge_velocity:.0f}_damping_{damping_label}.mp4"
+        movie_output_name = f"{outfile_name}_acq_time_{acq_time_label}_vel_{1e4*best_gouge_velocity:.0f}_damping_{damping_label}.mp4"
         movie_output_path = outdir_path_image / movie_output_name
     else:
         movie_output_path = None
@@ -573,10 +495,8 @@ def global_search_run(args):
     ) = args
 
     # Unpack parameters
-    damping_label = str(round(assembly_dict_guessed["gouge_damping_1"],5)).replace(".",",")
-    velocity_label = str(round(1e4*assembly_dict_guessed["gouge_velocity_1"],0)).replace(".",",")
 
-    plot_output_name = f"{velocity_label}_{damping_label}"
+    plot_output_name = f"first_guess_"
     plot_output_path = params["outdir_path_image"] / plot_output_name
     frequency_cutoff = params['frequency_cutoff']
     minimum_velocity = params["min_velocity2simulate"] if params["min_velocity2simulate"] else min_assembly_velocity(assembly_dict_guessed)
@@ -602,12 +522,6 @@ def global_search_run(args):
         plot_output_path        = plot_output_path
     )
     
-    L2norm_new = simulation.compute_misfit(
-        observed_waveform=observed_waveform,
-        synthetic_waveform=simulation.synthetic_waveform,
-        misfit_interval=misfit_interval
-    )
-
     # simulation.compute_amplitude_and_phase_spectrum(
     #     observed_time      = observed_time,
     #     synthetic_waveform = simulation.synthetic_waveform
@@ -619,13 +533,12 @@ def global_search_run(args):
     # plt.plot(simulation.frequencies, simulation.amplitude_spectrum)
     # plt.show()
 
+    L2norm_new = simulation.misfit
     gouge_velocity = assembly_dict_guessed["gouge_velocity_1"]
     gouge_damping  = assembly_dict_guessed["gouge_damping_1"]
-
     theo_arrival_time = observed_time[misfit_interval][0]
     print(f"\tVelocity: {1e4*gouge_velocity:.0f}, damping:{gouge_damping:.5f}, Theo arrival time: {theo_arrival_time:.2f} => Misfit: {L2norm_new:.1f}")
 
-    del simulation
     return gouge_velocity, L2norm_new, misfit_interval, gouge_damping
 
 ###############################################################################################################
@@ -642,7 +555,7 @@ if __name__ == "__main__":
     data_type_uw    = "uw_data/data_tsv_files" # + wave_type
     data_type_mech  = "mechanical_data"
     mech_file_name  = f"{experiment_name}_data_rp"
-    outfolder_name  = "local_inversion" + wave_type + "_2025_04_12_stf_local_inversion_freesurface_1_groovegouge"
+    outfolder_name  = "local_inversion" + wave_type + "_2025_04_13_stf_local_inversion_absorbing_1_velgouge_damgouge"
 
     # Create output directories
     outdir_path_l2norm = dir_manager.make_data_analysis_folders(
@@ -659,15 +572,15 @@ if __name__ == "__main__":
 
     # Basic simulation parameters 
     params = {
-        "absorbing"                 : False,
+        "absorbing"                 : True,
         "num_waveform2process"      : None,         # int, equespatially waveforms to sample for processing
         "maxtime2simulate"          : 50,           # [mus]
         "frequency_cutoff"          : 4,            # [MHz] low pass onserved data and simulate up to this frequency
         "minimum_SNR"               : 3,            # skip computation until time interval where signal should be is above SNR times surely-only-noise part 
-        "velocity_initial_list"     : np.linspace(0.1800,0.2100, 30),  # [cm/mus] first guess of best velocity. There is a visual tool for it, if needed
+        "velocity_initial_list"     : np.linspace(0.1550,0.1750, 20),  # [cm/mus] first guess of best velocity. There is a visual tool for it, if needed
         "min_velocity2simulate"     : None,         # [cm/mus] if not passed, computed by assembly and gouge velocity range
         "max_velocity2simulate"     : None,         # [cm/mus]
-        "damping_initial_list"      : np.linspace(0.0002,0.0008, 30),
+        "damping_initial_list"      : np.linspace(0.0001,0.0008, 20),
         "plot_save_interval"        : 1,
         "movie_save_interval"       : 1,
         "l2norm_plot_interval"      : 1,
@@ -717,8 +630,6 @@ if __name__ == "__main__":
     assembly_dict["velocity" + wave_type] = side1_params["velocity" + wave_type]
     # Duct-taper to check mininimum possible arrival time. TO BE REMOVED!!!
     params["steel_only_time_p_wave"] = compute_dds_travel_time(assembly_dict=assembly_dict,wave_type="_p")
-    # Duct-taper to check pzt velocity removal effects. TO BE REMOVED!!!
-    # assembly_dict["side1_params"]["pzt_velocity" + wave_type] = assembly_dict["side1_params"]["velocity" + wave_type]
     
     # Make UW path list
     infile_path_list_uw = sorted( dir_manager.make_infile_path_list(machine_name, experiment_name, data_type=data_type_uw))

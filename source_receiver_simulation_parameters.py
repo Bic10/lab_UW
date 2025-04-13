@@ -48,7 +48,7 @@ def process_uw_file(
     observed_waveform = np.mean(observed_waveform_data, axis=0)
 
     # 2) We'll run the Monte Carlo approach multiple times
-    n_repeats = 20
+    n_repeats = 10
 
     # We will store the best parameters from each run in a list of dicts
     # all_best_params = []
@@ -268,15 +268,15 @@ def process_waveform(
     scatter_title = f"L2 vs. Parameters\n{outfile_name}"
     scatter_outpath = outdir_path_image / f"{outfile_name}_param_vs_L2.png"
     param_list = [
-        # ("Steel Velocity (cm/µs)", steel_array),
-        # ("PZT Velocity (cm/µs)",   pzt_array),
-        # ("Spread Tx",              spread_tx_array),
-        # ("Spread Rx",              spread_rx_array),
-        # ("Pos2Edge Tx",            pos_tx_array),
-        # ("Pos2Edge Rx",            pos_rx_array),
+        ("Steel Velocity (cm/µs)", steel_array),
+        ("PZT Velocity (cm/µs)",   pzt_array),
+        ("Spread Tx",              spread_tx_array),
+        ("Spread Rx",              spread_rx_array),
+        ("Pos2Edge Tx",            pos_tx_array),
+        ("Pos2Edge Rx",            pos_rx_array),
         # ("Radius Factor Tx",       rad_tx_array),
         # ("Radius Factor Rx",       rad_rx_array),
-        ("multiplier_STF",           multiplier_array)
+        # ("multiplier_STF",           multiplier_array)
     ]
 
     plotter.plot_scatter_l2_vs_parameters(
@@ -439,8 +439,7 @@ if __name__ == "__main__":
     experiment_name = "STF_ss10_05"
     wave_type       = "_s"  # e.g., compressional wave
     data_type_uw    = f"uw_data/data_tsv_files{wave_type}"
-    outfolder_name  = f"simulation_parameters{wave_type}_2025-04-10_only_STF_60s_stf_bandpass_from_original" 
-    outfolder_name  = "set_STF_amplitude"
+    outfolder_name  = f"simulation_parameters{wave_type}_2025-04-13_only_STF_30s_stf_bandpass_from_original_multiplier" 
 
     # Create output directories
     outdir_path_l2norm = dir_manager.make_data_analysis_folders(
@@ -458,7 +457,7 @@ if __name__ == "__main__":
     params = {
         "absorbing"                 : False,
         "save_local_inversion_STF"  : True,
-        "saved_STF_file_name"       : "_multiplier",   # this string will be added to the "stf_chosen" file name, so to not overdrive the original data
+        "saved_STF_file_name"       : "_local_inversion",   # this string will be added to the "stf_chosen" file name, so to not overdrive the original data
         "maxtime2simulate"          : 30,   # mus
         "frequency_cutoff"          : 6,     # MHz
         "minimum_SNR"               : 5,
@@ -470,7 +469,7 @@ if __name__ == "__main__":
         "number_of_waveforms2process": 10,
         "outdir_path_l2norm"        : outdir_path_l2norm[0],
         "outdir_path_image"         : outdir_path_image[0],
-        "n_iterations"              : 1,
+        "n_iterations"              : 40,
         "reduce_factor"             : 10/9
     }
 
@@ -489,21 +488,21 @@ if __name__ == "__main__":
 
     #### MONTE CARLO PARAMETERS DEFINED HERE ####
     global_search_space = {
-        "num_iterations"       : 10,  # how many random draws to try
-        "steel_velocity_low"   : assembly_dict["velocity" + wave_type],
-        "steel_velocity_high"  : assembly_dict["velocity" + wave_type],              
-        "pzt_velocity_low"     : assembly_dict["pzt_velocity" + wave_type], 
-        "pzt_velocity_high"    : assembly_dict["pzt_velocity" + wave_type],
-        "spreading_factor_low" : 1.0,
+        "num_iterations"       : 1000,  # how many random draws to try
+        "steel_velocity_low"   : assembly_dict["velocity" + wave_type] - 0.005,
+        "steel_velocity_high"  : assembly_dict["velocity" + wave_type] + 0.005,              
+        "pzt_velocity_low"     : params["min_velocity2simulate"], # assembly_dict["pzt_velocity" + wave_type], 
+        "pzt_velocity_high"    : params["max_velocity2simulate"], # assembly_dict["pzt_velocity" + wave_type],
+        "spreading_factor_low" : 0.1,
         "spreading_factor_high": 1.0,
         # Uniform range for positions relative to edges pzt-steel
-        "position2edge_low"    : -0.5,
-        "position2edge_high"   : -0.5,
+        "position2edge_low"    : -0.2,
+        "position2edge_high"   : 0.,
         # how many nodes to use to approximate the tx/rx positions in case they do not correspond precisely to one node
         "radius_factor_low"    : 1.0,
         "radius_factor_high"   : 1.0,
-        "min_multiplier"       : 0.1,
-        "max_multiplier"       : 1.5
+        "min_multiplier"       : 1.,
+        "max_multiplier"       : 1.
     }
 
     # Make UW path list
@@ -525,7 +524,9 @@ if __name__ == "__main__":
             machine_name_stf=machine_name,
             experiment_name_stf=experiment_name,
             data_type_stf="data_analysis/source_time_functions" + wave_type,
-            stf_chosen= "width250_volt70_local_inversion_bigboss",
+            # stf_chosen= "width250_volt70_local_inversion_bigboss",
+            stf_chosen= "width250_volt70_multiplier",
+
             # stf_chosen=stf_chosen,
             frequency_cutoff= 12.5  # LEAVE THE NIQUIST, BUT FIX IT! SOMEHOW THE LOWPASS IS WRONG, IT DISTORTS THE WAVE
         )
