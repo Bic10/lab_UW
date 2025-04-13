@@ -601,7 +601,7 @@ if __name__ == "__main__":
     data_type_mech  = "mechanical_data"
     mech_file_name  = f"{experiment_name}_data_rp"
     outfolder_name  = "local_inversion" + wave_type + "_2025_04_14_stf_local_inversion_freesurface_1_velramp_damramp"
-
+    outfolder_name = "2025_04_14_test"
     # Create output directories
     outdir_path_l2norm = dir_manager.make_data_analysis_folders(
         machine_name    = machine_name,
@@ -622,10 +622,10 @@ if __name__ == "__main__":
         "maxtime2simulate"          : 50,           # [mus]
         "frequency_cutoff"          : 4,            # [MHz] low pass onserved data and simulate up to this frequency
         "minimum_SNR"               : 3,            # skip computation until time interval where signal should be is above SNR times surely-only-noise part 
-        "velocity_initial_list"     : np.linspace(0.1550,0.1750, 20),  # [cm/mus] first guess of best velocity. There is a visual tool for it, if needed
+        "velocity_initial_list"     : np.linspace(0.1550,0.1750, 5),  # [cm/mus] first guess of best velocity. There is a visual tool for it, if needed
         "min_velocity2simulate"     : None,         # [cm/mus] if not passed, computed by assembly and gouge velocity range
         "max_velocity2simulate"     : None,         # [cm/mus]
-        "damping_initial_list"      : np.linspace(0.0001,0.0008, 20),
+        "damping_initial_list"      : np.linspace(0.0001,0.0008, 5),
         "plot_save_interval"        : 1,
         "movie_save_interval"       : 1,
         "l2norm_plot_interval"      : 1,
@@ -681,8 +681,10 @@ if __name__ == "__main__":
  
     # Process each UW file
     for chosen_uw_file, infile_path in enumerate(infile_path_list_uw):
+        infile_name = infile_path.name.split(".")[0]
 
-        if infile_path != "007_hold1000sec.bscan.tsv":
+        if infile_name != "007_hold1000sec":
+            print(infile_name)
             continue
 
         mech_data_slice = mechdata_slice4uw_processing(mech_data,

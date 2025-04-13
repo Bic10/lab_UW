@@ -331,7 +331,7 @@ def process_waveform(
             b, a = butter_bandpass(lowcut, highcut, fs, order=order)
             y = lfilter(b, a, data)
             return y
-        stf_handler.waveform_data = butter_bandpass_filter(stf_handler.waveform_data, 0.25, 12.5, 25)    
+        stf_handler.waveform_data = butter_bandpass_filter(stf_handler.waveform_data, 0.25, 12.4, 25)    
 
         stf_handler.save_waveform_json(data = stf_handler.waveform_data, 
                                         metadata = stf_handler.metadata, 
