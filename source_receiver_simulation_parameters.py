@@ -506,7 +506,7 @@ if __name__ == "__main__":
         "spreading_factor_low" : 0.1,
         "spreading_factor_high": 1.0,
         # Uniform range for positions relative to edges pzt-steel
-        "position2edge_low"    : -0.2,
+        "position2edge_low"    : -0.8,
         "position2edge_high"   : 0.,
         # how many nodes to use to approximate the tx/rx positions in case they do not correspond precisely to one node
         "radius_factor_low"    : 1.0,

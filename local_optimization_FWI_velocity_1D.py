@@ -187,7 +187,7 @@ def process_uw_file(
 
         if first_waveform:
 
-            _, result = global_search_waveform(
+            simulation, result = global_search_waveform(
                 observed_waveform       = observed_waveform,
                 waveform_metadata       = waveform_metadata,
                 outfile_name            = outfile_name,
@@ -212,13 +212,13 @@ def process_uw_file(
             first_waveform = False
 
         else:
-            velo_mean =  np.mean(result["gouge_velocity_model"])
+            velo_mean =  simulation.average_gouge_velocity
             velo_min  = velo_mean - 0.03 * velo_mean
             velo_max  = velo_mean + 0.03 * velo_mean
             velo_step = 0.001 * velo_mean
             params["velocity_initial_list"] = np.arange(velo_min, velo_max, velo_step)
 
-            damp_mean =  np.mean(result["gouge_damping_model"])
+            damp_mean =  simulation.average_gouge_damping
             damp_min  = damp_mean - 0.05 * damp_mean
             damp_max  = damp_mean + 0.05 * damp_mean
             damp_step = 0.01 * damp_mean

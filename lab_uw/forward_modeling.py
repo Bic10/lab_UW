@@ -388,6 +388,7 @@ class UltrasonicModeler:
         ds_max_start:          float = 0,
         ds_threshold:          float = 0,
         reduce_factor:         float = 1/2,
+        misfit_thresold    :   float = 0.5,
         normalize_waveform :   bool = True,
         enable_plotting    :   bool = True,
         make_movie         :   bool = False,
@@ -480,7 +481,8 @@ class UltrasonicModeler:
 
         best_synthetic_waveform          = initial_synthetic_waveform.copy()
         best_misfit                      = initial_misfit
-
+        updated_misfit                   = initial_misfit
+        previous_misfit                  = initial_misfit  # let's speed: if 2 misfit differ for less than another threshold value, stop
         # Step-size management
         dc_max = dc_max_start
         da_max = da_max_start
@@ -496,7 +498,7 @@ class UltrasonicModeler:
             if (dc_max < dc_threshold) or (dw_max < dw_threshold) or ((ds_max < ds_threshold)) or (da_max < da_threshold):
                 print("Step size dropped below threshold; stopping.")
                 break
-
+            
             # Prepare updated arrays from 'best'
             updated_velocity_model            = best_velocity_model.copy()
             updated_damping_model             = best_damping_model.copy()
@@ -658,8 +660,6 @@ class UltrasonicModeler:
                     end_A0 = np.searchsorted(observed_time, first_arrival + stf_duration)
                     updated_synthetic_waveform *= np.sum(abs(observed_waveform[misfit_interval]))/np.sum(np.abs(updated_synthetic_waveform[misfit_interval]))
 
-
-
             # Compute updated misfit
             updated_misfit = self.compute_misfit(
                 observed_waveform=observed_waveform,
@@ -690,7 +690,13 @@ class UltrasonicModeler:
 
                 best_misfit                         = updated_misfit
 
+            elif (previous_misfit-updated_misfit) < misfit_thresold:
+                print("Misfit updating is below threshold. Stopping!")
+                break
+            
             else:
+                previous_misfit = updated_misfit
+
                 updating = False
                 dc_max /= reduce_factor
                 da_max /= reduce_factor
