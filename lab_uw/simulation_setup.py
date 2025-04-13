@@ -196,13 +196,13 @@ class VelocityModel1DBase(ABC):
             self.velocity_array[indices] = velocity
 
 
-    def plot(self, outfile_path: Optional[str] = None):
+    def plot(self, model, outfile_path: Optional[str] = None):
         if outfile_path is None:
             outfile_path = self.outfile_path
 
         Plotter().plot_velocity_model(
             x=self.x,
-            c=self.velocity_array,
+            c=model,
             layer_starts=self.layer_starts,
             pzt_layer_width=self.pzt_layer_width,
             pla_layer_width=self.pla_layer_width,
