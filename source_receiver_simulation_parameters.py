@@ -323,6 +323,16 @@ def process_waveform(
         stf_from_inverison_outfile_name = stf_handler.infile.name + params["saved_STF_file_name"]
         stf_from_inverison_outfile_path = stf_handler.infile.parent / stf_from_inverison_outfile_name
 
+        from scipy.signal import butter, lfilter
+        def butter_bandpass(lowcut, highcut, fs, order=5):
+            return butter(order, [lowcut, highcut], fs=fs, btype='band')
+
+        def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
+            b, a = butter_bandpass(lowcut, highcut, fs, order=order)
+            y = lfilter(b, a, data)
+            return y
+        stf_handler.waveform_data = butter_bandpass_filter(stf_handler.waveform_data, 0.25, 12.5, 25)    
+
         stf_handler.save_waveform_json(data = stf_handler.waveform_data, 
                                         metadata = stf_handler.metadata, 
                                         outfile_path = stf_from_inverison_outfile_path)

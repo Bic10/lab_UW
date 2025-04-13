@@ -169,8 +169,6 @@ def process_uw_file(
   # Derive output filenames using pathlib
     outdir_path_l2norm = params["outdir_path_l2norm"]
     outdir_path_image  = params["outdir_path_image"]
-    outfile_name = infile_path.name.split(".")[0]
-    outfile_path = outdir_path_l2norm / outfile_name
     start_time = tm.time()
  
     # Prepare for the loop
@@ -182,9 +180,14 @@ def process_uw_file(
     for observed_waveform, mech_data in zip(observed_waveform_data, mechanical_dataframe.itertuples()):
 
         update_assembly_dict_with_mech_data(assembly_dict=assembly_dict, mech_data=mech_data)
+        outfile_name = infile_path.name.split(".")[0]
+        rec_n = assembly_dict["idx_processed_waveform"]
+        outfile_name = outfile_name + f"_rec_n_{rec_n}"
+        outfile_path = outdir_path_l2norm / outfile_name
 
         if first_waveform:
-            simulation, result = global_search_waveform(
+
+            _, result = global_search_waveform(
                 observed_waveform       = observed_waveform,
                 waveform_metadata       = waveform_metadata,
                 outfile_name            = outfile_name,
@@ -197,66 +200,102 @@ def process_uw_file(
             results_pkl = outfile_path.with_suffix(".pkl")
             with open(results_pkl, "wb") as f:
                 pickle.dump({
-                    "L2norm_first_waveform" : result["L2norm_waveform_list"],
+                    "L2norm_waveform_list"  : result["L2norm_waveform_list"],
                     "velocity_ranges"       : result["gouge_velocity_list"],
                     "estimated_velocities"  : result["best_gouge_velocity"],
                     "damping_ranges"        : result["gouge_damping_list"],
-                    "estimated_damping"     : result["best_gouge_damping"]
+                    "estimated_damping"     : result["best_gouge_damping"],
+                    "gouge_velocity_model"  : result["gouge_velocity_model"],
+                    "gouge_damping_model"  : result["gouge_damping_model"],
                 }, f)
 
             first_waveform = False
 
         else:
-            # dc_max_start = 0
-            dc_max_start = 0.1 * simulation.average_gouge_velocity
-            dc_threshold = 0.01*dc_max_start
+            velo_mean =  np.mean(result["gouge_velocity_model"])
+            velo_min  = velo_mean - 0.03 * velo_mean
+            velo_max  = velo_mean + 0.03 * velo_mean
+            velo_step = 0.001 * velo_mean
+            params["velocity_initial_list"] = np.arange(velo_min, velo_max, velo_step)
 
-            # da_max_start = 0
-            da_max_start = 0.1 * simulation.average_gouge_damping
-            da_threshold = 0.01* da_max_start
+            damp_mean =  np.mean(result["gouge_damping_model"])
+            damp_min  = damp_mean - 0.05 * damp_mean
+            damp_max  = damp_mean + 0.05 * damp_mean
+            damp_step = 0.01 * damp_mean
+            params["damping_initial_list"]  = np.arange(damp_min, damp_max, damp_step)
 
-            dw_max_start = 0
-            # dw_max_start = np.amax(simulation.source_handler.time_function)
-            dw_threshold = 0.01*dw_max_start
-
-            ds_max_start = 0
-            # ds_max_start = np.amax(simulation.source_handler.spatial_function)
-            ds_threshold = 0.01*ds_max_start
-
-            ############################################################################
-            # LOCAL INVERSION
-            ############################################################################    
-            plot_save_interval     = params['plot_save_interval']
-            movie_save_interval    = params['movie_save_interval']
-            outdir_path_image      = params['outdir_path_image']
-            idx_processed_waveform = assembly_dict["idx_processed_waveform"]
-
-            # Construct output paths
-            # Determine if we save plots and/or movies
-            save_plot  = (idx_processed_waveform % plot_save_interval == 0) 
-            save_movie = (idx_processed_waveform % movie_save_interval == 0) 
-        
-            if save_plot:
-                plot_output_name = f"{outfile_name}_rec_n__{idx_processed_waveform}"
-                plot_output_path = outdir_path_image / plot_output_name
-
-            simulation.observed_waveform = observed_waveform
-            simulation.run_local_inversion(
-                n_iterations         = params["n_iterations"],
-                reduce_factor        = params["reduce_factor"],
-                dc_max_start         = dc_max_start,
-                dc_threshold         = dc_threshold,
-                da_max_start         = da_max_start,
-                da_threshold         = da_threshold,
-                dw_max_start         = dw_max_start,
-                dw_threshold         = dw_threshold,
-                ds_max_start         = ds_max_start,
-                ds_threshold         = ds_threshold,
-                enable_plotting      = save_plot,
-                plot_output_path     = plot_output_path,
-                normalize_waveform   = True,
-                make_movie           = False,
+            _, result = global_search_waveform(
+                observed_waveform       = observed_waveform,
+                waveform_metadata       = waveform_metadata,
+                outfile_name            = outfile_name,
+                stf_handler             = stf_handler,
+                params                  = params,
+                assembly_dict           = assembly_dict
             )
+
+            # Save results
+            results_pkl = outfile_path.with_suffix(".pkl")
+            with open(results_pkl, "wb") as f:
+                pickle.dump({
+                    "L2norm_waveform_list"  : result["L2norm_waveform_list"],
+                    "velocity_ranges"       : result["gouge_velocity_list"],
+                    "estimated_velocities"  : result["best_gouge_velocity"],
+                    "damping_ranges"        : result["gouge_damping_list"],
+                    "estimated_damping"     : result["best_gouge_damping"],
+                    "gouge_velocity_model"  : result["gouge_velocity_model"],
+                    "gouge_damping_model"  : result["gouge_damping_model"],
+                }, f)
+
+            # # dc_max_start = 0
+            # dc_max_start = 0.1 * simulation.average_gouge_velocity
+            # dc_threshold = 0.01*dc_max_start
+
+            # # da_max_start = 0
+            # da_max_start = 0.1 * simulation.average_gouge_damping
+            # da_threshold = 0.01* da_max_start
+
+            # dw_max_start = 0
+            # # dw_max_start = np.amax(simulation.source_handler.time_function)
+            # dw_threshold = 0.01*dw_max_start
+
+            # ds_max_start = 0
+            # # ds_max_start = np.amax(simulation.source_handler.spatial_function)
+            # ds_threshold = 0.01*ds_max_start
+
+            # ############################################################################
+            # # LOCAL INVERSION
+            # ############################################################################    
+            # plot_save_interval     = params['plot_save_interval']
+            # movie_save_interval    = params['movie_save_interval']
+            # outdir_path_image      = params['outdir_path_image']
+            # idx_processed_waveform = assembly_dict["idx_processed_waveform"]
+
+            # # Construct output paths
+            # # Determine if we save plots and/or movies
+            # save_plot  = (idx_processed_waveform % plot_save_interval == 0) 
+            # save_movie = (idx_processed_waveform % movie_save_interval == 0) 
+        
+            # if save_plot:
+            #     plot_output_name = f"{outfile_name}_rec_n_{idx_processed_waveform}"
+            #     plot_output_path = outdir_path_image / plot_output_name
+
+            # simulation.observed_waveform = observed_waveform
+            # simulation.run_local_inversion(
+            #     n_iterations         = params["n_iterations"],
+            #     reduce_factor        = params["reduce_factor"],
+            #     dc_max_start         = dc_max_start,
+            #     dc_threshold         = dc_threshold,
+            #     da_max_start         = da_max_start,
+            #     da_threshold         = da_threshold,
+            #     dw_max_start         = dw_max_start,
+            #     dw_threshold         = dw_threshold,
+            #     ds_max_start         = ds_max_start,
+            #     ds_threshold         = ds_threshold,
+            #     enable_plotting      = save_plot,
+            #     plot_output_path     = plot_output_path,
+            #     normalize_waveform   = True,
+            #     make_movie           = False,
+            # )
 
     print(f"--- {tm.time() - start_time:.2f} seconds for processing {infile_path.name} ---")
 
@@ -289,12 +328,15 @@ def global_search_waveform(
         normal_stress = assembly_dict["normal_stress"]
         shear_stress = assembly_dict["shear_stress"]
         print(f"SNR {waveform_snr:.2f} < {minimum_SNR}. Skipping waveform at {acq_time_label}, Normal Stress: {normal_stress:.2f}, Shear Stress: {shear_stress:.2f}.")
-        return {
-            'gouge_velocity_list'  : None,
-            'L2norm_waveform_list' : None,
-            'best_gouge_velocity'  : None,
+        {
+        'gouge_velocity_list' : None,
+        'best_gouge_velocity' : None,
+        'gouge_damping_list'  : None,
+        'best_gouge_damping'  : None,
+        'L2norm_waveform_list': None,
+        'gouge_velocity_model': None,
+        'gouge_damping_model':  None
         }
-
     # Generate velocity array
     gouge_velocity_list = params["velocity_initial_list"]
     gouge_damping_list  = params["damping_initial_list"]
@@ -340,10 +382,10 @@ def global_search_waveform(
 
     # Sort results by velocity
     results_sorted = sorted(results, key=lambda x: x[0])
-    gouge_velocity_list = np.array([res[0] for res in results_sorted])
+    gouge_velocity_list  = np.array([res[0] for res in results_sorted])
     L2norm_waveform_list = np.array([res[1] for res in results_sorted])
     misfit_interval_list = np.array([res[2] for res in results_sorted])
-    gouge_damping_list = np.array([res[3] for res in results_sorted])
+    gouge_damping_list   = np.array([res[3] for res in results_sorted])
 
     # Possibly plot L2 norm vs. velocity
     save_l2norm_plot = (idx_processed_waveform % l2norm_plot_interval == 0) 
@@ -471,6 +513,7 @@ def global_search_waveform(
         movie_output_path    = movie_output_path
         )
     
+
     return (simulation,
             {
         'gouge_velocity_list' : gouge_velocity_list,
@@ -478,6 +521,8 @@ def global_search_waveform(
         'gouge_damping_list'  : gouge_damping_list,
         'best_gouge_damping'  : best_gouge_damping,
         'L2norm_waveform_list': L2norm_waveform_list,
+        'gouge_velocity_model': simulation.velocity_model_handler.velocity_array,
+        'gouge_damping_model':  simulation.velocity_model_handler.velocity_array
         }
     )
 
@@ -555,7 +600,7 @@ if __name__ == "__main__":
     data_type_uw    = "uw_data/data_tsv_files" # + wave_type
     data_type_mech  = "mechanical_data"
     mech_file_name  = f"{experiment_name}_data_rp"
-    outfolder_name  = "local_inversion" + wave_type + "_2025_04_13_stf_local_inversion_absorbing_1_velgouge_damgouge"
+    outfolder_name  = "local_inversion" + wave_type + "_2025_04_14_stf_local_inversion_freesurface_1_velramp_damramp"
 
     # Create output directories
     outdir_path_l2norm = dir_manager.make_data_analysis_folders(
@@ -572,8 +617,8 @@ if __name__ == "__main__":
 
     # Basic simulation parameters 
     params = {
-        "absorbing"                 : True,
-        "num_waveform2process"      : None,         # int, equespatially waveforms to sample for processing
+        "absorbing"                 : False,        # set absorbing bounday, merdoso silicone maledetto
+        "num_waveform2process"      : None,         # int, equespatially waveforms to sample for processing. Of "None", process all
         "maxtime2simulate"          : 50,           # [mus]
         "frequency_cutoff"          : 4,            # [MHz] low pass onserved data and simulate up to this frequency
         "minimum_SNR"               : 3,            # skip computation until time interval where signal should be is above SNR times surely-only-noise part 
@@ -596,7 +641,7 @@ if __name__ == "__main__":
         machine_name_stf    = "on_bench",
         experiment_name_stf = "STF_ss10_05",
         data_type_stf       = "data_analysis/source_time_functions" + wave_type,
-        stf_chosen          = "width250_volt70_local_inversion_bigboss_multiplier",
+        stf_chosen          = "width250_volt70_multiplier_local_inversion",
         # stf_chosen          = "width250_volt70",
         frequency_cutoff= 12.5 # params["frequency_cutoff"]
     )
@@ -636,6 +681,9 @@ if __name__ == "__main__":
  
     # Process each UW file
     for chosen_uw_file, infile_path in enumerate(infile_path_list_uw):
+
+        if infile_path != "007_hold1000sec.bscan.tsv":
+            continue
 
         mech_data_slice = mechdata_slice4uw_processing(mech_data,
                                                        sync_peaks, 

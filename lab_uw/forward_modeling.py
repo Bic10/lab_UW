@@ -282,21 +282,20 @@ class UltrasonicModeler:
         if normalize_waveform and np.max(synthetic_waveform) != 0:
             if self.geometry_type == "block":
                 first_arrival = self.assembly_dict["z"] / self.assembly_dict["velocity" + self.wave_type]
-            
-            elif self.geometry_type == "dds":
-                first_arrival = observed_time[misfit_interval][0]
-    
-            stf_duration = self.stf_handler.metadata["time_ax_waveform"][-1]-self.stf_handler.metadata["time_ax_waveform"][0]
+                stf_duration = self.stf_handler.metadata["time_ax_waveform"][-1]-self.stf_handler.metadata["time_ax_waveform"][0]
+                start_A0 = np.searchsorted(observed_time, first_arrival)
+                end_A0 = np.searchsorted(observed_time, first_arrival + stf_duration)
+                synthetic_waveform *= np.sum(np.abs(observed_waveform[misfit_interval]))/np.sum(np.abs(synthetic_waveform[misfit_interval])) 
 
-            start_A0 = np.searchsorted(observed_time, first_arrival)
-            end_A0 = np.searchsorted(observed_time, first_arrival + stf_duration)
-            A0 = np.amax(observed_waveform[start_A0:end_A0])
-            try:
+            elif self.geometry_type == "dds":
+                first_arrival = observed_time[misfit_interval][0]    
+                stf_duration = self.stf_handler.metadata["time_ax_waveform"][-1]-self.stf_handler.metadata["time_ax_waveform"][0]
+                start_A0 = np.searchsorted(observed_time, first_arrival)
+                end_A0 = np.searchsorted(observed_time, first_arrival + stf_duration)
+                A0 = np.amax(observed_waveform[start_A0:end_A0])
                 A1 = np.amax(observed_waveform[3*start_A0:3*start_A0+end_A0])
                 synthetic_waveform[3*start_A0:3*end_A0+end_A0] /= A0/A1
-            except:
-                pass
-            synthetic_waveform *= np.sum(np.abs(observed_waveform[misfit_interval]))/np.sum(np.abs(synthetic_waveform[misfit_interval])) 
+
 
         #-------------------------------------------
         # COMPUTE MISFIT
@@ -646,20 +645,20 @@ class UltrasonicModeler:
             if normalize_waveform and np.max(updated_synthetic_waveform) != 0:
                 if self.geometry_type == "block":
                     first_arrival = self.assembly_dict["z"] / self.assembly_dict["velocity" + self.wave_type]
-            
+                    stf_duration = self.stf_handler.metadata["time_ax_waveform"][-1]-self.stf_handler.metadata["time_ax_waveform"][0]
+                    start_A0 = np.searchsorted(observed_time, first_arrival)
+                    end_A0 = np.searchsorted(observed_time, first_arrival + stf_duration)            
+                    updated_synthetic_waveform *= np.sum(abs(observed_waveform[misfit_interval]))/np.sum(np.abs(updated_synthetic_waveform[misfit_interval]))
+
                 elif self.geometry_type == "dds":
                     first_arrival = observed_time[misfit_interval][0]
-
-                stf_duration = self.stf_handler.metadata["time_ax_waveform"][-1]-self.stf_handler.metadata["time_ax_waveform"][0]
-                start_A0 = np.searchsorted(observed_time, first_arrival)
-                end_A0 = np.searchsorted(observed_time, first_arrival + stf_duration)
-                A0 = np.amax(np.abs(observed_waveform[start_A0:end_A0]))
-                try:
-                    A1 = np.amax(np.abs(observed_waveform[3*start_A0:3*start_A0+end_A0]))
+                    stf_duration = self.stf_handler.metadata["time_ax_waveform"][-1]-self.stf_handler.metadata["time_ax_waveform"][0]
+                    start_A0 = np.searchsorted(observed_time, first_arrival)
+                    end_A0 = np.searchsorted(observed_time, first_arrival + stf_duration)
+                    A0 = np.sum(np.abs(observed_waveform[start_A0:end_A0]))
+                    A1 = np.sum(np.abs(observed_waveform[3*start_A0:3*start_A0+end_A0]))
                     updated_synthetic_waveform[3*start_A0:3*end_A0+end_A0] /= A0/A1
-                except:
-                    pass
-                updated_synthetic_waveform *= np.sum(abs(observed_waveform[misfit_interval]))/np.sum(np.abs(updated_synthetic_waveform[misfit_interval]))
+
 
             # Compute updated misfit
             updated_misfit = self.compute_misfit(
