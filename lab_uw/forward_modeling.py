@@ -705,22 +705,27 @@ class UltrasonicModeler:
                 print(f"    ✗ No improvement. Reverting & reducing step")
 
         self.synthetic_waveform                    = best_synthetic_waveform
-        self.velocity_model_handler.velocity_array = best_velocity_model
-        self.velocity_model_handler.damping_array  = best_damping_model
+
         self.source_handler.time_function          = best_source_time_function
         self.source_handler.spatial_function       = best_source_spatial_function
         self.receiver_handler.spatial_function     = best_receiver_spatial_function         
         self.misfit                                = best_misfit
 
-        self.average_gouge_damping    = np.mean(self.velocity_model_handler.damping_array[regions_to_update]) 
-        self.average_gouge_velocity   = np.mean(self.velocity_model_handler.velocity_array[regions_to_update]) 
+        if self.geometry_type == "dds":
+            self.velocity_model_handler.velocity_array = best_velocity_model
+            self.velocity_model_handler.damping_array  = best_damping_model
+            self.average_gouge_damping    = np.mean(self.velocity_model_handler.damping_array[regions_to_update]) 
+            self.average_gouge_velocity   = np.mean(self.velocity_model_handler.velocity_array[regions_to_update]) 
+            acq_time_label   = str(round(self.acquisition_time,5)).replace(".",",")
+            damping_label    = str(round(self.average_gouge_damping,5)).replace(".",",")
+            velocity_label   = str(round(1e4*self.average_gouge_velocity,5)).replace(".",",")  
+            label = f"_acq_time_{acq_time_label}_vel_{velocity_label}_damping_{damping_label}_FWI_misfit_{best_misfit:.0f}_waveform"
     
+        else:
+            label = "_best_simulation"
+            
         if enable_plotting:
             if plot_output_path:
-                acq_time_label   = str(round(self.acquisition_time,5)).replace(".",",")
-                damping_label    = str(round(self.average_gouge_damping,5)).replace(".",",")
-                velocity_label   = str(round(1e4*self.average_gouge_velocity,5)).replace(".",",")  
-                label = f"_acq_time_{acq_time_label}_vel_{velocity_label}_damping_{damping_label}_FWI_misfit_{best_misfit:.0f}_waveform"
                 plot_output_name = plot_output_path.name + label
                 plot_output_path = plot_output_path.parent / plot_output_name
 
