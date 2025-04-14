@@ -421,7 +421,7 @@ def process_velocity(args):
     L2norm_new = simulation.misfit
     
     # print((f"\tL2={L2norm_new:.4e}\tSteel={steel_velocity2simulate:.3f}, PZT={pzt_velocity2simulate:.3f}, txspread={spreading_factor_transmitter:.3f}, rxspread={spreading_factor_receiver:.3f}, tx2edge={position2edge_transmitter:.3f}, rx2edge={position2edge_receiver:.3f}, txrad={radius_factor_transmitter:.4f}, rxrad={radius_factor_receiver:.4f}"))
-
+    del simulation
     return (
         pzt_velocity2simulate,
         steel_velocity2simulate,
