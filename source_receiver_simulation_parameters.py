@@ -263,7 +263,7 @@ def process_waveform(
         misfit_interval     = misfit_interval,
         minimum_velocity    = params["min_velocity2simulate"],
         maximum_velocity    = params["max_velocity2simulate"],
-        normalize_waveform  = False,
+        normalize_waveform  = True,
         enable_plotting     = save_plot,
         make_movie          = False,
         plot_output_path    = plot_output_path,
@@ -319,7 +319,7 @@ def process_waveform(
                                    ds_max_start=ds_max_start,
                                    ds_threshold=ds_threshold,
                                    reduce_factor=params["reduce_factor"],
-                                   normalize_waveform = False,
+                                   normalize_waveform = True,
                                    enable_plotting=True,
                                    plot_output_path=plot_output_path
                                    )
@@ -333,7 +333,7 @@ def process_waveform(
         stf_from_inverison_outfile_path = stf_handler.infile.parent / stf_from_inverison_outfile_name
 
 
-        stf_handler.waveform_data = butter_bandpass_filter(stf_handler.waveform_data, 0.25, 12.4, 25)    
+        stf_handler.waveform_data = butter_bandpass_filter(stf_handler.waveform_data, 0.25, 6., 25)    
 
         stf_handler.save_waveform_json(data = stf_handler.waveform_data, 
                                         metadata = stf_handler.metadata, 
@@ -413,7 +413,7 @@ def process_velocity(args):
         misfit_interval     = misfit_interval,
         minimum_velocity    = params["min_velocity2simulate"],
         maximum_velocity    = params["max_velocity2simulate"],
-        normalize_waveform  = False,
+        normalize_waveform  = True,
         enable_plotting     = False
     )
 

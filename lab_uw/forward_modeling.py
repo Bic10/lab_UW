@@ -657,7 +657,7 @@ class UltrasonicModeler:
                         updated_synthetic_waveform[3*start_A0:3*end_A0+end_A0] /= A0/A1
                     except:
                         pass
-                    
+
                 elif self.geometry_type == "dds":
                     first_arrival = observed_time[misfit_interval][0]
                     stf_duration = self.stf_handler.metadata["time_ax_waveform"][-1]-self.stf_handler.metadata["time_ax_waveform"][0]
