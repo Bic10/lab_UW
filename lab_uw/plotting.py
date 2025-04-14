@@ -1,6 +1,8 @@
 # lab_uw/plotting.py
 
 from pathlib import Path
+import matplotlib
+matplotlib.use('Agg')  # or 'pdf', 'svg', anything non-interactive
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from matplotlib.patches import Rectangle
@@ -1258,8 +1260,9 @@ class Plotter:
 
             ax.tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
             ax.grid(alpha=0.1)
-
-            ax.set_ylim([0.9*np.amin(l2_values),np.amax(l2_values)])
+            min_plot = 0.9*np.amin(l2_values)
+            max_plot = np.amax(l2_values) if np.amax(l2_values)<3*np.amin(l2_values) else 3*np.amin(l2_values) 
+            ax.set_ylim([min_plot,max_plot])
 
         # Hide any leftover subplots if n_params < n_rows * n_cols
         for j in range(n_params, n_rows * n_cols):

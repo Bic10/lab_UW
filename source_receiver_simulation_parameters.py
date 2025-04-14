@@ -267,7 +267,7 @@ def process_waveform(
         enable_plotting     = save_plot,
         make_movie          = False,
         plot_output_path    = plot_output_path,
-        movie_output_path   = movie_output_path
+        movie_output_path   = False
     )
 
     ############################################################################

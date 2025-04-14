@@ -292,10 +292,6 @@ class UltrasonicModeler:
                 except:
                     pass
             elif self.geometry_type == "dds":
-                first_arrival = observed_time[misfit_interval][0]    
-                stf_duration = self.stf_handler.metadata["time_ax_waveform"][-1]-self.stf_handler.metadata["time_ax_waveform"][0]
-                start_A0 = np.searchsorted(observed_time, first_arrival)
-                end_A0 = np.searchsorted(observed_time, first_arrival + stf_duration)
                 synthetic_waveform *= np.sum(np.abs(observed_waveform[misfit_interval]))/np.sum(np.abs(synthetic_waveform[misfit_interval])) 
 
         #-------------------------------------------
