@@ -286,9 +286,11 @@ class UltrasonicModeler:
                 start_A0 = np.searchsorted(observed_time, first_arrival)
                 end_A0 = np.searchsorted(observed_time, first_arrival + stf_duration)
                 A0 = np.amax(observed_waveform[start_A0:end_A0])
-                A1 = np.amax(observed_waveform[3*start_A0:3*start_A0+end_A0])
-                synthetic_waveform[3*start_A0:3*end_A0+end_A0] /= A0/A1
-
+                try:
+                    A1 = np.amax(observed_waveform[3*start_A0:3*start_A0+end_A0])
+                    synthetic_waveform[3*start_A0:3*end_A0+end_A0] /= A0/A1
+                except:
+                    pass
             elif self.geometry_type == "dds":
                 first_arrival = observed_time[misfit_interval][0]    
                 stf_duration = self.stf_handler.metadata["time_ax_waveform"][-1]-self.stf_handler.metadata["time_ax_waveform"][0]
@@ -650,9 +652,12 @@ class UltrasonicModeler:
                     start_A0 = np.searchsorted(observed_time, first_arrival)
                     end_A0 = np.searchsorted(observed_time, first_arrival + stf_duration)            
                     A0 = np.sum(np.abs(observed_waveform[start_A0:end_A0]))
-                    A1 = np.sum(np.abs(observed_waveform[3*start_A0:3*start_A0+end_A0]))
-                    updated_synthetic_waveform[3*start_A0:3*end_A0+end_A0] /= A0/A1
-
+                    try:
+                        A1 = np.sum(np.abs(observed_waveform[3*start_A0:3*start_A0+end_A0]))
+                        updated_synthetic_waveform[3*start_A0:3*end_A0+end_A0] /= A0/A1
+                    except:
+                        pass
+                    
                 elif self.geometry_type == "dds":
                     first_arrival = observed_time[misfit_interval][0]
                     stf_duration = self.stf_handler.metadata["time_ax_waveform"][-1]-self.stf_handler.metadata["time_ax_waveform"][0]
@@ -723,7 +728,7 @@ class UltrasonicModeler:
     
         else:
             label = "_best_simulation"
-            
+
         if enable_plotting:
             if plot_output_path:
                 plot_output_name = plot_output_path.name + label
