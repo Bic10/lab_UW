@@ -655,10 +655,6 @@ class UltrasonicModeler:
                         pass
 
                 elif self.geometry_type == "dds":
-                    first_arrival = observed_time[misfit_interval][0]
-                    stf_duration = self.stf_handler.metadata["time_ax_waveform"][-1]-self.stf_handler.metadata["time_ax_waveform"][0]
-                    start_A0 = np.searchsorted(observed_time, first_arrival)
-                    end_A0 = np.searchsorted(observed_time, first_arrival + stf_duration)
                     updated_synthetic_waveform *= np.sum(abs(observed_waveform[misfit_interval]))/np.sum(np.abs(updated_synthetic_waveform[misfit_interval]))
 
             # Compute updated misfit
@@ -691,7 +687,7 @@ class UltrasonicModeler:
 
                 best_misfit                         = updated_misfit
 
-            elif abs(previous_misfit-updated_misfit) < misfit_thresold:
+            elif (updated_misfit > best_misfit) and (abs(previous_misfit-updated_misfit) < misfit_thresold):
                 print("Misfit updating is below threshold. Stopping!")
                 break
             
