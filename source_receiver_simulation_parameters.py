@@ -135,7 +135,7 @@ def process_waveform(
 
     min_multiplier = global_search_space["min_multiplier"]
     max_multiplier = global_search_space["max_multiplier"]
-    multiplier_STF_array = np.geomspace(min_multiplier,max_multiplier, num_iteration)
+    # multiplier_STF_array = np.geomspace(min_multiplier,max_multiplier, num_iteration)
 
     # Build argument list
     args_list = []
@@ -150,7 +150,7 @@ def process_waveform(
         radius_factor_tx        = np.random.uniform(low=radius_low, high=radius_high)
         radius_factor_rx        = np.random.uniform(low=radius_low, high=radius_high)
 
-        multiplier_stf          = multiplier_STF_array[iteration]
+        multiplier_stf          = np.random.uniform(low=min_multiplier, high=max_multiplier)
 
         args_list.append((
             spreading_factor_tx,
