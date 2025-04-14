@@ -221,7 +221,7 @@ def process_uw_file(
             damp_mean =  simulation.average_gouge_damping
             damp_min  = damp_mean - 0.05 * damp_mean
             damp_max  = damp_mean + 0.05 * damp_mean
-            damp_step = 0.01 * damp_mean
+            damp_step = 0.05 * damp_mean
             params["damping_initial_list"]  = np.arange(damp_min, damp_max, damp_step)
 
             _, result = global_search_waveform(
@@ -563,7 +563,7 @@ def global_search_run(args):
         maximum_velocity        = maximum_velocity, 
         maximum_damping         = maximum_damping, 
         normalize_waveform      = True,
-        enable_plotting         = True,
+        enable_plotting         = False,
         plot_output_path        = plot_output_path
     )
     

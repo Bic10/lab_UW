@@ -17,7 +17,7 @@ class Plotter:
     """
 
     # Define default settings for plots
-    FONT_TYPE = "Ubuntu"
+    FONT_TYPE = "Dejavu Sans"
     FONT_SIZE = 30
     FIGURE_SIZE = (16, 8)
     FORMAT = ".png"

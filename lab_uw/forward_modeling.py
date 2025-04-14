@@ -332,16 +332,16 @@ class UltrasonicModeler:
             outfile_path=plot_output_path
         )
 
-        if make_movie:
-            self.plotter.make_movie_from_simulation(
-                outfile_path=movie_output_path,
-                x=spatial_axis,
-                t=simulation_time,
-                sp_field=wavefield_forward,
-                sp_recorded=simulated_waveform,
-                sample_dimensions=self.sample_dimensions,
-                idx_dict=idx_dict,
-            )
+        # if make_movie:
+        #     self.plotter.make_movie_from_simulation(
+        #         outfile_path=movie_output_path,
+        #         x=spatial_axis,
+        #         t=simulation_time,
+        #         sp_field=wavefield_forward,
+        #         sp_recorded=simulated_waveform,
+        #         sample_dimensions=self.sample_dimensions,
+        #         idx_dict=idx_dict,
+        #     )
 
 
     def compute_misfit(self,
@@ -690,7 +690,7 @@ class UltrasonicModeler:
 
                 best_misfit                         = updated_misfit
 
-            elif (previous_misfit-updated_misfit) < misfit_thresold:
+            elif abs(previous_misfit-updated_misfit) < misfit_thresold:
                 print("Misfit updating is below threshold. Stopping!")
                 break
             

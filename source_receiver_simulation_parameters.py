@@ -14,6 +14,15 @@ from lab_uw.directory_manager import DirectoryManager
 from lab_uw.forward_modeling import UltrasonicModeler
 from lab_uw.plotting import Plotter
 
+from scipy.signal import butter, lfilter
+def butter_bandpass(lowcut, highcut, fs, order=5):
+    return butter(order, [lowcut, highcut], fs=fs, btype='band')
+
+def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
+    b, a = butter_bandpass(lowcut, highcut, fs, order=order)
+    y = lfilter(b, a, data)
+    return y
+
 def process_uw_file(
     infile_path: Path,
     stf_handler: UltrasonicDataHandler,
@@ -323,14 +332,7 @@ def process_waveform(
         stf_from_inverison_outfile_name = stf_handler.infile.name + params["saved_STF_file_name"]
         stf_from_inverison_outfile_path = stf_handler.infile.parent / stf_from_inverison_outfile_name
 
-        from scipy.signal import butter, lfilter
-        def butter_bandpass(lowcut, highcut, fs, order=5):
-            return butter(order, [lowcut, highcut], fs=fs, btype='band')
 
-        def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
-            b, a = butter_bandpass(lowcut, highcut, fs, order=order)
-            y = lfilter(b, a, data)
-            return y
         stf_handler.waveform_data = butter_bandpass_filter(stf_handler.waveform_data, 0.25, 12.4, 25)    
 
         stf_handler.save_waveform_json(data = stf_handler.waveform_data, 
@@ -415,16 +417,10 @@ def process_velocity(args):
         enable_plotting     = False
     )
 
-    synthetic_waveform = simulation.synthetic_waveform
-
     # Calculate misfit
-    L2norm_new = simulation.compute_misfit(
-        observed_waveform=observed_waveform,
-        synthetic_waveform=synthetic_waveform,
-        misfit_interval=misfit_interval
-    )
+    L2norm_new = simulation.misfit
     
-    print((f"\tL2={L2norm_new:.4e}\tSteel={steel_velocity2simulate:.3f}, PZT={pzt_velocity2simulate:.3f}, txspread={spreading_factor_transmitter:.3f}, rxspread={spreading_factor_receiver:.3f}, tx2edge={position2edge_transmitter:.3f}, rx2edge={position2edge_receiver:.3f}, txrad={radius_factor_transmitter:.4f}, rxrad={radius_factor_receiver:.4f}"))
+    # print((f"\tL2={L2norm_new:.4e}\tSteel={steel_velocity2simulate:.3f}, PZT={pzt_velocity2simulate:.3f}, txspread={spreading_factor_transmitter:.3f}, rxspread={spreading_factor_receiver:.3f}, tx2edge={position2edge_transmitter:.3f}, rx2edge={position2edge_receiver:.3f}, txrad={radius_factor_transmitter:.4f}, rxrad={radius_factor_receiver:.4f}"))
 
     return (
         pzt_velocity2simulate,
@@ -449,7 +445,7 @@ if __name__ == "__main__":
     experiment_name = "STF_ss10_05"
     wave_type       = "_s"  # e.g., compressional wave
     data_type_uw    = f"uw_data/data_tsv_files{wave_type}"
-    outfolder_name  = f"simulation_parameters{wave_type}_2025-04-13_only_STF_30s_stf_bandpass_from_original_multiplier" 
+    outfolder_name  = f"simulation_parameters{wave_type}_2025-04-14_only_STF_30s_stf_bandpass_from_original_multiplier" 
 
     # Create output directories
     outdir_path_l2norm = dir_manager.make_data_analysis_folders(
