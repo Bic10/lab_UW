@@ -516,23 +516,23 @@ class VelocityModel1D_DDS(VelocityModel1DBase):
         self.assign_constant_velocity('pzt_1', self.pzt_velocity)
         # Side Block 1 remains steel_velocity
 
-        # self.assign_groove_velocity('groove_sb1', self.gouge_velocity[0], is_start=True)
-        self.assign_constant_velocity('groove_sb1', self.gouge_velocity[0])
+        self.assign_groove_velocity('groove_sb1', self.gouge_velocity[0], is_start=True)
+        # self.assign_constant_velocity('groove_sb1', self.gouge_velocity[0])
 
         self.assign_gouge_velocity('gouge_1', self.gouge_velocity[0])
  
-        # self.assign_groove_velocity('groove_cb1', self.gouge_velocity[0], is_start=False)
-        self.assign_constant_velocity('groove_cb1', self.gouge_velocity[0])
+        self.assign_groove_velocity('groove_cb1', self.gouge_velocity[0], is_start=False)
+        # self.assign_constant_velocity('groove_cb1', self.gouge_velocity[0])
 
         self.assign_constant_velocity('central_block', self.steel_velocity)
 
-        # self.assign_groove_velocity('groove_cb2', self.gouge_velocity[1], is_start=True)
-        self.assign_constant_velocity('groove_cb2', self.gouge_velocity[1])
+        self.assign_groove_velocity('groove_cb2', self.gouge_velocity[1], is_start=True)
+        # self.assign_constant_velocity('groove_cb2', self.gouge_velocity[1])
 
         self.assign_gouge_velocity('gouge_2', self.gouge_velocity[1])
 
-        # self.assign_groove_velocity('groove_sb2', self.gouge_velocity[1], is_start=False)
-        self.assign_constant_velocity('groove_sb2', self.gouge_velocity[1])
+        self.assign_groove_velocity('groove_sb2', self.gouge_velocity[1], is_start=False)
+        # self.assign_constant_velocity('groove_sb2', self.gouge_velocity[1])
 
         # Side Block 2 remains steel_velocity
         self.assign_constant_velocity('pzt_2', self.pzt_velocity)
@@ -543,24 +543,24 @@ class VelocityModel1D_DDS(VelocityModel1DBase):
         Assign damping to the guge region and the ramp to the grooves ones.
         '''
 
-        # self.assign_groove_damping('groove_sb1', self.gouge_damping[0], is_start=True)
-        self.assign_gouge_damping('groove_sb1', self.gouge_damping[0])
+        self.assign_groove_damping('groove_sb1', self.gouge_damping[0], is_start=True)
+        # self.assign_gouge_damping('groove_sb1', self.gouge_damping[0])
 
         self.assign_gouge_damping('gouge_1', self.gouge_damping[0])
 
-        # self.assign_groove_damping('groove_cb1', self.gouge_damping[0], is_start=False)
-        self.assign_gouge_damping('groove_cb1', self.gouge_damping[0])
+        self.assign_groove_damping('groove_cb1', self.gouge_damping[0], is_start=False)
+        # self.assign_gouge_damping('groove_cb1', self.gouge_damping[0])
 
-        # self.assign_groove_damping('groove_cb2', self.gouge_damping[1], is_start=True)
-        self.assign_gouge_damping('groove_cb2', self.gouge_damping[1])
+        self.assign_groove_damping('groove_cb2', self.gouge_damping[1], is_start=True)
+        # self.assign_gouge_damping('groove_cb2', self.gouge_damping[1])
 
         self.assign_gouge_damping('gouge_2', self.gouge_damping[1])
 
-        # self.assign_groove_damping('groove_cb2', self.gouge_damping[1], is_start=True)
-        self.assign_gouge_damping('groove_cb2', self.gouge_damping[1])
+        self.assign_groove_damping('groove_cb2', self.gouge_damping[1], is_start=True)
+        # self.assign_gouge_damping('groove_cb2', self.gouge_damping[1])
 
-        # self.assign_groove_damping('groove_sb2', self.gouge_damping[1], is_start=False)
-        self.assign_gouge_damping('groove_sb2', self.gouge_damping[1])
+        self.assign_groove_damping('groove_sb2', self.gouge_damping[1], is_start=False)
+        # self.assign_gouge_damping('groove_sb2', self.gouge_damping[1])
 
     def assign_constant_velocity(self, region_name: str, velocity: float):
         '''

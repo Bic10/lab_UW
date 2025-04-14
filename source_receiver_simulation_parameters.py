@@ -44,20 +44,19 @@ def process_uw_file(
     uw_data_handler = UltrasonicDataHandler.load_and_process_uw(
         infile_path=infile_path,
         frequency_cutoff=params["frequency_cutoff"],
-        maxtime2simulate=params["maxtime2simulate"],
+        maxtime2simulate=params["maxtime2simulate"],    
         number_of_waveforms2process=params["number_of_waveforms2process"]
     )
 
     observed_waveform_data = uw_data_handler.waveform_data
     metadata = uw_data_handler.metadata
     observed_time = metadata["time_ax_waveform"]
-    # observed_waveform_data = butter_bandpass_filter(observed_waveform_data, 0.25, params["frequency_cutoff"], metadata["sampling_rate"])
 
     # We only want 1 "mean" waveform for analysis
     observed_waveform = np.mean(observed_waveform_data, axis=0)
 
     # 2) We'll run the Monte Carlo approach multiple times
-    n_repeats = 10
+    n_repeats = 20
 
     # We will store the best parameters from each run in a list of dicts
     # all_best_params = []
@@ -332,7 +331,7 @@ def process_waveform(
         stf_from_inverison_outfile_path = stf_handler.infile.parent / stf_from_inverison_outfile_name
 
 
-        stf_handler.waveform_data = butter_bandpass_filter(stf_handler.waveform_data, 0.25, 6., 25)    
+        stf_handler.waveform_data = butter_bandpass_filter(stf_handler.waveform_data, 0.25, 12.49, stf_handler.metadata["sampling_rate"])    
 
         stf_handler.save_waveform_json(data = stf_handler.waveform_data, 
                                         metadata = stf_handler.metadata, 
@@ -444,7 +443,7 @@ if __name__ == "__main__":
     experiment_name = "STF_ss10_05"
     wave_type       = "_s"  # e.g., compressional wave
     data_type_uw    = f"uw_data/data_tsv_files{wave_type}"
-    outfolder_name  = f"simulation_parameters{wave_type}_2025-04-14_only_STF_30s_stf_bandpass_from_original_multiplier" 
+    outfolder_name  = f"2025-04-14_only_STF_60s_stf_bandpass_from_original_multiplier" 
 
     # Create output directories
     outdir_path_l2norm = dir_manager.make_data_analysis_folders(
@@ -463,7 +462,7 @@ if __name__ == "__main__":
         "absorbing"                 : False,
         "save_local_inversion_STF"  : True,
         "saved_STF_file_name"       : "_local_inversion",   # this string will be added to the "stf_chosen" file name, so to not overdrive the original data
-        "maxtime2simulate"          : 30,   # mus
+        "maxtime2simulate"          : 60,   # mus
         "frequency_cutoff"          : 6,     # MHz
         "minimum_SNR"               : 5,
         "min_velocity2simulate"     : 0.2,  # cm/mus
@@ -493,7 +492,7 @@ if __name__ == "__main__":
 
     #### MONTE CARLO PARAMETERS DEFINED HERE ####
     global_search_space = {
-        "num_iterations"       : 1000,  # how many random draws to try
+        "num_iterations"       : 4000,  # how many random draws to try
         "steel_velocity_low"   : assembly_dict["velocity" + wave_type] - 0.005,
         "steel_velocity_high"  : assembly_dict["velocity" + wave_type] + 0.005,              
         "pzt_velocity_low"     : params["min_velocity2simulate"], # assembly_dict["pzt_velocity" + wave_type], 
@@ -501,8 +500,8 @@ if __name__ == "__main__":
         "spreading_factor_low" : 0.1,
         "spreading_factor_high": 1.0,
         # Uniform range for positions relative to edges pzt-steel
-        "position2edge_low"    : -0.8,
-        "position2edge_high"   : 0.,
+        "position2edge_low"    : -0.5,
+        "position2edge_high"   : -0.5,
         # how many nodes to use to approximate the tx/rx positions in case they do not correspond precisely to one node
         "radius_factor_low"    : 1.0,
         "radius_factor_high"   : 1.0,

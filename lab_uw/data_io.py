@@ -258,12 +258,7 @@ class UltrasonicDataHandler:
 
         # Lowpass filtering
         if frequency_cutoff:
-            signal_processor = SignalProcessor()
-            observed_waveform_data, _ = signal_processor.signal2noise_separation_lowpass(
-                waveform_data=observed_waveform_data,
-                metadata=metadata,
-                freq_cut=frequency_cutoff
-            )
+            observed_waveform_data = butter_bandpass_filter(observed_waveform_data, 0.25, frequency_cutoff, 1/metadata["sampling_rate"])
 
         if time_ax_acquisition_start:
             metadata["time_ax_acquisition"] = metadata["time_ax_acquisition"] + time_ax_acquisition_start
@@ -314,12 +309,9 @@ class UltrasonicDataHandler:
             np.array(stf_metadata["time_ax_waveform"]) 
             - np.array(stf_metadata["time_ax_waveform"])[0]
         )
-        signal_processor = SignalProcessor()
-        stf_waveform_filt, _ = signal_processor.signal2noise_separation_lowpass(
-            waveform_data=stf_waveform_raw,
-            metadata=stf_metadata,
-            freq_cut=frequency_cutoff
-        )
+
+        stf_waveform_filt = butter_bandpass_filter(stf_waveform_raw, 0.25, frequency_cutoff, 1/stf_metadata["sampling_rate"])
+
         stf_waveform = stf_waveform_filt - stf_waveform_filt[0]
 
         stf_handler.waveform_data = stf_waveform
@@ -656,3 +648,12 @@ class BlockMetadataHandler:
             results.append(block_handler.get_block_params(bk))
 
         return tuple(results)
+    
+from scipy.signal import butter, lfilter
+def butter_bandpass(lowcut, highcut, fs, order=5):
+    return butter(order, [lowcut, highcut], fs=fs, btype='band')
+
+def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
+    b, a = butter_bandpass(lowcut, highcut, fs, order=order)
+    y = lfilter(b, a, data)
+    return y

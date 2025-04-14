@@ -534,7 +534,7 @@ class UltrasonicModeler:
                     # -------------------------------------------------------------------
                     gradient_vel = np.zeros_like(best_velocity_model)
                     # temp = wavefield_adjoint
-                    temp = (2.0 * best_velocity_model[None, :]) * np.flipud(wavefield_adjoint * best_laplacian_wavefield)
+                    temp = -(2.0 * best_velocity_model[None, :]) * np.flipud(wavefield_adjoint) * (best_laplacian_wavefield)
                     gradient_vel = np.sum(temp, axis=0) 
                     max_vel_grad = np.max(np.abs(gradient_vel[regions_to_update]))
 
@@ -544,7 +544,7 @@ class UltrasonicModeler:
                 if da_max:
                     gradient_damp = np.zeros_like(best_damping_model)
                     # temp = wavefield_adjoint
-                    temp =  np.flipud(wavefield_adjoint * best_first_derivative_laplacian)
+                    temp =  -np.flipud(wavefield_adjoint) * best_first_derivative_laplacian
                     gradient_damp = np.sum(temp, axis=0) 
                     max_damp_grad = np.max(np.abs(gradient_damp[regions_to_update]))
 
@@ -602,11 +602,11 @@ class UltrasonicModeler:
                 step_size_w   = dw_max / (max_w_grad + 1e-15)
                 updated_source_time_function -= step_size_w * gradient_w
 
-                updated_source_time_function, _ = signal_processor.signal2noise_separation_lowpass(
-                        waveform_data=updated_source_time_function,
-                        metadata=self.stf_handler.metadata,
-                        freq_cut=self.frequency_cutoff
-                    )
+                # updated_source_time_function, _ = signal_processor.signal2noise_separation_lowpass(
+                #         waveform_data=updated_source_time_function,
+                #         metadata=self.stf_handler.metadata,
+                #         freq_cut=self.frequency_cutoff
+                #     )
 
             if ds_max:
                 # -- update spatial distribution s(x) --
@@ -692,14 +692,14 @@ class UltrasonicModeler:
                 break
             
             else:
-                previous_misfit = updated_misfit
-
                 updating = False
                 dc_max /= reduce_factor
                 da_max /= reduce_factor
                 dw_max /= reduce_factor
                 ds_max /= reduce_factor
                 print(f"    ✗ No improvement. Reverting & reducing step")
+
+            previous_misfit = updated_misfit
 
         self.synthetic_waveform                    = best_synthetic_waveform
 

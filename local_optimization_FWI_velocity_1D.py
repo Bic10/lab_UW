@@ -215,7 +215,7 @@ def process_uw_file(
             velo_mean =  simulation.average_gouge_velocity
             velo_min  = velo_mean - 0.03 * velo_mean
             velo_max  = velo_mean + 0.03 * velo_mean
-            velo_step = 0.001 * velo_mean
+            velo_step = 0.01 * velo_mean
             params["velocity_initial_list"] = np.arange(velo_min, velo_max, velo_step)
 
             damp_mean =  simulation.average_gouge_damping
@@ -440,7 +440,7 @@ def global_search_waveform(
 
     # Construct output paths
     if save_plot:
-        plot_output_name = f"{outfile_name}_rec_n_{idx_processed_waveform}"
+        plot_output_name = f"{outfile_name}"
         plot_output_path = outdir_path_image / plot_output_name
     else:
         plot_output_path = None
@@ -600,8 +600,8 @@ if __name__ == "__main__":
     data_type_uw    = "uw_data/data_tsv_files" # + wave_type
     data_type_mech  = "mechanical_data"
     mech_file_name  = f"{experiment_name}_data_rp"
-    outfolder_name  = "local_inversion" + wave_type + "_2025_04_14_stf_local_inversion_freesurface_1_velramp_damramp"
-    outfolder_name = "2025_04_14_test"
+    outfolder_name  = "2025_04_14_stf_local_inversion_freesurface_1_velgouge_damgouge_20"
+    # outfolder_name = "2025_04_14_test"
     # Create output directories
     outdir_path_l2norm = dir_manager.make_data_analysis_folders(
         machine_name    = machine_name,
@@ -619,19 +619,19 @@ if __name__ == "__main__":
     params = {
         "absorbing"                 : False,        # set absorbing bounday, merdoso silicone maledetto
         "num_waveform2process"      : None,         # int, equespatially waveforms to sample for processing. Of "None", process all
-        "maxtime2simulate"          : 50,           # [mus]
+        "maxtime2simulate"          : 40,           # [mus]
         "frequency_cutoff"          : 4,            # [MHz] low pass onserved data and simulate up to this frequency
         "minimum_SNR"               : 3,            # skip computation until time interval where signal should be is above SNR times surely-only-noise part 
-        "velocity_initial_list"     : np.linspace(0.1550,0.1750, 5),  # [cm/mus] first guess of best velocity. There is a visual tool for it, if needed
+        "velocity_initial_list"     : np.linspace(0.22,.260, 30),  # [cm/mus] first guess of best velocity. There is a visual tool for it, if needed
         "min_velocity2simulate"     : None,         # [cm/mus] if not passed, computed by assembly and gouge velocity range
         "max_velocity2simulate"     : None,         # [cm/mus]
-        "damping_initial_list"      : np.linspace(0.0001,0.0008, 5),
+        "damping_initial_list"      : np.linspace(0.0007,0.0017, 10),
         "plot_save_interval"        : 1,
         "movie_save_interval"       : 1,
         "l2norm_plot_interval"      : 1,
         "outdir_path_l2norm"        : outdir_path_l2norm[0],
         "outdir_path_image"         : outdir_path_image[0],
-        "n_iterations"              : 40,
+        "n_iterations"              : 70,
         "reduce_factor"             : 10/9
     }
 
@@ -643,7 +643,7 @@ if __name__ == "__main__":
         data_type_stf       = "data_analysis/source_time_functions" + wave_type,
         stf_chosen          = "width250_volt70_multiplier_local_inversion",
         # stf_chosen          = "width250_volt70",
-        frequency_cutoff= 12.5 # params["frequency_cutoff"]
+        frequency_cutoff= 6 # params["frequency_cutoff"]
     )
 
     # stf_handler.waveform_data = -stf_handler.waveform_data
@@ -696,7 +696,7 @@ if __name__ == "__main__":
         uw_data_handler = UltrasonicDataHandler.load_and_process_uw(
             infile_path                 = infile_path,
             zero_out_time               = params["steel_only_time_p_wave"]/5,
-            frequency_cutoff            = params["frequency_cutoff"],
+            frequency_cutoff            = 12.49, # params["frequency_cutoff"],
             maxtime2simulate            = params["maxtime2simulate"],
             number_of_waveforms2process = params["num_waveform2process"],
             time_ax_acquisition_start   = mech_data_slice["time_s"].values[0]
