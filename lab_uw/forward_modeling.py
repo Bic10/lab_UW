@@ -442,16 +442,26 @@ class UltrasonicModeler:
 
         # Regions where velocity is allowed to update
         if self.geometry_type == "dds": 
-            # regions_to_update = np.concatenate([idx_dict["gouge_1"], idx_dict["gouge_2"]])
-            # regions_to_update = np.arange(num_x)
-
-            regions_to_update = np.concatenate([idx_dict["groove_sb1"], 
+            regions_to_update = np.arange(num_x)
+            regions_to_update = np.concatenate([
+                                                idx_dict["pzt_1"],
+                                                idx_dict["groove_sb1"], 
                                                 idx_dict["gouge_1"],
                                                 idx_dict["groove_cb1"],
                                                 idx_dict["groove_cb2"],
                                                 idx_dict["gouge_2"],
-                                                idx_dict["groove_sb2"]
+                                                idx_dict["groove_sb2"],
+                                                idx_dict["pzt_2"]
                                             ])
+            
+            grooves = np.concatenate([idx_dict["groove_sb1"], 
+                                    idx_dict["groove_cb1"],
+                                    idx_dict["groove_cb2"],
+                                    idx_dict["groove_sb2"]
+                                ])
+            
+            gouge = np.concatenate([idx_dict["gouge_1"], idx_dict["gouge_2"]])
+
             
         elif self.geometry_type == "block":
             regions_to_update = np.concatenate([
@@ -474,8 +484,11 @@ class UltrasonicModeler:
         best_source_spatial_function     = initial_source_spatial_function.copy()
         best_receiver_spatial_function   = initial_receiver_spatial_function.copy()
         best_wavefield_forward           = initial_wavefield_forward.copy()
-        best_laplacian_wavefield         = compute_second_derivative(best_wavefield_forward, delta_x)
-        best_first_derivative_laplacian  = compute_first_derivative(best_laplacian_wavefield, delta_t)
+        best_laplacian_wavefield         = compute_spatial_laplacian(best_wavefield_forward, delta_x)
+        best_first_derivative_laplacian  = compute_time_derivative_of_laplacian(best_laplacian_wavefield, delta_t)
+
+        best_second_derivative           = compute_time_derivatives(best_wavefield_forward, delta_t)
+
 
         best_synthetic_waveform          = initial_synthetic_waveform.copy()
         best_misfit                      = initial_misfit
@@ -487,7 +500,6 @@ class UltrasonicModeler:
         dw_max = dw_max_start
         ds_max = ds_max_start
 
-        signal_processor = SignalProcessor()
         updating = True
         for iteration in range(n_iterations):
             print(f"Iteration {iteration + 1}/{n_iterations}")
@@ -590,38 +602,25 @@ class UltrasonicModeler:
                 # -- update velocity only in the selected region --
                 step_size_vel = dc_max / (max_vel_grad + 1e-15)
                 updated_velocity_model[regions_to_update] -= step_size_vel * gradient_vel[regions_to_update]
-                grooves = np.concatenate([idx_dict["groove_sb1"], 
-                                                    idx_dict["groove_cb1"],
-                                                    idx_dict["groove_cb2"],
-                                                    idx_dict["groove_sb2"]
-                                                ])
-                updated_velocity_model[grooves] = np.clip(updated_velocity_model[grooves],
-                                                          a_min=None,
-                                                          a_max=updated_velocity_model[idx_dict["central_block"]][0])
+
+                # updated_velocity_model[grooves] = np.clip(updated_velocity_model[grooves],
+                #                                           a_min=None,
+                #                                           a_max=updated_velocity_model[idx_dict["central_block"]][0])
 
 
             if da_max:
                 # -- update velocity only in the selected region --
                 step_size_damp = da_max / (max_damp_grad + 1e-15)
                 updated_damping_model[regions_to_update] -= step_size_damp * gradient_damp[regions_to_update]
-                grooves = np.concatenate([idx_dict["groove_sb1"], 
-                                                    idx_dict["groove_cb1"],
-                                                    idx_dict["groove_cb2"],
-                                                    idx_dict["groove_sb2"]
-                                                ])
-                updated_damping_model[grooves] = np.clip(updated_damping_model[grooves],
-                                                          a_min=updated_damping_model[idx_dict["central_block"]][0],
-                                                          a_max=None)
+
+                # updated_damping_model[grooves] = np.clip(updated_damping_model[grooves],
+                #                                           a_min=updated_damping_model[idx_dict["central_block"]][0],
+                #                                           a_max=None)
+
             if dw_max:
                 # -- update wavelet w(t) --
                 step_size_w   = dw_max / (max_w_grad + 1e-15)
                 updated_source_time_function -= step_size_w * gradient_w
-
-                # updated_source_time_function, _ = signal_processor.signal2noise_separation_lowpass(
-                #         waveform_data=updated_source_time_function,
-                #         metadata=self.stf_handler.metadata,
-                #         freq_cut=self.frequency_cutoff
-                #     )
 
             if ds_max:
                 # -- update spatial distribution s(x) --
@@ -647,8 +646,8 @@ class UltrasonicModeler:
                 absorbing               = absorbing
             )
 
-            laplacian_wavefield_updated         = compute_second_derivative(wavefield_forward_updated, delta_x)
-            first_derivative_laplacian_updated  = compute_first_derivative(laplacian_wavefield_updated, delta_t)
+            laplacian_wavefield_updated         = compute_spatial_laplacian(wavefield_forward_updated, delta_x)
+            first_derivative_laplacian_updated  = compute_time_derivative_of_laplacian(laplacian_wavefield_updated, delta_t)
 
             # Extract updated synthetic waveform
             updated_simulated_waveform = np.sum(
@@ -726,15 +725,15 @@ class UltrasonicModeler:
         if self.geometry_type == "dds":
             self.velocity_model_handler.velocity_array = best_velocity_model
             self.velocity_model_handler.damping_array  = best_damping_model
-            self.average_gouge_damping    = np.mean(self.velocity_model_handler.damping_array[regions_to_update]) 
-            self.average_gouge_velocity   = np.mean(self.velocity_model_handler.velocity_array[regions_to_update]) 
+            self.average_gouge_damping    = np.mean(self.velocity_model_handler.damping_array[gouge]) 
+            self.average_gouge_velocity   = np.mean(self.velocity_model_handler.velocity_array[gouge]) 
             acq_time_label   = str(round(self.acquisition_time,5)).replace(".",",")
             damping_label    = str(round(self.average_gouge_damping,5)).replace(".",",")
             velocity_label   = str(round(1e4*self.average_gouge_velocity,5)).replace(".",",")  
             label = f"_acq_time_{acq_time_label}_vel_{velocity_label}_damping_{damping_label}_FWI_misfit_{best_misfit:.0f}_waveform"
     
         else:
-            label = "_best_simulation"
+            label = ""
 
         if enable_plotting:
             if plot_output_path:
@@ -888,40 +887,54 @@ def pseudospectral_1D_damped(
     
     return wavefield_out
     
-def compute_second_derivative(wavefield: np.ndarray, delta_t: float) -> np.ndarray:
+def compute_time_derivatives(wavefield_out, delta_t):
     """
-    Compute the second time derivative of the wavefield using finite differences.
-    wavefield.shape == (num_t, num_x).
-
-    Returns a 2D array (num_t, num_x), where derivative[t, x] is the
-    second time derivative at time t, position x.
+    Returns wavefield_tt of shape (num_t, num_x), 
+    where wavefield_tt[i, j] ~ second derivative in time of the wavefield.
     """
-    derivative = np.zeros_like(wavefield)
+    num_t, num_x = wavefield_out.shape
+    wavefield_tt = np.zeros_like(wavefield_out)
     
-    # Vectorized finite difference: d2u/dt2 ~ (u[t+1] - 2u[t] + u[t-1]) / (delta_t^2)
-    derivative[1:-1] = (
-        wavefield[2:] - 2 * wavefield[1:-1] + wavefield[:-2]
-    ) / (delta_t ** 2)
+    for ix in range(num_x):
+        # 1) Take a first derivative in time
+        # 2) Then a second derivative in time
+        first_derivative = np.gradient(wavefield_out[:, ix], delta_t)
+        second_derivative = np.gradient(first_derivative, delta_t)
+        
+        wavefield_tt[:, ix] = second_derivative
     
-    return derivative
+    return wavefield_tt
 
-def compute_first_derivative(wavefield: np.ndarray, delta_t: float) -> np.ndarray:
+def compute_spatial_laplacian(wavefield_out, delta_x):
     """
-    Compute the first time derivative of the wavefield using a centered finite difference.
-    wavefield.shape == (num_t, num_x).
-
-    Returns a 2D array (num_t, num_x), where derivative[t, x] is the
-    first time derivative at time t, position x.
+    Returns wavefield_lap of shape (num_t, num_x),
+    where wavefield_lap[i, :] ~ second derivative in x of wavefield_out[i, :].
     """
-    derivative = np.zeros_like(wavefield)
+    sp = SignalProcessor()
 
-    # Centered difference: du/dt ~ (u[t+1] - u[t-1]) / (2 * delta_t)
-    derivative[1:-1] = (wavefield[2:] - wavefield[:-2]) / (2 * delta_t)
-
-    # The boundaries (t=0 or t=num_t-1) are left at zero or a specific scheme could be applied
-    # if you want better boundary treatment.
+    num_t, num_x = wavefield_out.shape
+    wavefield_lap = np.zeros_like(wavefield_out)
     
-    return derivative
+    for it in range(num_t):
+        wavefield_lap[it, :] = sp.fourier_derivative_2nd(
+            wavefield_out[it, :], delta_x
+        )
+    
+    return wavefield_lap
+
+def compute_time_derivative_of_laplacian(wavefield_lap, delta_t):
+    """
+    Returns wavefield_lap_dt of shape (num_t, num_x),
+    where wavefield_lap_dt[i, j] = d/dt( wavefield_lap[i, j] ).
+    """
+    num_t, num_x = wavefield_lap.shape
+    wavefield_lap_dt = np.zeros_like(wavefield_lap)
+    
+    for ix in range(num_x):
+        wavefield_lap_dt[:, ix] = np.gradient(wavefield_lap[:, ix], delta_t)
+    
+    return wavefield_lap_dt
+
 
 def extend_model(original_model, N_pad):
     """

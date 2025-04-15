@@ -331,7 +331,7 @@ def process_waveform(
         stf_from_inverison_outfile_path = stf_handler.infile.parent / stf_from_inverison_outfile_name
 
 
-        stf_handler.waveform_data = butter_bandpass_filter(stf_handler.waveform_data, 0.25, 12.49, stf_handler.metadata["sampling_rate"])    
+        stf_handler.waveform_data = butter_bandpass_filter(stf_handler.waveform_data, 0.25, 12.49, 1/stf_handler.metadata["sampling_rate"])    
 
         stf_handler.save_waveform_json(data = stf_handler.waveform_data, 
                                         metadata = stf_handler.metadata, 
@@ -529,10 +529,10 @@ if __name__ == "__main__":
             experiment_name_stf=experiment_name,
             data_type_stf="data_analysis/source_time_functions" + wave_type,
             # stf_chosen= "width250_volt70_local_inversion_bigboss",
-            stf_chosen= "width250_volt70_multiplier",
+            stf_chosen= "width250_volt70",
 
             # stf_chosen=stf_chosen,
-            frequency_cutoff= 12.5  # LEAVE THE NIQUIST, BUT FIX IT! SOMEHOW THE LOWPASS IS WRONG, IT DISTORTS THE WAVE
+            frequency_cutoff= 12.49  # LEAVE THE NIQUIST, BUT FIX IT! SOMEHOW THE LOWPASS IS WRONG, IT DISTORTS THE WAVE
         )
 
         # freq, amplitude, phase = stf_handler.compute_amplitude_phase_spectrum()
