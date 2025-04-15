@@ -56,7 +56,7 @@ def process_uw_file(
     observed_waveform = np.mean(observed_waveform_data, axis=0)
 
     # 2) We'll run the Monte Carlo approach multiple times
-    n_repeats = 20
+    n_repeats = 10
 
     # We will store the best parameters from each run in a list of dicts
     # all_best_params = []
@@ -277,10 +277,10 @@ def process_waveform(
     param_list = [
         ("Steel Velocity (cm/µs)", steel_array),
         ("PZT Velocity (cm/µs)",   pzt_array),
-        ("Spread Tx",              spread_tx_array),
-        ("Spread Rx",              spread_rx_array),
-        ("Pos2Edge Tx",            pos_tx_array),
-        ("Pos2Edge Rx",            pos_rx_array),
+        # ("Spread Tx",              spread_tx_array),
+        # ("Spread Rx",              spread_rx_array),
+        # ("Pos2Edge Tx",            pos_tx_array),
+        # ("Pos2Edge Rx",            pos_rx_array),
         # ("Radius Factor Tx",       rad_tx_array),
         # ("Radius Factor Rx",       rad_rx_array),
         # ("multiplier_STF",           multiplier_array)
@@ -443,7 +443,7 @@ if __name__ == "__main__":
     experiment_name = "STF_ss10_05"
     wave_type       = "_s"  # e.g., compressional wave
     data_type_uw    = f"uw_data/data_tsv_files{wave_type}"
-    outfolder_name  = f"2025-04-14_only_STF_60s_stf_bandpass_from_original_multiplier" 
+    outfolder_name  = f"2025-04-15_30s_last" 
 
     # Create output directories
     outdir_path_l2norm = dir_manager.make_data_analysis_folders(
@@ -462,7 +462,7 @@ if __name__ == "__main__":
         "absorbing"                 : False,
         "save_local_inversion_STF"  : True,
         "saved_STF_file_name"       : "_local_inversion",   # this string will be added to the "stf_chosen" file name, so to not overdrive the original data
-        "maxtime2simulate"          : 60,   # mus
+        "maxtime2simulate"          : 30,   # mus
         "frequency_cutoff"          : 6,     # MHz
         "minimum_SNR"               : 5,
         "min_velocity2simulate"     : 0.2,  # cm/mus
@@ -492,12 +492,12 @@ if __name__ == "__main__":
 
     #### MONTE CARLO PARAMETERS DEFINED HERE ####
     global_search_space = {
-        "num_iterations"       : 4000,  # how many random draws to try
+        "num_iterations"       : 3000,  # how many random draws to try
         "steel_velocity_low"   : assembly_dict["velocity" + wave_type] - 0.005,
         "steel_velocity_high"  : assembly_dict["velocity" + wave_type] + 0.005,              
         "pzt_velocity_low"     : params["min_velocity2simulate"], # assembly_dict["pzt_velocity" + wave_type], 
         "pzt_velocity_high"    : params["max_velocity2simulate"], # assembly_dict["pzt_velocity" + wave_type],
-        "spreading_factor_low" : 0.1,
+        "spreading_factor_low" : 1.0,
         "spreading_factor_high": 1.0,
         # Uniform range for positions relative to edges pzt-steel
         "position2edge_low"    : -0.5,

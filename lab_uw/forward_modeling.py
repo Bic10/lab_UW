@@ -288,7 +288,7 @@ class UltrasonicModeler:
                 A0 = np.sum(np.abs(observed_waveform[start_A0:end_A0]))
                 try:
                     A1 = np.sum(np.abs(observed_waveform[3*start_A0:3*start_A0+end_A0]))
-                    synthetic_waveform[3*start_A0:3*end_A0+end_A0] /= A0/A1
+                    synthetic_waveform[3*start_A0:3*end_A0+end_A0] *= A1/A0
                 except:
                     pass
             elif self.geometry_type == "dds":
@@ -664,7 +664,7 @@ class UltrasonicModeler:
                     A0 = np.sum(np.abs(observed_waveform[start_A0:end_A0]))
                     try:
                         A1 = np.sum(np.abs(observed_waveform[3*start_A0:3*start_A0+end_A0]))
-                        updated_synthetic_waveform[3*start_A0:3*end_A0+end_A0] /= A0/A1
+                        updated_synthetic_waveform[3*start_A0:3*end_A0+end_A0] *=A1/A0
                     except:
                         pass
 
