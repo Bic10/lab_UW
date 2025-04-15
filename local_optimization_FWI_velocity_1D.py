@@ -206,7 +206,7 @@ def process_uw_file(
                     "damping_ranges"        : result["gouge_damping_list"],
                     "estimated_damping"     : result["best_gouge_damping"],
                     "gouge_velocity_model"  : result["gouge_velocity_model"],
-                    "gouge_damping_model"  : result["gouge_damping_model"],
+                    "gouge_damping_model"   : result["gouge_damping_model"],
                 }, f)
 
             first_waveform = False
@@ -600,7 +600,7 @@ if __name__ == "__main__":
     data_type_uw    = "uw_data/data_tsv_files" # + wave_type
     data_type_mech  = "mechanical_data"
     mech_file_name  = f"{experiment_name}_data_rp"
-    outfolder_name  = "2025_04_14_stf_local_inversion_freesurface_1_velgouge_damgouge_20"
+    outfolder_name  = "2025_04_15_stf_local_inversion_freesurface_velramp_damramp_2"
     # outfolder_name = "2025_04_14_test"
     # Create output directories
     outdir_path_l2norm = dir_manager.make_data_analysis_folders(
@@ -622,10 +622,10 @@ if __name__ == "__main__":
         "maxtime2simulate"          : 40,           # [mus]
         "frequency_cutoff"          : 4,            # [MHz] low pass onserved data and simulate up to this frequency
         "minimum_SNR"               : 3,            # skip computation until time interval where signal should be is above SNR times surely-only-noise part 
-        "velocity_initial_list"     : np.linspace(0.22,.260, 30),  # [cm/mus] first guess of best velocity. There is a visual tool for it, if needed
+        "velocity_initial_list"     : np.linspace(0.15,.190, 30),  # [cm/mus] first guess of best velocity. There is a visual tool for it, if needed
         "min_velocity2simulate"     : None,         # [cm/mus] if not passed, computed by assembly and gouge velocity range
         "max_velocity2simulate"     : None,         # [cm/mus]
-        "damping_initial_list"      : np.linspace(0.0007,0.0017, 10),
+        "damping_initial_list"      : np.linspace(0.0002,0.0012, 10),
         "plot_save_interval"        : 1,
         "movie_save_interval"       : 1,
         "l2norm_plot_interval"      : 1,

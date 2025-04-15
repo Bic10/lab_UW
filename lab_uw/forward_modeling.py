@@ -285,9 +285,9 @@ class UltrasonicModeler:
                 stf_duration = self.stf_handler.metadata["time_ax_waveform"][-1]-self.stf_handler.metadata["time_ax_waveform"][0]
                 start_A0 = np.searchsorted(observed_time, first_arrival)
                 end_A0 = np.searchsorted(observed_time, first_arrival + stf_duration)
-                A0 = np.amax(observed_waveform[start_A0:end_A0])
+                A0 = np.sum(np.abs(observed_waveform[start_A0:end_A0]))
                 try:
-                    A1 = np.amax(observed_waveform[3*start_A0:3*start_A0+end_A0])
+                    A1 = np.sum(np.abs(observed_waveform[3*start_A0:3*start_A0+end_A0]))
                     synthetic_waveform[3*start_A0:3*end_A0+end_A0] /= A0/A1
                 except:
                     pass
@@ -590,13 +590,28 @@ class UltrasonicModeler:
                 # -- update velocity only in the selected region --
                 step_size_vel = dc_max / (max_vel_grad + 1e-15)
                 updated_velocity_model[regions_to_update] -= step_size_vel * gradient_vel[regions_to_update]
+                grooves = np.concatenate([idx_dict["groove_sb1"], 
+                                                    idx_dict["groove_cb1"],
+                                                    idx_dict["groove_cb2"],
+                                                    idx_dict["groove_sb2"]
+                                                ])
+                updated_velocity_model[grooves] = np.clip(updated_velocity_model[grooves],
+                                                          a_min=None,
+                                                          a_max=updated_velocity_model[idx_dict["central_block"]][0])
 
 
             if da_max:
                 # -- update velocity only in the selected region --
                 step_size_damp = da_max / (max_damp_grad + 1e-15)
                 updated_damping_model[regions_to_update] -= step_size_damp * gradient_damp[regions_to_update]
-
+                grooves = np.concatenate([idx_dict["groove_sb1"], 
+                                                    idx_dict["groove_cb1"],
+                                                    idx_dict["groove_cb2"],
+                                                    idx_dict["groove_sb2"]
+                                                ])
+                updated_damping_model[grooves] = np.clip(updated_damping_model[grooves],
+                                                          a_min=updated_damping_model[idx_dict["central_block"]][0],
+                                                          a_max=None)
             if dw_max:
                 # -- update wavelet w(t) --
                 step_size_w   = dw_max / (max_w_grad + 1e-15)
