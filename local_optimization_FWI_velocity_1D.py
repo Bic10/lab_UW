@@ -212,13 +212,13 @@ def process_uw_file(
             first_waveform = False
 
         else:
-            velo_mean =  simulation.average_gouge_velocity
+            velo_mean =  result["best_gouge_velocity"]
             velo_min  = velo_mean - 0.03 * velo_mean
             velo_max  = velo_mean + 0.03 * velo_mean
             velo_step = 0.01 * velo_mean
             params["velocity_initial_list"] = np.arange(velo_min, velo_max, velo_step)
 
-            damp_mean =  simulation.average_gouge_damping
+            damp_mean =  result["best_gouge_damping"]
             damp_min  = damp_mean - 0.05 * damp_mean
             damp_max  = damp_mean + 0.05 * damp_mean
             damp_step = 0.05 * damp_mean
