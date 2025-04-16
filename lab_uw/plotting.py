@@ -1260,8 +1260,8 @@ class Plotter:
 
             ax.tick_params(axis='both', which='major', labelsize=self.settings['fontsize_ticks'])
             ax.grid(alpha=0.1)
-            min_plot = np.amin(l2_values)
-            max_plot = np.amax(l2_values) if np.amax(l2_values)<3*np.amin(l2_values) else 3*np.amin(l2_values) 
+            min_plot = np.nanmin(l2_values)
+            max_plot = np.nanmax(l2_values) if np.nanmax(l2_values)<3*min_plot else 3*min_plot 
             ax.set_ylim([min_plot,max_plot])
 
         # Hide any leftover subplots if n_params < n_rows * n_cols
