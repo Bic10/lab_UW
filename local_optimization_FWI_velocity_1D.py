@@ -529,7 +529,7 @@ def global_search_run(args):
         maximum_velocity        = maximum_velocity, 
         maximum_damping         = maximum_damping, 
         normalize_waveform      = True,
-        enable_plotting         = False,
+        enable_plotting         = True,
         plot_output_path        = plot_output_path
     )
     
@@ -566,7 +566,7 @@ if __name__ == "__main__":
     data_type_uw    = "uw_data/data_tsv_files" # + wave_type
     data_type_mech  = "mechanical_data"
     mech_file_name  = f"{experiment_name}_data_rp"
-    outfolder_name  = "2025_04_15_stf_local_inversion_freesurface_velramp_damgouge_8"
+    outfolder_name  = "2025_04_16_stf_local_inversion_freesurface_velgouge_damgouge_2"
     # outfolder_name = "2025_04_14_test"
     # Create output directories
     outdir_path_l2norm = dir_manager.make_data_analysis_folders(
@@ -588,10 +588,10 @@ if __name__ == "__main__":
         "maxtime2simulate"          : 40,           # [mus]
         "frequency_cutoff"          : 4,            # [MHz] low pass onserved data and simulate up to this frequency
         "minimum_SNR"               : 3,            # skip computation until time interval where signal should be is above SNR times surely-only-noise part 
-        "velocity_initial_list"     : np.linspace(0.26,.30, 5),  # [cm/mus] first guess of best velocity. There is a visual tool for it, if needed
+        "velocity_initial_list"     : np.linspace(0.16, 0.21, 50),  # [cm/mus] first guess of best velocity. There is a visual tool for it, if needed
         "min_velocity2simulate"     : None,         # [cm/mus] if not passed, computed by assembly and gouge velocity range
         "max_velocity2simulate"     : None,         # [cm/mus]
-        "damping_initial_list"      : np.linspace(0.0006,0.001, 5),
+        "damping_initial_list"      : np.linspace(0.0002,0.001, 8),
         "plot_save_interval"        : 1,
         "movie_save_interval"       : 1,
         "l2norm_plot_interval"      : 1,

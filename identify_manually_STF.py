@@ -281,6 +281,7 @@ def main():
     file_manual_pick = np.random.choice(len(infile_path_list))
 
     for infile_path in infile_path_list:
+        
         # Load the single file and get the wave/time
         ultrasonic_handler = UltrasonicDataHandler.load_UW_data(infile_path)
         data, metadata = ultrasonic_handler.waveform_data, ultrasonic_handler.metadata

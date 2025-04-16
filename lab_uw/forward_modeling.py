@@ -285,9 +285,14 @@ class UltrasonicModeler:
                 stf_duration = self.stf_handler.metadata["time_ax_waveform"][-1]-self.stf_handler.metadata["time_ax_waveform"][0]
                 start_A0 = np.searchsorted(observed_time, first_arrival)
                 end_A0 = np.searchsorted(observed_time, first_arrival + stf_duration)
-                A0 = np.sum(np.abs(observed_waveform[start_A0:end_A0]))
+                A0 = np.amax(np.abs(observed_waveform[start_A0:end_A0]))
+                A0_synth = np.amax(np.abs(synthetic_waveform[start_A0:end_A0]))
+                multiplier_factor = A0/A0_synth
+                synthetic_waveform *= multiplier_factor
+                print(multiplier_factor)
+
                 try:
-                    A1 = np.sum(np.abs(observed_waveform[3*start_A0:3*start_A0+end_A0]))
+                    A1 = np.amax(np.abs(observed_waveform[3*start_A0:3*start_A0+end_A0]))
                     synthetic_waveform[3*start_A0:3*end_A0+end_A0] *= A1/A0
                 except:
                     pass
@@ -297,7 +302,7 @@ class UltrasonicModeler:
         #-------------------------------------------
         # COMPUTE MISFIT
         #-------------------------------------------
-        L2norm = self.compute_misfit(
+        misfit = self.compute_misfit(
             observed_waveform   = observed_waveform,
             synthetic_waveform  = synthetic_waveform,
             misfit_interval     = misfit_interval
@@ -311,15 +316,20 @@ class UltrasonicModeler:
         self.grid_handler           = grid_handler
         self.source_handler         = source_handler
         self.receiver_handler       = receiver_handler
-        self.misfit                 = L2norm
+        self.misfit                 = misfit
 
-        # Optionally do plotting or movie
-        if enable_plotting:
-            damping_label = str(round(gouge_damping_1,5)).replace(".",",")
-            velocity_label = str(round(1e4*gouge_velocity_1,0)).replace(".",",")
+        if self.geometry_type == "dds":
             acq_time_label   = str(round(self.acquisition_time,5)).replace(".",",")
-            label = f"_acq_time_{acq_time_label}_vel_{velocity_label}_damping_{damping_label}_global_search_misfit_{self.misfit:.0f}_waveform"
+            damping_label    = str(round(gouge_damping_1,5)).replace(".",",")
+            velocity_label   = str(round(1e4*gouge_velocity_1,5)).replace(".",",")  
+            label = f"_acq_time_{acq_time_label}_vel_{velocity_label}_damping_{damping_label}_global_search_{misfit:.0f}_waveform"
+    
+        else:
+            pzt_vel_label     = str(round(1e4*pzt_velocity)).replace(".",",")
+            steel_vel_label   = str(round(1e4*steel_velocity)).replace(".",",")  
+            label = f"_pzt_{pzt_vel_label}_vel_{steel_vel_label}_global_search_{misfit:.0f}_waveform"
 
+        if enable_plotting:
             plot_output_name = plot_output_path.name + label
             plot_output_path = plot_output_path.parent / plot_output_name
             self.plotter.plot_simulation_waveform(
@@ -442,7 +452,7 @@ class UltrasonicModeler:
 
         # Regions where velocity is allowed to update
         if self.geometry_type == "dds": 
-            regions_to_update = np.arange(num_x)
+            # regions_to_update = np.arange(num_x)
             regions_to_update = np.concatenate([
                                                 idx_dict["pzt_1"],
                                                 idx_dict["groove_sb1"], 
@@ -486,9 +496,6 @@ class UltrasonicModeler:
         best_wavefield_forward           = initial_wavefield_forward.copy()
         best_laplacian_wavefield         = compute_spatial_laplacian(best_wavefield_forward, delta_x)
         best_first_derivative_laplacian  = compute_time_derivative_of_laplacian(best_laplacian_wavefield, delta_t)
-
-        best_second_derivative           = compute_time_derivatives(best_wavefield_forward, delta_t)
-
 
         best_synthetic_waveform          = initial_synthetic_waveform.copy()
         best_misfit                      = initial_misfit
@@ -661,9 +668,12 @@ class UltrasonicModeler:
                     stf_duration = self.stf_handler.metadata["time_ax_waveform"][-1]-self.stf_handler.metadata["time_ax_waveform"][0]
                     start_A0 = np.searchsorted(observed_time, first_arrival)
                     end_A0 = np.searchsorted(observed_time, first_arrival + stf_duration)            
-                    A0 = np.sum(np.abs(observed_waveform[start_A0:end_A0]))
+                    A0 = np.amax(np.abs(observed_waveform[start_A0:end_A0]))
+                    A0_synth = np.amax(np.abs(updated_synthetic_waveform[start_A0:end_A0]))
+                    multiplier_factor = A0/A0_synth
+                    updated_synthetic_waveform *= multiplier_factor
                     try:
-                        A1 = np.sum(np.abs(observed_waveform[3*start_A0:3*start_A0+end_A0]))
+                        A1 = np.amax(np.abs(observed_waveform[3*start_A0:3*start_A0+end_A0]))
                         updated_synthetic_waveform[3*start_A0:3*end_A0+end_A0] *=A1/A0
                     except:
                         pass
@@ -729,7 +739,7 @@ class UltrasonicModeler:
             self.average_gouge_velocity   = np.mean(self.velocity_model_handler.velocity_array[gouge]) 
             acq_time_label   = str(round(self.acquisition_time,5)).replace(".",",")
             damping_label    = str(round(self.average_gouge_damping,5)).replace(".",",")
-            velocity_label   = str(round(1e4*self.average_gouge_velocity,5)).replace(".",",")  
+            velocity_label   = str(round(1e4*self.average_gouge_velocity)).replace(".",",")  
             label = f"_acq_time_{acq_time_label}_vel_{velocity_label}_damping_{damping_label}_FWI_misfit_{best_misfit:.0f}_waveform"
     
         else:
