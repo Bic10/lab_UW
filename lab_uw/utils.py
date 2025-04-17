@@ -213,3 +213,14 @@ def plot_wavelet_over_signal(wavelet, signal, dt, time_shift):
     plt.legend()
     plt.grid(True)
     plt.show()
+
+def is_compact(idx: np.ndarray) -> bool:
+    """
+    True  → the indices form one contiguous block
+    False → there is at least one gap (two or more blocks)
+    """
+    if idx.size == 0:          # empty interval – decide what you want to return here
+        return False
+
+    idx = np.unique(idx)       # just in case there are duplicates
+    return idx[-1] - idx[0] + 1 == idx.size

@@ -550,31 +550,42 @@ class Plotter:
 
         fig, ax = plt.subplots(figsize=self.settings['figure_size'])
         # Check misfit_interval
-        if misfit_interval.size > 0:
-            misfit_start_time = t[misfit_interval[0]]
-            misfit_end_time = t[misfit_interval[-1]]
+                # ---------------------------------------------------------------------
+        # 1.  Misfit shading: cope with 0, 1, or many contiguous blocks
+        # ---------------------------------------------------------------------
+        if misfit_interval.size:
+            idx = np.sort(np.unique(misfit_interval))      # just in case
+            # find where the index sequence has gaps bigger than 1
+            gap_pos = np.where(np.diff(idx) > 1)[0]
+            blocks = np.split(idx, gap_pos + 1)            # list of contiguous blocks
 
-            # Add shaded region for misfit interval
-            ax.axvspan(t[0],misfit_start_time, color=self.settings['colors']['lightsteelblue'])
-            ax.axvspan(misfit_start_time, misfit_end_time, color=self.settings['colors']['sandybrown'], alpha=0.5)
-            ax.axvspan(misfit_end_time,t[-1], color=self.settings['colors']['lightsteelblue'])            
-            ax.text(misfit_start_time, min(sp_recorded), 'Misfit Evaluation Interval', ha='left', fontsize=self.settings['fontsize_labels'], color=self.settings['colors']['darkslategray'])
+            # --- shade the regions ------------------------------------------
+            light = self.settings['colors']['lightsteelblue']
+            dark  = self.settings['colors']['sandybrown']
+
+            # region before the first block
+            ax.axvspan(t[0], t[blocks[0][0]], color=light)
+            # each misfit block + the gap that follows it (if any)
+            for i, blk in enumerate(blocks):
+                ax.axvspan(t[blk[0]], t[blk[-1]], color=dark, alpha=0.5)
+                try:                                        # gap after this block
+                    nxt = blocks[i + 1]
+                    ax.axvspan(t[blk[-1]], t[nxt[0]], color=light)
+                except IndexError:
+                    pass
+            # region after the last block
+            ax.axvspan(t[blocks[-1][-1]], t[-1], color=light)
+
+            # add a label above the first misfit window
+            y_text = np.min(sp_recorded)
+            ax.text(t[blocks[0][0]], y_text,
+                    'Misfit Evaluation Interval',
+                    ha='left',
+                    fontsize=self.settings['fontsize_labels'],
+                    color=self.settings['colors']['darkslategray'])
         else:
             print("Misfit interval is empty; cannot shade region.")
 
-        COLORS = {
-            'reseda_green': '#788054',
-            'dutch_white': '#E0D6B4',
-            'khaki': '#CABB9E',
-            'platinum': '#E7E5E2',
-            'black_olive': '#322D1E',
-            'sandybrown': 'sandybrown',
-            'lightgrey': 'lightgrey',
-            'lightsteelblue': 'lightsteelblue',
-            'indianred': 'indianred',
-            'teal': 'teal',
-            'darkslategray': 'darkslategray'
-        }
         ax.plot(t, sp_recorded, label="Recorded Waveform", color=self.settings['colors']['platinum'], linewidth=2*self.settings['line_width'])
         ax.plot(t, sp_simulated, label="Simulated Waveform", color=self.settings['colors']['indianred'], linewidth=2*self.settings['line_width'],alpha=0.25)
 

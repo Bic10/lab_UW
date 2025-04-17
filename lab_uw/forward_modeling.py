@@ -18,6 +18,7 @@ from lab_uw.simulation_setup import (
 from lab_uw.plotting import Plotter
 from lab_uw.data_io import UltrasonicDataHandler
 from lab_uw.signal_processing import SignalProcessor
+from lab_uw.utils import is_compact
 
 class UltrasonicModeler:
     """
@@ -281,21 +282,21 @@ class UltrasonicModeler:
         # NORMALIZE IF REQUESTED
         if normalize_waveform and np.max(synthetic_waveform) != 0:
             if self.geometry_type == "block":
-                first_arrival = self.assembly_dict["z"] / self.assembly_dict["velocity" + self.wave_type]
-                stf_duration = self.stf_handler.metadata["time_ax_waveform"][-1]-self.stf_handler.metadata["time_ax_waveform"][0]
-                start_A0 = np.searchsorted(observed_time, first_arrival)
-                end_A0 = np.searchsorted(observed_time, first_arrival + stf_duration)
-                A0 = np.amax(np.abs(observed_waveform[start_A0:end_A0]))
-                A0_synth = np.amax(np.abs(synthetic_waveform[start_A0:end_A0]))
-                multiplier_factor = A0/A0_synth
-                synthetic_waveform *= multiplier_factor
-                print(multiplier_factor)
-
-                try:
-                    A1 = np.amax(np.abs(observed_waveform[3*start_A0:3*start_A0+end_A0]))
-                    synthetic_waveform[3*start_A0:3*end_A0+end_A0] *= A1/A0
-                except:
-                    pass
+                if not is_compact(misfit_interval):
+                    # where are the gaps?
+                    gaps = np.where(np.diff(np.sort(misfit_interval)) > 1)[0]
+                    segments = np.split(np.sort(misfit_interval), gaps + 1)
+                    direct   = segments[0]
+                    reflect  = segments[1]
+                    A0 = np.amax(np.abs(observed_waveform[direct]))
+                    A0_synth = np.amax(np.abs(synthetic_waveform[direct]))
+                    multiplier_factor = A0/A0_synth
+                    synthetic_waveform *= multiplier_factor
+                    A1 = np.amax(np.abs(observed_waveform[reflect]))
+                    synthetic_waveform[reflect] *= A1/A0
+                else:
+                    synthetic_waveform *= np.amax(np.abs(observed_waveform[misfit_interval]))/np.amax(np.abs(synthetic_waveform[misfit_interval])) 
+                    
             elif self.geometry_type == "dds":
                 synthetic_waveform *= np.sum(np.abs(observed_waveform[misfit_interval]))/np.sum(np.abs(synthetic_waveform[misfit_interval])) 
 
@@ -322,12 +323,12 @@ class UltrasonicModeler:
             acq_time_label   = str(round(self.acquisition_time,5)).replace(".",",")
             damping_label    = str(round(gouge_damping_1,5)).replace(".",",")
             velocity_label   = str(round(1e4*gouge_velocity_1,5)).replace(".",",")  
-            label = f"_acq_time_{acq_time_label}_vel_{velocity_label}_damping_{damping_label}_global_search_{misfit:.0f}_waveform"
+            label = f"_acq_time_{acq_time_label}_vel_{velocity_label}_damping_{damping_label}_global_search_{misfit:.3f}_waveform"
     
         else:
             pzt_vel_label     = str(round(1e4*pzt_velocity)).replace(".",",")
             steel_vel_label   = str(round(1e4*steel_velocity)).replace(".",",")  
-            label = f"_pzt_{pzt_vel_label}_vel_{steel_vel_label}_global_search_{misfit:.0f}_waveform"
+            label = f"_pzt_{pzt_vel_label}_vel_{steel_vel_label}_global_search_{misfit:.3f}_waveform"
 
         if enable_plotting:
             plot_output_name = plot_output_path.name + label
@@ -353,18 +354,79 @@ class UltrasonicModeler:
 
 
     def compute_misfit(self,
-        observed_waveform: np.ndarray,
-        synthetic_waveform: np.ndarray,
-        misfit_interval: slice
+            observed_waveform : np.ndarray,
+            synthetic_waveform: np.ndarray,
+            misfit_interval   : slice | np.ndarray,
+            *,
+            equal_segment_weight: bool = True,     # <- NEW FLAG
+            eps: float = 1e-12                      #   (to avoid divide‑by‑zero)
     ) -> float:
         """
-        Compute the L2 norm misfit between observed and synthetic waveforms over a specified interval.
+        L2‑norm misfit between observed and synthetic waveforms on a given interval.
+
+        Parameters
+        ----------
+        observed_waveform, synthetic_waveform : 1‑D ndarray
+        misfit_interval : slice | 1‑D ndarray of indices
+            Either a simple slice (contiguous window) or the array of indices returned
+            by `compute_misfit_interval`, which may contain several disjoint segments.
+        equal_segment_weight : bool, optional
+            *False* (default) – the classic behaviour: every individual **sample**
+            inside `misfit_interval` is equally weighted.
+            *True*  – every **segment** (direct arrival, reflection, …) is given the
+            same total weight, so a low‑amplitude reflection can influence the
+            inversion as much as the stronger direct wave.
+        eps : float, optional
+            Small constant to protect against divisions by zero.
         """
-        if np.max(synthetic_waveform) != 0:
-            return LA.norm(synthetic_waveform[misfit_interval] - observed_waveform[misfit_interval], 2)
+        # ------------------------------------------------------------------ helpers
+        def _split_into_segments(idxs: np.ndarray) -> list[np.ndarray]:
+            """Split an index array into a list of contiguous blocks."""
+            idxs = np.sort(np.unique(idxs))
+            gaps = np.where(np.diff(idxs) > 1)[0]
+            return np.split(idxs, gaps + 1)
+
+        # ------------------------------------------------------------------ guards
+        if synthetic_waveform.ndim != 1 or observed_waveform.ndim != 1:
+            raise ValueError("Waveforms must be 1‑D arrays")
+        if synthetic_waveform.size != observed_waveform.size:
+            raise ValueError("Synthetic and observed waveforms must have same length")
+        if not np.any(misfit_interval):
+            raise ValueError("misfit_interval is empty")
+
+        # ------------------------------------------------------------------- logic
+        diff = synthetic_waveform - observed_waveform
+
+        if isinstance(misfit_interval, slice):
+            # ------------------ contiguous window --------------------------
+            win = diff[misfit_interval]
+            norm = LA.norm(win, 2)
+
         else:
-            # workaround in case something went wrong: misfit is so high this way, this wrong simulation never become the minimum for local inverison
-            return 3 * LA.norm(synthetic_waveform[misfit_interval] - observed_waveform[misfit_interval], 2)        
+            # ------------------ 1 or more segments -------------------------
+            idx = np.asarray(misfit_interval, dtype=int)
+
+            if equal_segment_weight:
+                # Each segment contributes the SAME weight
+                norms = []
+                for seg in _split_into_segments(idx):
+                    err_seg = diff[seg]
+                    ref_seg = observed_waveform[seg]
+                    # normalise by the energy of the observed signal in that segment
+                    seg_norm = LA.norm(err_seg, 2) / (LA.norm(ref_seg, 2) + eps)
+                    norms.append(seg_norm)
+                norm = np.mean(norms)                   # equal weight per segment
+            else:
+                # Classical behaviour: equal weight per *sample*
+                norm = LA.norm(diff[idx], 2)
+
+        # ----------------------------------------------------------------- scaling
+        if np.max(np.abs(synthetic_waveform)) == 0:
+            # Something went very wrong – penalise heavily so it never becomes best fit
+            norm *= 3
+
+        return norm
+      
 
     def compute_amplitude_and_phase_spectrum(self, 
                                     observed_time     : np.ndarray,
@@ -396,7 +458,7 @@ class UltrasonicModeler:
         ds_max_start:          float = 0,
         ds_threshold:          float = 0,
         reduce_factor:         float = 1/2,
-        misfit_thresold    :   float = 0.5,
+        misfit_thresold    :   float = 0.001,
         normalize_waveform :   bool = True,
         enable_plotting    :   bool = True,
         make_movie         :   bool = False,
@@ -662,24 +724,26 @@ class UltrasonicModeler:
             )
             updated_synthetic_waveform = np.interp(observed_time, simulation_time, updated_simulated_waveform)
 
+            # NORMALIZE IF REQUESTED
             if normalize_waveform and np.max(updated_synthetic_waveform) != 0:
                 if self.geometry_type == "block":
-                    first_arrival = self.assembly_dict["z"] / self.assembly_dict["velocity" + self.wave_type]
-                    stf_duration = self.stf_handler.metadata["time_ax_waveform"][-1]-self.stf_handler.metadata["time_ax_waveform"][0]
-                    start_A0 = np.searchsorted(observed_time, first_arrival)
-                    end_A0 = np.searchsorted(observed_time, first_arrival + stf_duration)            
-                    A0 = np.amax(np.abs(observed_waveform[start_A0:end_A0]))
-                    A0_synth = np.amax(np.abs(updated_synthetic_waveform[start_A0:end_A0]))
-                    multiplier_factor = A0/A0_synth
-                    updated_synthetic_waveform *= multiplier_factor
-                    try:
-                        A1 = np.amax(np.abs(observed_waveform[3*start_A0:3*start_A0+end_A0]))
-                        updated_synthetic_waveform[3*start_A0:3*end_A0+end_A0] *=A1/A0
-                    except:
-                        pass
-
+                    if not is_compact(misfit_interval):
+                        # where are the gaps?
+                        gaps = np.where(np.diff(np.sort(misfit_interval)) > 1)[0]
+                        segments = np.split(np.sort(misfit_interval), gaps + 1)
+                        direct   = segments[0]
+                        reflect  = segments[1]
+                        A0 = np.amax(np.abs(observed_waveform[direct]))
+                        A0_synth = np.amax(np.abs(updated_synthetic_waveform[direct]))
+                        multiplier_factor = A0/A0_synth
+                        updated_synthetic_waveform *= multiplier_factor
+                        A1 = np.amax(np.abs(observed_waveform[reflect]))
+                        updated_synthetic_waveform[reflect] *= A1/A0
+                    else:
+                        updated_synthetic_waveform *= np.amax(np.abs(observed_waveform[misfit_interval]))/np.amax(np.abs(updated_synthetic_waveform[misfit_interval])) 
+                        
                 elif self.geometry_type == "dds":
-                    updated_synthetic_waveform *= np.sum(abs(observed_waveform[misfit_interval]))/np.sum(np.abs(updated_synthetic_waveform[misfit_interval]))
+                    updated_synthetic_waveform *= np.sum(np.abs(observed_waveform[misfit_interval]))/np.sum(np.abs(updated_synthetic_waveform[misfit_interval])) 
 
             # Compute updated misfit
             updated_misfit = self.compute_misfit(
@@ -740,7 +804,7 @@ class UltrasonicModeler:
             acq_time_label   = str(round(self.acquisition_time,5)).replace(".",",")
             damping_label    = str(round(self.average_gouge_damping,5)).replace(".",",")
             velocity_label   = str(round(1e4*self.average_gouge_velocity)).replace(".",",")  
-            label = f"_acq_time_{acq_time_label}_vel_{velocity_label}_damping_{damping_label}_FWI_misfit_{best_misfit:.0f}_waveform"
+            label = f"_acq_time_{acq_time_label}_vel_{velocity_label}_damping_{damping_label}_FWI_misfit_{best_misfit:.3f}_waveform"
     
         else:
             label = ""

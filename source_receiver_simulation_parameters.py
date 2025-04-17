@@ -23,6 +23,24 @@ def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
     y = lfilter(b, a, data)
     return y
 
+def compute_misfit_interval(assembly_dict, stf_handler, observed_time):
+    # --- direct arrival ------------------------------------------------------
+    first_arrival  = assembly_dict["z"] / assembly_dict["velocity" + wave_type]
+    stf_duration   = (stf_handler.metadata["time_ax_waveform"][-1] -
+                      stf_handler.metadata["time_ax_waveform"][0])
+
+    start_A0 = np.searchsorted(observed_time, first_arrival)
+    end_A0   = np.searchsorted(observed_time, first_arrival + stf_duration)
+    misfit   = np.arange(start_A0, end_A0)          # already contiguous
+
+    # --- first reflection ----------------------------------------------------
+    start_A1 = 3 * start_A0                         # <- only if this is in range
+    end_A1   = start_A1 + (end_A0 - start_A0)
+    if end_A1 < observed_time.size:                 # avoid the try/except
+        misfit = np.concatenate([misfit, np.arange(start_A1, end_A1)])
+
+    return misfit
+    
 def process_uw_file(
     infile_path: Path,
     stf_handler: UltrasonicDataHandler,
@@ -113,9 +131,10 @@ def process_waveform(
     else:
         outdir_path_image = Path(params["outdir_path_image"])
 
-    ###### For compatibility with global optimization
-    misfit_interval = np.where(observed_time >= 0)[0]
-
+    misfit_interval = compute_misfit_interval(assembly_dict=assembly_dict,
+                                              stf_handler=stf_handler,
+                                              observed_time=observed_time)
+    
     # Monte Carlo parameters
     # num_iteration = 1 if idx_waveform == 0 else global_search_space["num_iterations"] 
     num_iteration = global_search_space["num_iterations"] 
@@ -492,15 +511,15 @@ if __name__ == "__main__":
 
     #### MONTE CARLO PARAMETERS DEFINED HERE ####
     global_search_space = {
-        "num_iterations"       : 10000,  # how many random draws to try
+        "num_iterations"       : 10,  # how many random draws to try
         "steel_velocity_low"   : assembly_dict["velocity" + wave_type]-0.0100,
         "steel_velocity_high"  : assembly_dict["velocity" + wave_type]+0.0100,              
         "pzt_velocity_low"     : params["min_velocity2simulate"], 
         "pzt_velocity_high"    : params["max_velocity2simulate"],
         "spreading_factor_low" : 0.1,
-        "spreading_factor_high": 1.,
+        "spreading_factor_high": 1.0,
         # Uniform range for positions relative to edges pzt-steel
-        "position2edge_low"    : -0.8,
+        "position2edge_low"    : -0.9,
         "position2edge_high"   : -0.,
         # how many nodes to use to approximate the tx/rx positions in case they do not correspond precisely to one node
         "radius_factor_low"    : 1.0,

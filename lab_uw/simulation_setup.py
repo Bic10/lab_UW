@@ -810,17 +810,17 @@ def arbitrary_source_and_receiver_positioning(
     schemes using Kaiser windowed sinc functions
     """
     from numpy import sinc, kaiser
-    if not free_surface_left:
+    if free_surface_left is None:
         free_surface_left  = spatial_axis[0]
-    if not free_surface_right:
+    if free_surface_right is None:
         free_surface_right = spatial_axis[-1]
 
     free_surface_left_idx  = np.searchsorted(spatial_axis, free_surface_left)
     free_surface_right_idx = np.searchsorted(spatial_axis, free_surface_right)
 
-    if not radius:
-        radius = round((pzt_layer_width/2) / dx)
-    if not extension:
+    if radius is None:
+        radius = int(round(pzt_layer_width / (2*dx)))
+    if extension is None:
         extension = pzt_layer_width
 
     window_len = 2*radius+1
@@ -829,14 +829,15 @@ def arbitrary_source_and_receiver_positioning(
     filter = np.zeros(spatial_axis.shape)
 
     if position >= spatial_axis[0] and position <= spatial_axis[-1]:
-        pzt_start = position - extension /2
-        pzt_end = position + extension/2
+        pzt_start = max(position - extension /2, spatial_axis[0])
+        pzt_end = min(position + extension/2,spatial_axis[-1])
     else:
         raise ValueError("Position ouside the spatial axis simulated")
 
     pzt_positions = np.arange(pzt_start, pzt_end, dx)   
     finite_spatial_function = np.zeros(spatial_axis.shape)
     for delta_position in pzt_positions:
+        filter.fill(0.0)                     # start with a clean window each time
         raw_delta_approx = sinc(spatial_axis-delta_position)
         delta_position_idx = np.searchsorted(spatial_axis, delta_position)
         start_idx = delta_position_idx - radius
@@ -872,11 +873,13 @@ def arbitrary_source_and_receiver_positioning(
                 continue
             folding_window[folding_len:] = filter_window[2*folding_len:]
             filter[start_idx:free_surface_right_idx] = np.flip(folding_window)
-            # plt.plot(spatial_axis,filter)
-            # plt.show()
+
         optimal_delta_approx = raw_delta_approx*filter  
         finite_spatial_function += optimal_delta_approx 
-        finite_spatial_function /= np.amax(finite_spatial_function)   # renormalize to get easier the global search
+    max_val = np.amax(finite_spatial_function)
+    if max_val == 0:                         # nothing was written – probably a set‑up error
+        raise ValueError("Spatial function is identically zero; check radius/extension.")
+    finite_spatial_function /= max_val
     return finite_spatial_function
 
 ##################################
