@@ -589,32 +589,10 @@ class UltrasonicModeler:
                 # -------------------------------------------------------------------
                 # Build "residual" => adjoint source
                 # -------------------------------------------------------------------
-                # -------------------------------------------------------------------
-                # Build weights that balance the energy of the windows
-                # -------------------------------------------------------------------
-                weights = np.ones_like(observed_waveform)
-                if self.geometry_type == "block" and not is_compact(misfit_interval):
-
-                    # split misfit_interval into the two windows
-                    idx = np.sort(misfit_interval)
-                    gaps = np.where(np.diff(idx) > 1)[0]
-                    direct, reflect = np.split(idx, gaps + 1)
-
-                    A0 = np.max(np.abs(observed_waveform[direct]))
-                    A1 = np.max(np.abs(observed_waveform[reflect]))
-                    # scale reflection so that its peak matches the direct one
-                    weights[reflect] = A0 / A1
-
-                # optional: normalise the whole vector so that max(weights)=1
-                weights /= weights.max()
-
-                # -------------------------------------------------------------------
-                # Residual and adjoint source
-                # -------------------------------------------------------------------
                 mask = np.zeros_like(observed_waveform, dtype=bool)
                 mask[misfit_interval] = True
 
-                residual = (best_synthetic_waveform - observed_waveform) * mask * weights
+                residual = (best_synthetic_waveform - observed_waveform) * mask
                 adj_src_time_function = residual[::-1]
                 # (interpolate, solve adjoint, build gradient …)
 
@@ -703,6 +681,7 @@ class UltrasonicModeler:
                 #                                           a_min=None,
                 #                                           a_max=updated_velocity_model[idx_dict["central_block"]][0])
 
+
             if da_max:
                 # -- update velocity only in the selected region --
                 step_size_damp = da_max / (max_damp_grad + 1e-15)
@@ -749,6 +728,27 @@ class UltrasonicModeler:
                 wavefield_forward_updated * updated_receiver_spatial_function, axis=1
             )
             updated_synthetic_waveform = np.interp(observed_time, simulation_time, updated_simulated_waveform)
+
+            # NORMALIZE IF REQUESTED
+            if normalize_waveform and np.max(updated_synthetic_waveform) != 0:
+                if self.geometry_type == "block":
+                    if not is_compact(misfit_interval):
+                        # where are the gaps?
+                        gaps = np.where(np.diff(np.sort(misfit_interval)) > 1)[0]
+                        segments = np.split(np.sort(misfit_interval), gaps + 1)
+                        direct   = segments[0]
+                        reflect  = segments[1]
+                        A0 = np.amax(np.abs(observed_waveform[direct]))
+                        A0_synth = np.amax(np.abs(updated_synthetic_waveform[direct]))
+                        multiplier_factor = A0/A0_synth
+                        updated_synthetic_waveform *= multiplier_factor
+                        A1 = np.amax(np.abs(observed_waveform[reflect]))
+                        updated_synthetic_waveform[reflect] *= A1/A0
+                    else:
+                        updated_synthetic_waveform *= np.amax(observed_waveform[misfit_interval])/np.amax(updated_synthetic_waveform[misfit_interval])
+                        
+                elif self.geometry_type == "dds":
+                    updated_synthetic_waveform *= np.sum(np.abs(observed_waveform[misfit_interval]))/np.sum(np.abs(updated_synthetic_waveform[misfit_interval])) 
 
             # Compute updated misfit
             updated_misfit = self.compute_misfit(
