@@ -358,7 +358,7 @@ class UltrasonicModeler:
             synthetic_waveform: np.ndarray,
             misfit_interval   : slice | np.ndarray,
             *,
-            equal_segment_weight: bool = True,     # <- NEW FLAG
+            equal_segment_weight: bool = False,     # <- NEW FLAG
             eps: float = 1e-12                      #   (to avoid divide‑by‑zero)
     ) -> float:
         """
@@ -458,7 +458,7 @@ class UltrasonicModeler:
         ds_max_start:          float = 0,
         ds_threshold:          float = 0,
         reduce_factor:         float = 1/2,
-        misfit_thresold    :   float = 0.001,
+        misfit_thresold    :   float = 1,
         normalize_waveform :   bool = True,
         enable_plotting    :   bool = True,
         make_movie         :   bool = False,
@@ -589,13 +589,44 @@ class UltrasonicModeler:
                 # -------------------------------------------------------------------
                 # Build "residual" => adjoint source
                 # -------------------------------------------------------------------
-                adj_src_time_function = np.zeros(observed_waveform.shape)
-                residual = best_synthetic_waveform[misfit_interval] - observed_waveform[misfit_interval]
-                adj_src_time_function[misfit_interval] = np.flipud(residual)
+                # -------------------------------------------------------------------
+                # Build weights that balance the energy of the windows
+                # -------------------------------------------------------------------
+                weights = np.ones_like(observed_waveform)
+                if self.geometry_type == "block" and not is_compact(misfit_interval):
 
-                adj_src_time_function = np.interp(simulation_time, observed_time, adj_src_time_function)
+                    # split misfit_interval into the two windows
+                    idx = np.sort(misfit_interval)
+                    gaps = np.where(np.diff(idx) > 1)[0]
+                    direct, reflect = np.split(idx, gaps + 1)
 
+                    A0 = np.max(np.abs(observed_waveform[direct]))
+                    A1 = np.max(np.abs(observed_waveform[reflect]))
+                    # scale reflection so that its peak matches the direct one
+                    weights[reflect] = A0 / A1
+
+                # optional: normalise the whole vector so that max(weights)=1
+                weights /= weights.max()
+
+                # -------------------------------------------------------------------
+                # Residual and adjoint source
+                # -------------------------------------------------------------------
+                mask = np.zeros_like(observed_waveform, dtype=bool)
+                mask[misfit_interval] = True
+
+                residual = (best_synthetic_waveform - observed_waveform) * mask * weights
+                adj_src_time_function = residual[::-1]
+                # (interpolate, solve adjoint, build gradient …)
+
+
+                # interpolate to simulation time grid, if needed
+                adj_src_time_function = np.interp(simulation_time,
+                                                observed_time,
+                                                adj_src_time_function)
+
+                # spatial part unchanged
                 adj_src_spatial_function = updated_receiver_spatial_function
+
                 # Solve adjoint wavefield with the CURRENT best velocity
                 wavefield_adjoint = pseudospectral_1D_damped(
                     num_x                   = num_x,
@@ -614,7 +645,6 @@ class UltrasonicModeler:
                     # GRADIENT wrt velocity c(x)
                     # -------------------------------------------------------------------
                     gradient_vel = np.zeros_like(best_velocity_model)
-                    # temp = wavefield_adjoint
                     temp = -(2.0 * best_velocity_model[None, :]) * np.flipud(wavefield_adjoint) * (best_laplacian_wavefield)
                     gradient_vel = np.sum(temp, axis=0) 
                     max_vel_grad = np.max(np.abs(gradient_vel[regions_to_update]))
@@ -624,7 +654,6 @@ class UltrasonicModeler:
                     # -------------------------------------------------------------------
                 if da_max:
                     gradient_damp = np.zeros_like(best_damping_model)
-                    # temp = wavefield_adjoint
                     temp =  -np.flipud(wavefield_adjoint) * best_first_derivative_laplacian
                     gradient_damp = np.sum(temp, axis=0) 
                     max_damp_grad = np.max(np.abs(gradient_damp[regions_to_update]))
@@ -634,12 +663,10 @@ class UltrasonicModeler:
                     # GRADIENT wrt source-time function w(t)
                     # -------------------------------------------------------------------
                     gradient_w = np.zeros_like(best_source_time_function)
-                    temp = wavefield_adjoint @ best_source_spatial_function  # shape => (num_t,)
-                    gradient_w = np.flipud(temp)
-                    # Multiply by delta_t to approximate integral in continuous form (optional):
+                    gradient_w = np.flipud(wavefield_adjoint) @ best_source_spatial_function  # shape => (num_t,)
                     gradient_w[stf_duration_idx:] = 0
                     max_w_grad   = np.max(np.abs(gradient_w))
-                
+
                 if ds_max:
                     # -------------------------------------------------------------------
                     # GRADIENT wrt source-spatial function s(x)
@@ -675,7 +702,6 @@ class UltrasonicModeler:
                 # updated_velocity_model[grooves] = np.clip(updated_velocity_model[grooves],
                 #                                           a_min=None,
                 #                                           a_max=updated_velocity_model[idx_dict["central_block"]][0])
-
 
             if da_max:
                 # -- update velocity only in the selected region --
@@ -723,27 +749,6 @@ class UltrasonicModeler:
                 wavefield_forward_updated * updated_receiver_spatial_function, axis=1
             )
             updated_synthetic_waveform = np.interp(observed_time, simulation_time, updated_simulated_waveform)
-
-            # NORMALIZE IF REQUESTED
-            if normalize_waveform and np.max(updated_synthetic_waveform) != 0:
-                if self.geometry_type == "block":
-                    if not is_compact(misfit_interval):
-                        # where are the gaps?
-                        gaps = np.where(np.diff(np.sort(misfit_interval)) > 1)[0]
-                        segments = np.split(np.sort(misfit_interval), gaps + 1)
-                        direct   = segments[0]
-                        reflect  = segments[1]
-                        A0 = np.amax(np.abs(observed_waveform[direct]))
-                        A0_synth = np.amax(np.abs(updated_synthetic_waveform[direct]))
-                        multiplier_factor = A0/A0_synth
-                        updated_synthetic_waveform *= multiplier_factor
-                        A1 = np.amax(np.abs(observed_waveform[reflect]))
-                        updated_synthetic_waveform[reflect] *= A1/A0
-                    else:
-                        updated_synthetic_waveform *= np.amax(np.abs(observed_waveform[misfit_interval]))/np.amax(np.abs(updated_synthetic_waveform[misfit_interval])) 
-                        
-                elif self.geometry_type == "dds":
-                    updated_synthetic_waveform *= np.sum(np.abs(observed_waveform[misfit_interval]))/np.sum(np.abs(updated_synthetic_waveform[misfit_interval])) 
 
             # Compute updated misfit
             updated_misfit = self.compute_misfit(

@@ -511,7 +511,7 @@ if __name__ == "__main__":
 
     #### MONTE CARLO PARAMETERS DEFINED HERE ####
     global_search_space = {
-        "num_iterations"       : 10,  # how many random draws to try
+        "num_iterations"       : 1000,  # how many random draws to try
         "steel_velocity_low"   : assembly_dict["velocity" + wave_type]-0.0100,
         "steel_velocity_high"  : assembly_dict["velocity" + wave_type]+0.0100,              
         "pzt_velocity_low"     : params["min_velocity2simulate"], 
