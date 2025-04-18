@@ -281,7 +281,7 @@ def process_waveform(
         misfit_interval     = misfit_interval,
         minimum_velocity    = params["min_velocity2simulate"],
         maximum_velocity    = params["max_velocity2simulate"],
-        normalize_waveform  = True,
+        normalize_waveform  = False,
         enable_plotting     = save_plot,
         make_movie          = False,
         plot_output_path    = plot_output_path,
@@ -301,9 +301,9 @@ def process_waveform(
         ("Spread Rx",              spread_rx_array),
         ("Pos2Edge Tx",            pos_tx_array),
         ("Pos2Edge Rx",            pos_rx_array),
-        # ("Radius Factor Tx",       rad_tx_array),
-        # ("Radius Factor Rx",       rad_rx_array),
-        # ("multiplier_STF",           multiplier_array)
+        ("Radius Factor Tx",       rad_tx_array),
+        ("Radius Factor Rx",       rad_rx_array),
+        ("multiplier_STF",           multiplier_array)
     ]
 
     plotter.plot_scatter_l2_vs_parameters(
@@ -329,23 +329,23 @@ def process_waveform(
     ds_threshold = 0.01*ds_max_start
 
     simulation.run_local_inversion(
-                                   n_iterations=params["n_iterations"],
-                                   dc_max_start=dc_max_start,
-                                   dc_threshold=dc_threshold,
-                                   dw_max_start=dw_max_start,
-                                   dw_threshold=dw_threshold,
-                                   ds_max_start=ds_max_start,
-                                   ds_threshold=ds_threshold,
-                                   reduce_factor=params["reduce_factor"],
-                                   normalize_waveform = True,
-                                   enable_plotting=True,
-                                   plot_output_path=plot_output_path
-                                   )
+        n_iterations=params["n_iterations"],
+        dc_max_start=dc_max_start,
+        dc_threshold=dc_threshold,
+        dw_max_start=dw_max_start,
+        dw_threshold=dw_threshold,
+        ds_max_start=ds_max_start,
+        ds_threshold=ds_threshold,
+        reduce_factor=params["reduce_factor"],
+        normalize_waveform = False,
+        enable_plotting=True,
+        plot_output_path=plot_output_path
+        )
     
     stf_handler.waveform_data = np.interp(stf_handler.metadata["time_ax_waveform"], 
                                           simulation.sim_time_handler.simulation_time, 
                                           simulation.source_handler.time_function)
-    stf_handler.waveform_data = butter_bandpass_filter(stf_handler.waveform_data, 0.25, 12.49, 1/stf_handler.metadata["sampling_rate"])    
+    # stf_handler.waveform_data = butter_bandpass_filter(stf_handler.waveform_data, 0.25, 12.49, 1/stf_handler.metadata["sampling_rate"])    
 
     if params["save_local_inversion_STF"]:
         stf_from_inverison_outfile_name = stf_handler.infile.name + params["saved_STF_file_name"]
@@ -429,7 +429,7 @@ def process_velocity(args):
         misfit_interval     = misfit_interval,
         minimum_velocity    = params["min_velocity2simulate"],
         maximum_velocity    = params["max_velocity2simulate"],
-        normalize_waveform  = True,
+        normalize_waveform  = False,
         enable_plotting     = False
     )
 
@@ -462,7 +462,7 @@ if __name__ == "__main__":
     experiment_name = "STF_ss10_05"
     wave_type       = "_s"  # e.g., compressional wave
     data_type_uw    = f"uw_data/data_tsv_files{wave_type}"
-    outfolder_name  = f"2025-04-16_60s" 
+    outfolder_name  = f"2025-04-18_last2confirm" 
 
     # Create output directories
     outdir_path_l2norm = dir_manager.make_data_analysis_folders(
@@ -479,8 +479,8 @@ if __name__ == "__main__":
     # Basic simulation parameters
     params = {
         "absorbing"                 : False,
-        "save_local_inversion_STF"  : True,
-        "saved_STF_file_name"       : "_local_inversion",   # this string will be added to the "stf_chosen" file name, so to not overdrive the original data
+        "save_local_inversion_STF"  : False,
+        "saved_STF_file_name"       : "",   # this string will be added to the "stf_chosen" file name, so to not overdrive the original data
         "maxtime2simulate"          : 60,   # mus
         "frequency_cutoff"          : 6,     # MHz
         "minimum_SNR"               : 5,
@@ -511,16 +511,16 @@ if __name__ == "__main__":
 
     #### MONTE CARLO PARAMETERS DEFINED HERE ####
     global_search_space = {
-        "num_iterations"       : 1000,  # how many random draws to try
-        "steel_velocity_low"   : assembly_dict["velocity" + wave_type]-0.0100,
-        "steel_velocity_high"  : assembly_dict["velocity" + wave_type]+0.0100,              
-        "pzt_velocity_low"     : params["min_velocity2simulate"], 
-        "pzt_velocity_high"    : params["max_velocity2simulate"],
-        "spreading_factor_low" : 0.1,
+        "num_iterations"       : 1,  # how many random draws to try
+        "steel_velocity_low"   : 0.3200, # assembly_dict["velocity" + wave_type]-0.0100,
+        "steel_velocity_high"  : 0.3200, # assembly_dict["velocity" + wave_type]+0.0100,              
+        "pzt_velocity_low"     : 0.3500, # params["min_velocity2simulate"], 
+        "pzt_velocity_high"    : 0.3500, #params["max_velocity2simulate"],
+        "spreading_factor_low" : 1.0,
         "spreading_factor_high": 1.0,
         # Uniform range for positions relative to edges pzt-steel
-        "position2edge_low"    : -0.9,
-        "position2edge_high"   : -0.,
+        "position2edge_low"    : -0.5,
+        "position2edge_high"   : -0.5,
         # how many nodes to use to approximate the tx/rx positions in case they do not correspond precisely to one node
         "radius_factor_low"    : 1.0,
         "radius_factor_high"   : 1.0,
@@ -548,12 +548,13 @@ if __name__ == "__main__":
             experiment_name_stf=experiment_name,
             data_type_stf="data_analysis/source_time_functions" + wave_type,
             # stf_chosen= "width250_volt70_local_inversion_bigboss",
-            stf_chosen= "width250_volt70",
+            stf_chosen= "width250_volt70_local_inversion",
 
             # stf_chosen=stf_chosen,
-            frequency_cutoff= 12.49  # LEAVE THE NIQUIST, BUT FIX IT! SOMEHOW THE LOWPASS IS WRONG, IT DISTORTS THE WAVE
+            # frequency_cutoff= 12.49  # LEAVE THE NIQUIST, BUT FIX IT! SOMEHOW THE LOWPASS IS WRONG, IT DISTORTS THE WAVE
         )
 
+        # stf_handler.waveform_data *= 53         # found by linsearch with multiplier parameters
         # Run the main simulation routine
         process_uw_file(
             infile_path=infile_path,

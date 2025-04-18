@@ -276,7 +276,7 @@ class UltrasonicDataHandler:
         experiment_name_stf: str,
         data_type_stf: str,
         stf_chosen: str,
-        frequency_cutoff: float
+        frequency_cutoff: float = None
     ) -> "UltrasonicDataHandler":
         """
         Creates an UltrasonicDataHandler instance by locating, loading, and processing
@@ -310,11 +310,11 @@ class UltrasonicDataHandler:
             - np.array(stf_metadata["time_ax_waveform"])[0]
         )
 
-        stf_waveform_filt = butter_bandpass_filter(stf_waveform_raw, 0.25, frequency_cutoff, 1/stf_metadata["sampling_rate"])
+        if frequency_cutoff:
+            stf_waveform_filt = butter_bandpass_filter(stf_waveform_raw, 0.25, frequency_cutoff, 1/stf_metadata["sampling_rate"])
+            stf_waveform = stf_waveform_filt - stf_waveform_filt[0]
 
-        stf_waveform = stf_waveform_filt - stf_waveform_filt[0]
-
-        stf_handler.waveform_data = stf_waveform
+        stf_handler.waveform_data = stf_waveform_raw
         stf_handler.metadata = stf_metadata
         return stf_handler
 

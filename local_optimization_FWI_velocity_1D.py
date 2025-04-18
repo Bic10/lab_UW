@@ -219,13 +219,13 @@ def process_uw_file(
             velo_mean =  result["best_gouge_velocity"]
             velo_min  = velo_mean - 0.03 * velo_mean
             velo_max  = velo_mean + 0.03 * velo_mean
-            velo_step = 0.01 * velo_mean
+            velo_step = 0.001 * velo_mean
             params["velocity_initial_list"] = np.arange(velo_min, velo_max, velo_step)
 
             damp_mean =  result["best_gouge_damping"]
-            damp_min  = damp_mean - 0.05 * damp_mean
-            damp_max  = damp_mean + 0.05 * damp_mean
-            damp_step = 0.05 * damp_mean
+            damp_min  = damp_mean - 0.03 * damp_mean
+            damp_max  = damp_mean + 0.03 * damp_mean
+            damp_step = 0.01 * damp_mean
             params["damping_initial_list"]  = np.arange(damp_min, damp_max, damp_step)
 
             _, result = global_search_waveform(
@@ -446,11 +446,11 @@ def global_search_waveform(
     # LOCAL INVERSION
     ############################################################################    
     # dc_max_start = 0
-    dc_max_start = 0.3 * best_gouge_velocity
+    dc_max_start = 0.1 * best_gouge_velocity
     dc_threshold = 0.01*dc_max_start
 
-    da_max_start = 0
-    # da_max_start = 0.1 * best_gouge_damping
+    # da_max_start = 0
+    da_max_start = 0. * best_gouge_damping
     da_threshold = 0.01* da_max_start
 
     dw_max_start = 0
@@ -529,21 +529,10 @@ def global_search_run(args):
         maximum_velocity        = maximum_velocity, 
         maximum_damping         = maximum_damping, 
         normalize_waveform      = True,
-        enable_plotting         = True,
+        enable_plotting         = False,
         plot_output_path        = plot_output_path
     )
     
-    # simulation.compute_amplitude_and_phase_spectrum(
-    #     observed_time      = observed_time,
-    #     synthetic_waveform = simulation.synthetic_waveform
-    # )
-
-    # observed_amp_spectrum = np.abs(np.fft.rfft(observed_waveform))
-
-    # plt.plot(simulation.frequencies, observed_amp_spectrum)
-    # plt.plot(simulation.frequencies, simulation.amplitude_spectrum)
-    # plt.show()
-
     L2norm_new = simulation.misfit
     gouge_velocity = assembly_dict_guessed["gouge_velocity_1"]
     gouge_damping  = assembly_dict_guessed["gouge_damping_1"]
@@ -566,8 +555,7 @@ if __name__ == "__main__":
     data_type_uw    = "uw_data/data_tsv_files" # + wave_type
     data_type_mech  = "mechanical_data"
     mech_file_name  = f"{experiment_name}_data_rp"
-    outfolder_name  = "2025_04_16_stf_local_inversion_freesurface_velgouge_damgouge_2"
-    # outfolder_name = "2025_04_14_test"
+    outfolder_name  = "2025_04_18_stf_local_inversion_freesurface_velgouge_damgouge"
     # Create output directories
     outdir_path_l2norm = dir_manager.make_data_analysis_folders(
         machine_name    = machine_name,
@@ -588,10 +576,10 @@ if __name__ == "__main__":
         "maxtime2simulate"          : 40,           # [mus]
         "frequency_cutoff"          : 4,            # [MHz] low pass onserved data and simulate up to this frequency
         "minimum_SNR"               : 3,            # skip computation until time interval where signal should be is above SNR times surely-only-noise part 
-        "velocity_initial_list"     : np.linspace(0.16, 0.21, 50),  # [cm/mus] first guess of best velocity. There is a visual tool for it, if needed
+        "velocity_initial_list"     : np.linspace(0.14, 0.26, 120),  # [cm/mus] first guess of best velocity. There is a visual tool for it, if needed
         "min_velocity2simulate"     : None,         # [cm/mus] if not passed, computed by assembly and gouge velocity range
         "max_velocity2simulate"     : None,         # [cm/mus]
-        "damping_initial_list"      : np.linspace(0.0002,0.001, 8),
+        "damping_initial_list"      : np.linspace(0.0002,0.001, 20),
         "plot_save_interval"        : 1,
         "movie_save_interval"       : 1,
         "l2norm_plot_interval"      : 1,
@@ -607,9 +595,9 @@ if __name__ == "__main__":
         machine_name_stf    = "on_bench",
         experiment_name_stf = "STF_ss10_05",
         data_type_stf       = "data_analysis/source_time_functions" + wave_type,
-        stf_chosen          = "width250_volt70_multiplier_local_inversion",
+        stf_chosen          = "width250_volt70_local_inversion",
         # stf_chosen          = "width250_volt70",
-        frequency_cutoff= 6 # params["frequency_cutoff"]
+        # frequency_cutoff= 6 # params["frequency_cutoff"]
     )
 
     # stf_handler.waveform_data = -stf_handler.waveform_data
