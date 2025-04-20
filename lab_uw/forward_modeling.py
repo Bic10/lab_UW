@@ -121,14 +121,12 @@ class UltrasonicModeler:
             side2_params      = assembly_dict["side2_params"] 
             pzt_layer_width   = side1_params["pzt_layer_width"]
             pla_layer_width   = side1_params["pla_layer_width"]
-            self.acquisition_time = self.assembly_dict["acquisition_time"] # contain the time, referred to the start of the experiment, when the waveforms are acquired
 
         elif self.geometry_type.lower() == "block":
             # Single-block geometry
             pzt_layer_width      = assembly_dict["pzt_layer_width"]     
             pla_layer_width      = assembly_dict["pla_layer_width"] 
             maximum_damping      = 0.
-            self.acquisition_time= 0.
 
         else:
             raise ValueError(f"Unknown geometry_type: {self.geometry_type}.")
@@ -307,7 +305,8 @@ class UltrasonicModeler:
                 synthetic_waveform *= np.amax(np.abs(observed_waveform[misfit_interval]))/np.amax(np.abs(synthetic_waveform[misfit_interval])) 
                     
             elif self.geometry_type == "dds":
-                synthetic_waveform *= np.sum(np.abs(observed_waveform[misfit_interval]))/np.sum(np.abs(synthetic_waveform[misfit_interval])) 
+                # synthetic_waveform *= np.sum(np.abs(observed_waveform[misfit_interval]))/np.sum(np.abs(synthetic_waveform[misfit_interval])) 
+                synthetic_waveform *= np.amax(np.abs(observed_waveform[misfit_interval]))/np.amax(np.abs(synthetic_waveform[misfit_interval])) 
 
         # plt.plot(observed_waveform)
         # plt.plot(synthetic_waveform)
@@ -332,10 +331,9 @@ class UltrasonicModeler:
         self.misfit                 = misfit
 
         if self.geometry_type == "dds":
-            acq_time_label   = str(round(self.acquisition_time,5)).replace(".",",")
             damping_label    = str(round(gouge_damping_1,5)).replace(".",",")
             velocity_label   = str(round(1e4*gouge_velocity_1,5)).replace(".",",")  
-            label = f"_acq_time_{acq_time_label}_vel_{velocity_label}_damping_{damping_label}_global_search_{misfit:.3f}_waveform"
+            label = f"_vel_{velocity_label}_damping_{damping_label}_global_search_{misfit:.3f}_waveform"
     
         else:
             pzt_vel_label     = str(round(1e4*pzt_velocity)).replace(".",",")
@@ -504,7 +502,11 @@ class UltrasonicModeler:
         observed_waveform          = self.observed_waveform
         misfit_interval            = self.misfit_interval
 
-        initial_misfit             = self.misfit
+        initial_misfit             = self.compute_misfit(
+            observed_waveform   = observed_waveform,
+            synthetic_waveform  = initial_synthetic_waveform,
+            misfit_interval     = misfit_interval
+        )
 
         print(f"Initial misfit: {initial_misfit}")
 
@@ -526,17 +528,17 @@ class UltrasonicModeler:
 
         # Regions where velocity is allowed to update
         if self.geometry_type == "dds": 
-            regions_to_update = np.arange(num_x)
-            # regions_to_update = np.concatenate([
-            #     # idx_dict["pzt_1"],
-            #     idx_dict["groove_sb1"], 
-            #     idx_dict["gouge_1"],
-            #     idx_dict["groove_cb1"],
-            #     idx_dict["groove_cb2"],
-            #     idx_dict["gouge_2"],
-            #     idx_dict["groove_sb2"],
-            #     # idx_dict["pzt_2"]
-            # ])
+            # regions_to_update = np.arange(num_x)
+            regions_to_update = np.concatenate([
+                # idx_dict["pzt_1"],
+                idx_dict["groove_sb1"], 
+                idx_dict["gouge_1"],
+                idx_dict["groove_cb1"],
+                idx_dict["groove_cb2"],
+                idx_dict["gouge_2"],
+                idx_dict["groove_sb2"],
+                # idx_dict["pzt_2"]
+            ])
             
             grooves = np.concatenate([
                 idx_dict["groove_sb1"], 
@@ -547,7 +549,6 @@ class UltrasonicModeler:
             
             gouge = np.concatenate([idx_dict["gouge_1"], idx_dict["gouge_2"]])
 
-            
         elif self.geometry_type == "block":
             regions_to_update = np.concatenate([
                 idx_dict["pzt_1"],
@@ -563,16 +564,16 @@ class UltrasonicModeler:
         # -----------------------------------------------------------------------
         # Store "best" parameters at iteration 0
         # -----------------------------------------------------------------------
-        best_velocity_model              = initial_velocity_model.copy()
-        best_damping_model               = initial_damping_model.copy()
-        best_source_time_function        = initial_source_time_function.copy()
-        best_source_spatial_function     = initial_source_spatial_function.copy()
-        best_receiver_spatial_function   = initial_receiver_spatial_function.copy()
-        best_wavefield_forward           = initial_wavefield_forward.copy()
+        best_velocity_model              = initial_velocity_model
+        best_damping_model               = initial_damping_model
+        best_source_time_function        = initial_source_time_function
+        best_source_spatial_function     = initial_source_spatial_function
+        best_receiver_spatial_function   = initial_receiver_spatial_function
+        best_wavefield_forward           = initial_wavefield_forward
         best_laplacian_wavefield         = compute_laplacian(best_wavefield_forward, delta_x)
         best_first_derivative_laplacian  = compute_dt_laplacian(best_laplacian_wavefield, delta_t)
 
-        best_synthetic_waveform          = initial_synthetic_waveform.copy()
+        best_synthetic_waveform          = initial_synthetic_waveform
         best_misfit                      = initial_misfit
         updated_misfit                   = initial_misfit
         previous_misfit                  = initial_misfit  # let's speed: if 2 misfit differ for less than another threshold value, stop
@@ -603,14 +604,11 @@ class UltrasonicModeler:
         data = np.ones_like(row, dtype=float)
         interp_mat = csr_matrix((data, (row, col)), shape=(row.size, observed_time.size))
 
-        updating = True
+        updating        = True
+        end_of_the_game = False
+        activate_damping= False
         for iteration in range(n_iterations):
             print(f"Iteration {iteration + 1}/{n_iterations}")
-
-            # Check threshold
-            if (dc_max < dc_threshold) or (dw_max < dw_threshold) or ((ds_max < ds_threshold)) or (da_max < da_threshold):
-                print("Step size dropped below threshold; stopping.")
-                break
             
             # Prepare updated arrays from 'best'
             updated_velocity_model            = best_velocity_model.copy()
@@ -648,12 +646,12 @@ class UltrasonicModeler:
                 # GRADIENTS
                 # ----------------------------------------------------------
                 if dc_max:
-                    temp = -(2.0 * best_velocity_model) * wav_adj_flipped * best_laplacian_wavefield
+                    temp = +(2.0 * best_velocity_model) * wav_adj_flipped * best_laplacian_wavefield
                     gradient_vel = temp.sum(0)                     # no extra copy
                     max_vel_grad = np.abs(gradient_vel[regions_to_update]).max()
 
-                if da_max:
-                    temp = -wav_adj_flipped * best_first_derivative_laplacian
+                if da_max and activate_damping:
+                    temp = +wav_adj_flipped * best_first_derivative_laplacian
                     gradient_damp = temp.sum(0)
                     max_damp_grad = np.abs(gradient_damp[regions_to_update]).max()
 
@@ -683,7 +681,7 @@ class UltrasonicModeler:
                 #                                           a_min=None,
                 #                                           a_max=updated_velocity_model[idx_dict["central_block"]][0])
 
-            if da_max:
+            if da_max and activate_damping:
                 # -- update velocity only in the selected region --
                 step_size_damp = da_max / (max_damp_grad + 1e-15)
                 updated_damping_model[regions_to_update] -= step_size_damp * gradient_damp[regions_to_update]
@@ -692,6 +690,8 @@ class UltrasonicModeler:
                 #                                           a_min=updated_damping_model[idx_dict["central_block"]][0],
                 #                                           a_max=None)
 
+                # plt.plot(updated_damping_model)
+                # plt.show()
             if dw_max:
                 # -- update wavelet w(t) --
                 step_size_w   = dw_max / (max_w_grad + 1e-15)
@@ -749,7 +749,8 @@ class UltrasonicModeler:
                     updated_synthetic_waveform *= np.amax(observed_waveform[misfit_interval])/np.amax(updated_synthetic_waveform[misfit_interval])
                         
                 elif self.geometry_type == "dds":
-                    updated_synthetic_waveform *= np.sum(np.abs(observed_waveform[misfit_interval]))/np.sum(np.abs(updated_synthetic_waveform[misfit_interval])) 
+                    # updated_synthetic_waveform *= np.sum(np.abs(observed_waveform[misfit_interval]))/np.sum(np.abs(updated_synthetic_waveform[misfit_interval])) 
+                    updated_synthetic_waveform *= np.amax(np.abs(observed_waveform[misfit_interval]))/np.amax(np.abs(updated_synthetic_waveform[misfit_interval])) 
 
             # Compute updated misfit
             updated_misfit = self.compute_misfit(
@@ -781,10 +782,6 @@ class UltrasonicModeler:
 
                 best_misfit                         = updated_misfit
 
-            elif (updated_misfit > best_misfit) and (abs(previous_misfit-updated_misfit) < misfit_threshold):
-                print("Misfit updating is below threshold. Stopping!")
-                break
-            
             else:
                 updating = False
                 dc_max /= reduce_factor
@@ -793,10 +790,31 @@ class UltrasonicModeler:
                 ds_max /= reduce_factor
                 print(f"    ✗ No improvement. Reverting & reducing step")
 
+            #-------------------------------------
+            # evaluate if stop the processing
+            #------------------------------------
+            if (updated_misfit > best_misfit) and (abs(previous_misfit-updated_misfit) < misfit_threshold):
+                if end_of_the_game:
+                    print("Misfit updating is below threshold. Stopping!")
+                    break
+
+            # Check threshold
+            if (ds_max < ds_threshold) or (dw_max < dw_threshold):
+                print("Step size dropped below threshold; stopping.")
+                break
+
+            if (dc_max < dc_threshold):
+                activate_damping = True
+                print("Damping Activated!")
+                da_max = da_max_start
+                if (da_max < da_threshold):
+                    print("Step size dropped below threshold.")
+                    end_of_the_game = True
+                break
+
             previous_misfit = updated_misfit
 
         self.synthetic_waveform                    = best_synthetic_waveform
-
         self.source_handler.time_function          = best_source_time_function
         self.source_handler.spatial_function       = best_source_spatial_function
         self.receiver_handler.spatial_function     = best_receiver_spatial_function         
@@ -807,13 +825,12 @@ class UltrasonicModeler:
             self.velocity_model_handler.damping_array  = best_damping_model
             self.average_gouge_damping    = np.mean(self.velocity_model_handler.damping_array[gouge]) 
             self.average_gouge_velocity   = np.mean(self.velocity_model_handler.velocity_array[gouge]) 
-            acq_time_label   = str(round(self.acquisition_time,5)).replace(".",",")
             damping_label    = str(round(self.average_gouge_damping,5)).replace(".",",")
             velocity_label   = str(round(1e4*self.average_gouge_velocity)).replace(".",",")  
-            label = f"_acq_time_{acq_time_label}_vel_{velocity_label}_damping_{damping_label}_FWI_misfit_{best_misfit:.3f}_waveform"
+            label = f"_vel_{velocity_label}_damping_{damping_label}_FWI_misfit_{best_misfit:.0f}"
     
         else:
-            label = f"FWI_{best_misfit:.3f}_waveform"
+            label = f"FWI_{best_misfit:.0f}_waveform"
 
         if enable_plotting:
             if plot_output_path:
@@ -829,17 +846,17 @@ class UltrasonicModeler:
                 )
 
                 if dc_max_start:
-                    model_output_name = plot_output_path.name.replace("_waveform","_velocity_model")
+                    model_output_name = plot_output_path.name + "_velocity_model"
                     model_output_path = plot_output_path.parent / model_output_name
                     self.velocity_model_handler.plot(model=self.velocity_model_handler.velocity_array, outfile_path=model_output_path)
 
                 if da_max_start:
-                    model_output_name = plot_output_path.name.replace("_waveform","_damping_model")
+                    model_output_name = plot_output_path.name + "_damping_model"
                     model_output_path = plot_output_path.parent / model_output_name
                     self.velocity_model_handler.plot(model=self.velocity_model_handler.damping_array, outfile_path=model_output_path)
 
                 if dw_max_start:
-                    stf_output_name = plot_output_path.name.replace("_waveform","_best_STF")
+                    stf_output_name = plot_output_path.name + "_best_STF"
                     stf_output_path = plot_output_path.parent / stf_output_name
                     self.plotter.plot_original_vs_updated_stf(
                         t=simulation_time,
