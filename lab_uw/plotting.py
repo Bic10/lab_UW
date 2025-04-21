@@ -74,7 +74,7 @@ class Plotter:
         'highlight':     'yellow1',   # for emphasis
 
         'misfit_light':  'blu1',      # pale blue span
-        'misfit_dark':   'blue6',   # contrasting span
+        'misfit_dark':   'blu6',   # contrasting span
 
         'accent':        'green2',    # for PZT blocks, etc.
         'shadow':        'gray3',     # grid & minor elements
@@ -1206,8 +1206,8 @@ class Plotter:
             x,
             c,
             label='Velocity Model',
-            color=self.get_color('observed'),
-            linewidth=self.settings['line_width']
+            color=self.get_color('synthetic'),
+            linewidth= 2*self.settings['line_width']
         )
 
         # Define layers with semantic roles

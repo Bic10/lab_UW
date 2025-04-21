@@ -271,17 +271,10 @@ class UltrasonicModeler:
             absorbing      = absorbing
         )
 
-        # plt.plot(source_handler.time_function)
-        # plt.show()
-
         # EXTRACT SYNTHETIC SIGNAL AT RECEIVER
         simulated_waveform = np.sum(wavefield_forward * receiver_handler.spatial_function, axis=1)
         # INTERPOLATE ONTO OBSERVED TIME AXIS
         synthetic_waveform = np.interp(observed_time, simulation_time, simulated_waveform)
-
-        # plt.plot(observed_waveform)
-        # plt.plot(synthetic_waveform)
-        # plt.show()
 
         if not is_compact(misfit_interval):
             # where are the gaps?
@@ -306,11 +299,8 @@ class UltrasonicModeler:
                     
             elif self.geometry_type == "dds":
                 # synthetic_waveform *= np.sum(np.abs(observed_waveform[misfit_interval]))/np.sum(np.abs(synthetic_waveform[misfit_interval])) 
-                synthetic_waveform *= np.amax(np.abs(observed_waveform[misfit_interval]))/np.amax(np.abs(synthetic_waveform[misfit_interval])) 
+                synthetic_waveform *= np.sum(np.abs(observed_waveform[misfit_interval]))/np.sum(np.abs(synthetic_waveform[misfit_interval])) 
 
-        # plt.plot(observed_waveform)
-        # plt.plot(synthetic_waveform)
-        # plt.show()
         #-------------------------------------------
         # COMPUTE MISFIT
         #-------------------------------------------
@@ -468,7 +458,7 @@ class UltrasonicModeler:
         ds_max_start:          float = 0,
         ds_threshold:          float = 0,
         reduce_factor:         float = 1/2,
-        misfit_threshold    :   float = 1,
+        misfit_threshold    :   float = 0.5,
         normalize_waveform :   bool = True,
         enable_plotting    :   bool = True,
         make_movie         :   bool = False,
@@ -604,9 +594,10 @@ class UltrasonicModeler:
         data = np.ones_like(row, dtype=float)
         interp_mat = csr_matrix((data, (row, col)), shape=(row.size, observed_time.size))
 
-        updating        = True
-        end_of_the_game = False
-        activate_damping= False
+        updating          = True
+        end_of_the_game   = True
+        activate_damping  = True
+        activate_velocity = True
         for iteration in range(n_iterations):
             print(f"Iteration {iteration + 1}/{n_iterations}")
             
@@ -645,7 +636,7 @@ class UltrasonicModeler:
                 # ----------------------------------------------------------
                 # GRADIENTS
                 # ----------------------------------------------------------
-                if dc_max:
+                if dc_max and activate_velocity:
                     temp = +(2.0 * best_velocity_model) * wav_adj_flipped * best_laplacian_wavefield
                     gradient_vel = temp.sum(0)                     # no extra copy
                     max_vel_grad = np.abs(gradient_vel[regions_to_update]).max()
@@ -672,7 +663,7 @@ class UltrasonicModeler:
             # -------------------------------------------------------------------
             # Form the "updated" parameters by stepping from the best
             # -------------------------------------------------------------------
-            if dc_max:
+            if dc_max and activate_velocity:
                 # -- update velocity only in the selected region --
                 step_size_vel = dc_max / (max_vel_grad + 1e-15)
                 updated_velocity_model[regions_to_update] -= step_size_vel * gradient_vel[regions_to_update]
@@ -750,7 +741,7 @@ class UltrasonicModeler:
                         
                 elif self.geometry_type == "dds":
                     # updated_synthetic_waveform *= np.sum(np.abs(observed_waveform[misfit_interval]))/np.sum(np.abs(updated_synthetic_waveform[misfit_interval])) 
-                    updated_synthetic_waveform *= np.amax(np.abs(observed_waveform[misfit_interval]))/np.amax(np.abs(updated_synthetic_waveform[misfit_interval])) 
+                    updated_synthetic_waveform *= np.sum(np.abs(observed_waveform[misfit_interval]))/np.sum(np.abs(updated_synthetic_waveform[misfit_interval])) 
 
             # Compute updated misfit
             updated_misfit = self.compute_misfit(
@@ -793,24 +784,32 @@ class UltrasonicModeler:
             #-------------------------------------
             # evaluate if stop the processing
             #------------------------------------
-            if (updated_misfit > best_misfit) and (abs(previous_misfit-updated_misfit) < misfit_threshold):
-                if end_of_the_game:
-                    print("Misfit updating is below threshold. Stopping!")
-                    break
-
             # Check threshold
             if (ds_max < ds_threshold) or (dw_max < dw_threshold):
                 print("Step size dropped below threshold; stopping.")
                 break
 
-            if (dc_max < dc_threshold):
-                activate_damping = True
-                print("Damping Activated!")
-                da_max = da_max_start
-                if (da_max < da_threshold):
-                    print("Step size dropped below threshold.")
-                    end_of_the_game = True
-                break
+            if (updated_misfit > best_misfit) and (abs(previous_misfit-updated_misfit) < misfit_threshold):
+                if end_of_the_game:
+                    print("Misfit updating is below threshold. Stopping!")
+                    break
+                # else:
+                #     activate_damping = True
+                #     activate_velocity= False
+                #     updating = True
+                #     end_of_the_game = True
+                #     print("Damping Activated!")
+
+
+            # if (dc_max < dc_threshold):
+            #     activate_damping = True
+            #     activate_velocity= False
+            #     updating = True
+            #     print("Damping Activated!")
+            #     da_max = da_max_start
+            #     if (da_max < da_threshold):
+            #         print("Step size dropped below threshold.")
+            #     end_of_the_game = True
 
             previous_misfit = updated_misfit
 
@@ -823,8 +822,8 @@ class UltrasonicModeler:
         if self.geometry_type == "dds":
             self.velocity_model_handler.velocity_array = best_velocity_model
             self.velocity_model_handler.damping_array  = best_damping_model
-            self.average_gouge_damping    = np.mean(self.velocity_model_handler.damping_array[gouge]) 
-            self.average_gouge_velocity   = np.mean(self.velocity_model_handler.velocity_array[gouge]) 
+            self.average_gouge_damping    = np.mean(self.velocity_model_handler.damping_array[regions_to_update]) 
+            self.average_gouge_velocity   = np.mean(self.velocity_model_handler.velocity_array[regions_to_update]) 
             damping_label    = str(round(self.average_gouge_damping,5)).replace(".",",")
             velocity_label   = str(round(1e4*self.average_gouge_velocity)).replace(".",",")  
             label = f"_vel_{velocity_label}_damping_{damping_label}_FWI_misfit_{best_misfit:.0f}"
