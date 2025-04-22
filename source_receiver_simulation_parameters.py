@@ -462,7 +462,7 @@ if __name__ == "__main__":
     experiment_name = "STF_ss10_05"
     wave_type       = "_s"  # e.g., compressional wave
     data_type_uw    = f"uw_data/data_tsv_files{wave_type}"
-    outfolder_name  = f"2025-04-18_last2confirm" 
+    outfolder_name  = f"2025-04-22_EGU_2025" 
 
     # Create output directories
     outdir_path_l2norm = dir_manager.make_data_analysis_folders(

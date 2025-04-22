@@ -994,7 +994,7 @@ class Plotter:
             label="Simulated Waveform",
             color=self.get_color('synthetic'),
             linewidth=2 * self.settings['line_width'],
-            alpha=1.0,
+            alpha=0.8,
             zorder=4
         )
 
@@ -1700,8 +1700,9 @@ class Plotter:
             t,
             stf_original,
             label="Original STF",
-            color=self.get_color('shadow'),
-            linewidth=2 * self.settings['line_width']
+            color=self.get_color('observed'),
+            linewidth=self.settings['line_width'],
+            zorder=2
         )
         ax.plot(
             t,
@@ -1709,7 +1710,8 @@ class Plotter:
             label="Updated STF",
             color=self.get_color('synthetic'),
             linewidth=2 * self.settings['line_width'],
-            alpha=0.25
+            alpha=1.0,
+            zorder=4
         )
 
         # Title and labels

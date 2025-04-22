@@ -11,7 +11,7 @@ import scipy
 
 ###### INPUT #######
 machine_name = "Brava_2"
-experiment_name = "s0233suw03anh_35"
+experiment_name = "s0244suwanh3_30"
 data_type = "uw_data/data_tsv_files"
 base_dir = "/home/michele/Desktop/Dottorato/active_source_implementation"
 
@@ -26,9 +26,9 @@ image_types = (
 remove_initial_samples = 0  # number of samples to be removed at the beginning, to get rid of the noise burst.
 highlight_start = 0
 highlight_end = 0
-xlim_plot = 70
+xlim_plot = 40
 ticks_steps_waveforms = 5  # [microseconds] plot ticks
-step_wf_to_plot = 100  # get one waveform each step_wf_to_plot
+step_wf_to_plot = 500  # get one waveform each step_wf_to_plot
 freq_cut = 6  # [Hz] lowpass frequency threshold
 
 # Create instances of Plotter, DataHandler, and DirectoryManager

@@ -458,7 +458,7 @@ class UltrasonicModeler:
         ds_max_start:          float = 0,
         ds_threshold:          float = 0,
         reduce_factor:         float = 1/2,
-        misfit_threshold    :   float = 0.5,
+        misfit_threshold    :   float = 1,
         normalize_waveform :   bool = True,
         enable_plotting    :   bool = True,
         make_movie         :   bool = False,
@@ -769,7 +769,6 @@ class UltrasonicModeler:
                 best_first_derivative_laplacian     = first_derivative_laplacian_updated
 
                 best_synthetic_waveform             = updated_synthetic_waveform
-                best_simulated_waveform             = updated_simulated_waveform
 
                 best_misfit                         = updated_misfit
 
@@ -865,19 +864,21 @@ class UltrasonicModeler:
                         max_time=simulation_time[stf_duration_idx],
                         outfile_path=stf_output_path) 
                     
-        if (make_movie) and (initial_misfit != best_misfit):
-            movie_output_name = movie_output_path.name + "_local_inversion.mp4"
-            movie_output_path = movie_output_path.parent / movie_output_name
+            plt.close('all')
 
-            self.plotter.make_movie_from_simulation(
-                outfile_path=movie_output_path,
-                x=spatial_axis,
-                t=simulation_time,
-                sp_field=best_wavefield_forward,
-                sp_recorded = best_simulated_waveform,
-                sample_dimensions=self.sample_dimensions,
-                idx_dict=idx_dict,
-            )
+        # if (make_movie) and (initial_misfit != best_misfit):
+        #     movie_output_name = movie_output_path.name + "_local_inversion.mp4"
+        #     movie_output_path = movie_output_path.parent / movie_output_name
+
+        #     self.plotter.make_movie_from_simulation(
+        #         outfile_path=movie_output_path,
+        #         x=spatial_axis,
+        #         t=simulation_time,
+        #         sp_field=best_wavefield_forward,
+        #         sp_recorded = best_simulated_waveform,
+        #         sample_dimensions=self.sample_dimensions,
+        #         idx_dict=idx_dict,
+        #     )
     
 # ------------------------------------------------------------------
 def pseudospectral_1D_damped(
