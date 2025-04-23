@@ -792,23 +792,6 @@ class UltrasonicModeler:
                 if end_of_the_game:
                     print("Misfit updating is below threshold. Stopping!")
                     break
-                # else:
-                #     activate_damping = True
-                #     activate_velocity= False
-                #     updating = True
-                #     end_of_the_game = True
-                #     print("Damping Activated!")
-
-
-            # if (dc_max < dc_threshold):
-            #     activate_damping = True
-            #     activate_velocity= False
-            #     updating = True
-            #     print("Damping Activated!")
-            #     da_max = da_max_start
-            #     if (da_max < da_threshold):
-            #         print("Step size dropped below threshold.")
-            #     end_of_the_game = True
 
             previous_misfit = updated_misfit
 

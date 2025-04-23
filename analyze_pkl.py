@@ -45,7 +45,7 @@ import pickle
 from pathlib import Path
 import matplotlib.pyplot as plt
 
-infile_path = Path("/home/michele/Desktop/Dottorato/active_source_implementation/experiments_Brava_2/s0244suwanh3_30/data_analysis/2025_04_22_stf_local_inversion_freesurface_velgouge_damgouge/007_hold1000sec.pkl")
+infile_path = Path("/home/michele/Desktop/Dottorato/active_source_implementation/experiments_Brava_2/s0244suwanh3_30/data_analysis/2025_04_23_stf_local_inversion_freesurface_velgouge_damgouge/007_hold1000sec.pkl")
 results_pkl = infile_path.with_suffix(".pkl") 
 with open(results_pkl, "rb") as f:
     loaded_data = pickle.load(f)
@@ -56,4 +56,6 @@ with open(results_pkl, "rb") as f:
 # plt.show()
 
 for key in loaded_data:
-    print(loaded_data[18681.0]['velocity_ranges'])
+    print(key)
+    plt.plot(loaded_data[key]["gouge_velocity_model"])
+plt.show()

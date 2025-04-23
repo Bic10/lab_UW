@@ -1,8 +1,8 @@
 # lab_uw/plotting.py
 
 from pathlib import Path
-# import matplotlib
-# matplotlib.use('Agg')  # or 'pdf', 'svg', anything non-interactive
+import matplotlib
+matplotlib.use('Agg')  # or 'pdf', 'svg', anything non-interactive
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from matplotlib.patches import Rectangle

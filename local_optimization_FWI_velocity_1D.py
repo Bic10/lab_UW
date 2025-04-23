@@ -529,6 +529,10 @@ def global_search_run(args):
 # Main Execution
 if __name__ == "__main__":
 
+    import os, matplotlib
+    if os.getenv("DISPLAY", "") == "":          # inside screen / batch job
+        matplotlib.use("Agg")                  # non-GUI backend
+
     # Initialize directory manager
     dir_manager = DirectoryManager()
     
@@ -556,7 +560,7 @@ if __name__ == "__main__":
     # Basic simulation parameters 
     params = {
         "absorbing"                 : False,        # set absorbing bounday, merdoso silicone maledetto
-        "num_waveform2process"      : 2200,         # int, equespatially waveforms to sample for processing. Of "None", process all
+        "num_waveform2process"      : 1000,         # int, equespatially waveforms to sample for processing. Of "None", process all
         "maxtime2simulate"          : 40,           # [mus]
         "frequency_cutoff"          : 4,            # [MHz] low pass onserved data and simulate up to this frequency
         "minimum_SNR"               : 3,            # skip computation until time interval where signal should be is above SNR times surely-only-noise part 
@@ -566,7 +570,7 @@ if __name__ == "__main__":
         "damping_initial_list"      : np.linspace(0.0002,0.0012, 20),
         "plot_save_interval"        : 10,
         "movie_save_interval"       : 1000,
-        "l2norm_plot_interval"      : 10,
+        "l2norm_plot_interval"      : 1000,
         "outdir_path_l2norm"        : outdir_path_l2norm[0],
         "outdir_path_image"         : outdir_path_image[0],
         "n_iterations"              : 70,
