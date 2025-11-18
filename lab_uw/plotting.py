@@ -603,7 +603,6 @@ class Plotter:
         )
         plt.setp(cbar2.ax.get_yticklabels(), color=self.get_color('shadow'))
 
-        fig.tight_layout()
         self.output_path_choice(fig=fig, outfile_path=outfile_path)
 
     def filtered_amp_and_phase_spectrum_plot(self,
@@ -702,7 +701,7 @@ class Plotter:
             ax_ph.plot(
                 signal_freqs,
                 phase_spectrum,
-                color=self.get_color('secondary'),
+                color=self.get_color('accent'),
                 linewidth=self.settings['line_width']
             )
             ax_ph.set_title(
@@ -1021,7 +1020,8 @@ class Plotter:
             colors=self.get_color('shadow')
         )
         ax.grid(alpha=0.2, color=self.get_color('shadow'))
-        ax.set_xlim(left=t[200],right=t[-1])
+        
+        ax.set_xlim(left=t[100],right=t[-1])
 
         ax.legend(
             fontsize=self.settings['fontsize_ticks'],

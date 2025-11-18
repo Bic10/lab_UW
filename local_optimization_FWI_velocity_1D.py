@@ -10,7 +10,7 @@ from typing import Any, Dict
 from itertools import product
 import matplotlib.pyplot as plt
 
-from lab_uw.data_io import UltrasonicDataHandler, BlockMetadataHandler, MechanicalDataHandler
+from lab_uw.data_io.data_io import UltrasonicDataHandler, BlockMetadataHandler, MechanicalDataHandler
 from lab_uw.directory_manager import DirectoryManager
 from lab_uw.simulation_setup import *
 from lab_uw.forward_modeling import *
@@ -635,13 +635,21 @@ if __name__ == "__main__":
                                                        num_waveform2process=params["num_waveform2process"])
 
         # Load & process ultrasonic data and metadata from TSV, with preprocessing
-        uw_data_handler = UltrasonicDataHandler.load_and_process_uw(
-            infile_path                 = infile_path,
-            zero_out_time               = assembly_dict["steel_only_time_p_wave"]/5,
-            # frequency_cutoff            = 12.49, # params["frequency_cutoff"],
-            maxtime2simulate            = params["maxtime2simulate"],
-            number_of_waveforms2process = params["num_waveform2process"],
-            time_ax_acquisition_start   = mech_data_slice["time_s"].values[0]
+        uw_data_handler = (
+            UltrasonicDataHandler.from_tsv(infile_path)
+                .remove_mean()
+                .downsample_waveforms(params["num_waveform2process"])     # keep N waveforms (evenly sampled)
+                .truncate_time(params["maxtime2simulate"])                # limit to maxtime [µs]
+                .zero_before(assembly_dict["steel_only_time_p_wave"] / 5) # zero early window [µs]
+                # .lowpass(params["frequency_cutoff"])                    # optional, cutoff in MHz
+        )
+
+        # (Optional) shift the acquisition axis start, like your old code:
+        if "time_ax_acquisition" in uw_data_handler.metadata:
+            # If mech time is in SECONDS, convert to µs: + 1e6 * mech_data_slice["time_s"].values[0]
+            uw_data_handler.metadata["time_ax_acquisition"] = (
+                uw_data_handler.metadata["time_ax_acquisition"]
+                + mech_data_slice["time_s"].values[0]        # ← use 1e6 * (...) if your mech time is in seconds
             )
 
         process_uw_file(

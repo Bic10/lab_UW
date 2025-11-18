@@ -10,7 +10,7 @@ from typing import Any, Dict
 from itertools import product
 import matplotlib.pyplot as plt
 
-from lab_uw.data_io import UltrasonicDataHandler, BlockMetadataHandler, MechanicalDataHandler
+from lab_uw.data_io.data_io import UltrasonicDataHandler, BlockMetadataHandler, MechanicalDataHandler
 from lab_uw.directory_manager import DirectoryManager
 from lab_uw.simulation_setup import *
 from lab_uw.forward_modeling import *

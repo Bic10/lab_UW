@@ -3,7 +3,7 @@
 import numpy as np
 import pickle
 from pathlib import Path
-from lab_uw.data_io import UltrasonicDataHandler
+from lab_uw.data_io.data_io import UltrasonicDataHandler
 from lab_uw.plotting import InteractivePlotter
 
 def evaluate_snr(waveform_time,observed_waveform, signal_minimum_time):
@@ -220,7 +220,7 @@ def is_compact(idx: np.ndarray) -> bool:
     False → there is at least one gap (two or more blocks)
     """
     if idx.size == 0:          # empty interval – decide what you want to return here
-        return False
+        return True
 
     idx = np.unique(idx)       # just in case there are duplicates
     return idx[-1] - idx[0] + 1 == idx.size

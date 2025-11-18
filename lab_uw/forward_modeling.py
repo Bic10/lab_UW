@@ -17,7 +17,7 @@ from lab_uw.simulation_setup import (
     SimulationTime
 )
 from lab_uw.plotting import Plotter
-from lab_uw.data_io import UltrasonicDataHandler
+from lab_uw.data_io.data_io import UltrasonicDataHandler
 from lab_uw.utils import is_compact
 
 class UltrasonicModeler:
@@ -323,12 +323,13 @@ class UltrasonicModeler:
         if self.geometry_type == "dds":
             damping_label    = str(round(gouge_damping_1,5)).replace(".",",")
             velocity_label   = str(round(1e4*gouge_velocity_1,5)).replace(".",",")  
-            label = f"_vel_{velocity_label}_damping_{damping_label}_global_search_{misfit:.3f}_waveform"
+            misfit_label    = str(round(misfit,5)).replace(".",",")
+            label = f"_vel_{velocity_label}_damping_{damping_label}_global_search_{misfit_label}_waveform"
     
         else:
             pzt_vel_label     = str(round(1e4*pzt_velocity)).replace(".",",")
             steel_vel_label   = str(round(1e4*steel_velocity)).replace(".",",")  
-            label = f"_pzt_{pzt_vel_label}_vel_{steel_vel_label}_global_search_{misfit:.3f}_waveform"
+            label = f"_pzt_{pzt_vel_label}_vel_{steel_vel_label}_global_search_{misfit_label}_waveform"
 
         if enable_plotting:
             plot_output_name = plot_output_path.name + label
@@ -340,6 +341,10 @@ class UltrasonicModeler:
             misfit_interval=misfit_interval,
             outfile_path=plot_output_path
         )
+
+            model_output_name = plot_output_path.name + "_velocity_model"
+            model_output_path = plot_output_path.parent / model_output_name
+            self.velocity_model_handler.plot(model=self.velocity_model_handler.velocity_array, outfile_path=model_output_path)
 
         # if make_movie:
         #     self.plotter.make_movie_from_simulation(
