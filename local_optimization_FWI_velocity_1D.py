@@ -513,7 +513,7 @@ def global_search_run(args):
         maximum_velocity        = maximum_velocity, 
         maximum_damping         = maximum_damping, 
         normalize_waveform      = True,
-        enable_plotting         = False,
+        enable_plotting         = True,
         plot_output_path        = plot_output_path
     )
     
@@ -543,7 +543,7 @@ if __name__ == "__main__":
     data_type_uw    = "uw_data/data_tsv_files" # + wave_type
     data_type_mech  = "mechanical_data"
     mech_file_name  = f"{experiment_name}_data_rp"
-    outfolder_name  = "2025_04_23_stf_local_inversion_freesurface_velgouge_damgouge"
+    outfolder_name  = "test_on_tiepie_data"
     # Create output directories
     outdir_path_l2norm = dir_manager.make_data_analysis_folders(
         machine_name    = machine_name,
@@ -588,23 +588,18 @@ if __name__ == "__main__":
         # frequency_cutoff= 6 # params["frequency_cutoff"]
     )
 
-    stf_handler.waveform_data = -stf_handler.waveform_data
+    stf_handler.waveform_data = (-stf_handler.waveform_data).squeeze()  # now (L,)
 
     # Load Mechanical Data
-    mech_data, sync_data, sync_peaks = MechanicalDataHandler.locate_and_load_data(
-        dir_manager     = dir_manager,
-        machine_name    = machine_name,
-        experiment_name = experiment_name,
-        data_type_mech  = data_type_mech,
-        mech_file_name  = mech_file_name
-    )
+    mech_folder = Path(dir_manager.base_dir) / f"experiments_{machine_name}" / experiment_name / data_type_mech
+    mech_data, sync_data, sync_peaks = MechanicalDataHandler.find_and_load(mech_folder, mech_file_name)
 
     # Build a dictionary containing all the relevant assembly parameters
+    blocks_json = Path(dir_manager.base_dir) / "metadata" / "blocks_metadata.json"
     side1_params, side2_params, central_params = BlockMetadataHandler.load_blocks_metadata(
-        dir_manager           = dir_manager,
-        blocks_metadata_name  = "blocks_metadata.json",
-        block_keys            = ("mauro_desolda_side1","mauro_desolda_side2","central_block1")
+    blocks_json, ("mauro_desolda_side1","mauro_desolda_side2","central_block1")
     )
+
 
     assembly_dict = {
         "side1_params"        : side1_params,
@@ -636,7 +631,7 @@ if __name__ == "__main__":
 
         # Load & process ultrasonic data and metadata from TSV, with preprocessing
         uw_data_handler = (
-            UltrasonicDataHandler.from_tsv(infile_path)
+            UltrasonicDataHandler.read_tsv(infile_path)
                 .remove_mean()
                 .downsample_waveforms(params["num_waveform2process"])     # keep N waveforms (evenly sampled)
                 .truncate_time(params["maxtime2simulate"])                # limit to maxtime [µs]

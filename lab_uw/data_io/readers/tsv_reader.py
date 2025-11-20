@@ -12,7 +12,7 @@ def _extract_metadata_from_tsv_header(lines: List[str]) -> Tuple[list, list, str
     time_info       = [float(e) for e in re.findall(r"\d+\.*\d*", time_scale)]
     return acquisition_info, time_info, channel_name
 
-def load_tsv(infile_path: Path) -> UWFrame:
+def read_tsv(infile_path: Path) -> UWFrame:
     with open(infile_path, "r", encoding="iso8859") as f:
         header = [f.readline().strip() for _ in range(4)]
         acquisition_info, time_info, channel_name = _extract_metadata_from_tsv_header(header)

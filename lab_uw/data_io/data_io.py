@@ -1,56 +1,183 @@
 # lab_uw/data_io/data_io.py
+
 import numpy as np
 import json
 import pandas as pd
 from scipy.signal import find_peaks
 
-import sys
 import logging
-from typing import Tuple, Dict, Optional, List, TextIO, Any
-import re
+import warnings
+from typing import Tuple, Dict, Optional
 from pathlib import Path
 
 from lab_uw.data_io.schema import UWFrame
-from lab_uw.data_io.readers.tsv_reader import load_tsv
-from lab_uw.data_io.readers.tiepie_reader import load_tiepie_h5
+from lab_uw.data_io.readers.tsv_reader import read_tsv
+from lab_uw.data_io.readers.hdf5_reader import read_hdf5, read_stf_hdf5
+from lab_uw.data_io.writers.hdf5_writer import write_hdf5, write_stf_hdf5
 
 from lab_uw.directory_manager import DirectoryManager
 from lab_uw.plotting import Plotter
 
 logger = logging.getLogger(__name__)
 
-###############################################################################
-# CLASS: UltrasonicDataHandler
-###############################################################################
-
 class UltrasonicDataHandler:
+    """
+    Thin façade around UWFrame with:
+      - symmetric readers: read_tsv(), read_hdf5()
+      - open() dispatcher by file extension
+      - STF helpers: read_stf_hdf5(), write_stf_hdf5()
+      - small, chainable processors (µs everywhere)
+    """
     def __init__(self, waveform_data: np.ndarray = None, metadata: Dict = None):
         if waveform_data is None: waveform_data = np.array([])
         if metadata is None: metadata = {}
         self.frame = UWFrame(waveform_data, metadata).ensure_2d()
 
-    # --- explicit, symmetrical loaders ---
+    # --------- symmetric readers ----------
     @classmethod
-    def from_tsv(cls, path: Path) -> "UltrasonicDataHandler":
-        f = load_tsv(path)
+    def read_tsv(cls, path: Path) -> "UltrasonicDataHandler":
+        f = read_tsv(path)
         return cls(f.waveform_data, f.metadata)
 
     @classmethod
-    def from_hdf5(cls, path: Path, **kwargs) -> "UltrasonicDataHandler":
-        f = load_tiepie_h5(path, **kwargs)
+    def read_hdf5(cls, path: Path, **kwargs) -> "UltrasonicDataHandler":
+        f = read_hdf5(path, **kwargs)
         return cls(f.waveform_data, f.metadata)
 
-    # Optional: unified chooser (still symmetrical—just dispatches on suffix)
+    # unified dispatcher (by suffix)
     @classmethod
-    def load(cls, path: Path, **h5_options) -> "UltrasonicDataHandler":
+    def open(cls, path: Path, **h5_options) -> "UltrasonicDataHandler":
         ext = path.suffix.lower()
         if ext in {".tsv", ".txt"}:
-            return cls.from_tsv(path)
+            return cls.read_tsv(path)
         if ext in {".h5", ".hdf5"}:
-            return cls.from_hdf5(path, **h5_options)
+            return cls.read_hdf5(path, **h5_options)
         raise ValueError(f"Unsupported file type: {path}")
 
-    # --- properties matching your old access style ---
+    # (optional) compatibility alias
+    @classmethod
+    def load(cls, *args, **kwargs) -> "UltrasonicDataHandler":
+        logger.warning("UltrasonicDataHandler.load() is deprecated; use .open().")
+        return cls.open(*args, **kwargs)
+
+    # --------- STF helpers (HDF5) ----------
+    @classmethod
+    def read_stf_h5(cls, h5_path: Path, *, name: str, cycle_index: int = 0) -> "UltrasonicDataHandler":
+        """Read /stf/<name>/cycle_xxxxxx/source_waveform -> handler with (1, L)."""
+        f = read_stf_hdf5(h5_path, name=name, cycle_index=cycle_index)
+        return cls(f.waveform_data, f.metadata)
+
+    # --------- (optional) acquisition writer convenience ----------
+    def write_hdf5(
+        self,
+        out_path: Path,
+        run_name: str,
+        *,
+        channel_count: int = 1,
+        dataset: str = "active",
+        add_timestamps: bool = False,
+    ) -> None:
+        """Thin wrapper around writers.write_hdf5 for acquisitions."""
+        write_hdf5(
+            frame=self.frame,
+            out_path=out_path,
+            run_name=run_name,
+            channel_count=channel_count,
+            dataset=dataset,
+            add_timestamps=add_timestamps,
+        )
+
+    def write_stf_hdf5(
+        self,
+        out_path: Path,
+        stf_name: str,
+        *,
+        cycle_index: int = 0,
+        include_active_stub: bool = False,
+        include_passive_stub: bool = False,
+        t0_unix_s: Optional[float] = None,
+    ) -> None:
+        """Persist row 0 as /stf/<stf_name>/cycle_xxxxxx/source_waveform."""
+        y = self.frame.waveform_data
+        if y.ndim == 2:
+            if y.shape[0] == 0:
+                raise ValueError("No STF data to write.")
+            if y.shape[0] > 1:
+                logger.warning("STF writer: multiple rows detected; writing only row 0.")
+            y = y[0]
+        stf_frame = UWFrame(y[None, :], self.frame.metadata)
+        write_stf_hdf5(
+            stf=stf_frame,
+            out_path=out_path,
+            stf_name=stf_name,
+            cycle_index=cycle_index,
+            include_active_stub=include_active_stub,
+            include_passive_stub=include_passive_stub,
+            t0_unix_s=t0_unix_s,
+        )
+
+    # --- legacy, concise STF loader (JSON on disk) ---
+    @classmethod
+    def load_stf(
+        cls,
+        *,
+        dir_manager,
+        machine_name_stf: str,
+        experiment_name_stf: str,
+        data_type_stf: str,
+        stf_chosen: str,
+        frequency_cutoff: float | None = None,
+    ) -> "UltrasonicDataHandler":
+        """
+        Find <stf_chosen>.json under the given experiment tree (via DirectoryManager),
+        load it, re-zero time to start at 0, and optionally lowpass-filter it.
+        Keeps the old short call-site intact.
+        """
+        # discover candidate files via DirectoryManager (no base_dir attr needed)
+        candidates = dir_manager.make_infile_path_list(
+            machine_name=machine_name_stf,
+            experiment_name=experiment_name_stf,
+            data_type=data_type_stf,
+        )
+        try:
+            stf_path = next(p for p in candidates if p.stem == stf_chosen)
+        except StopIteration:
+            raise FileNotFoundError(
+                f"STF '{stf_chosen}' not found in "
+                f"{machine_name_stf}/{experiment_name_stf}/{data_type_stf}"
+            )
+
+        # reuse our tiny JSON helpers
+        tmp = cls()
+        data, meta = tmp.load_waveform_json(stf_path)
+
+        # re-zero time axis to start at 0 µs (matches your old behavior)
+        if "time_ax_waveform" in meta:
+            t = np.asarray(meta["time_ax_waveform"], dtype=float)
+            meta["time_ax_waveform"] = (t - t[0]).tolist()
+
+        h = cls(data, meta)
+
+        # optional lowpass right here for backward-compatibility
+        if frequency_cutoff:
+            try:
+                from scipy.signal import butter, lfilter
+                def _butter_band(lowcut, highcut, fs, order=5):
+                    from scipy.signal import butter as _butter
+                    return _butter(order, [lowcut, highcut], fs=fs, btype="band")
+                def _filt(x, lowcut, highcut, fs, order=5):
+                    b, a = _butter_band(lowcut, highcut, fs, order)
+                    return lfilter(b, a, x)
+
+                dt_us = float(h.metadata["sampling_rate"])     # µs/sample
+                fs_mhz = 1.0 / dt_us                            # MHz
+                h.waveform_data = _filt(h.waveform_data, 0.25, frequency_cutoff, fs=fs_mhz)
+            except Exception as e:
+                logger.warning(f"STF lowpass skipped ({e})")
+
+        return h
+
+    # --------- properties ----------
     @property
     def waveform_data(self): return self.frame.waveform_data
     @waveform_data.setter
@@ -61,7 +188,7 @@ class UltrasonicDataHandler:
     @metadata.setter
     def metadata(self, v): self.frame.metadata = v
 
-    # --- small processors (µs everywhere) ---
+    # --------- small processors (µs units) ----------
     def remove_mean(self) -> "UltrasonicDataHandler":
         self.frame.waveform_data = self.frame.waveform_data - np.mean(self.frame.waveform_data)
         return self
@@ -95,70 +222,44 @@ class UltrasonicDataHandler:
     def lowpass(self, cutoff_mhz: Optional[float]) -> "UltrasonicDataHandler":
         if cutoff_mhz:
             from scipy.signal import butter, lfilter
-            def butter_bandpass(lowcut, highcut, fs, order=5):
+            def _butter_band(lowcut, highcut, fs, order=5):
                 from scipy.signal import butter
                 return butter(order, [lowcut, highcut], fs=fs, btype='band')
-            def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
-                b, a = butter_bandpass(lowcut, highcut, fs, order=order)
+            def _filt(data, lowcut, highcut, fs, order=5):
+                b, a = _butter_band(lowcut, highcut, fs, order=order)
                 return lfilter(b, a, data)
-
-            dt_us = self.metadata["sampling_rate"]
+            dt_us = float(self.metadata["sampling_rate"])
             fs_mhz = 1.0 / dt_us
-            self.frame.waveform_data = butter_bandpass_filter(
-                self.frame.waveform_data, 0.25, cutoff_mhz, fs=fs_mhz
-            )
+            self.frame.waveform_data = _filt(self.frame.waveform_data, 0.25, cutoff_mhz, fs=fs_mhz)
         return self
 
-    @classmethod
-    def load_stf(
-        cls,
-        dir_manager: DirectoryManager,
-        machine_name_stf: str,
-        experiment_name_stf: str,
-        data_type_stf: str,
-        stf_chosen: str,
-        frequency_cutoff: float = None
-    ) -> "UltrasonicDataHandler":
-        """
-        Creates an UltrasonicDataHandler instance by locating, loading, and processing
-        an STF file (JSON or similar), returning a 1D array in waveform_data.
-        """
-        infile_path_stf_list = dir_manager.make_infile_path_list(
-            machine_name=machine_name_stf,
-            experiment_name=experiment_name_stf,
-            data_type=data_type_stf
-        )
-        
-        chosen_stf_path = None
-        for infile_stf in infile_path_stf_list:
-            if infile_stf.stem == stf_chosen:
-                chosen_stf_path = infile_stf
-                break
-        if chosen_stf_path is None:
-            raise FileNotFoundError(
-                f"No stf file named '{stf_chosen}' found in {data_type_stf} "
-                f"for experiment '{experiment_name_stf}'."
-            )
+    # --------- spectra ----------
+    def compute_amplitude_phase_spectrum(self) -> tuple:
+        if self.waveform_data.size == 0:
+            raise ValueError("No waveform data is present to compute spectra.")
+        data_2d = self.waveform_data
+        n_samples = data_2d.shape[-1]
+        if "sampling_rate" not in self.metadata:
+            raise KeyError("metadata does not contain 'sampling_rate' key.")
+        dt = float(self.metadata["sampling_rate"])        # µs/sample
+        self.frequencies = np.fft.rfftfreq(n_samples, d=dt)
+        try:
+            fft_data = np.fft.rfft(data_2d, axis=1)
+        except Exception:
+            fft_data = np.fft.rfft(data_2d)
+        self.amplitude_spectrum = np.abs(fft_data)
+        self.phase_spectrum = np.angle(fft_data)
+        return self.frequencies, self.amplitude_spectrum, self.phase_spectrum
 
-        # 1) Instantiate the class
-        stf_handler = cls()
-
-        stf_handler.infile = chosen_stf_path
-
-        stf_waveform_raw, stf_metadata = stf_handler.load_waveform_json(chosen_stf_path)
-        stf_metadata["time_ax_waveform"] = (
-            np.array(stf_metadata["time_ax_waveform"]) 
-            - np.array(stf_metadata["time_ax_waveform"])[0]
+    def plot_amplitude_and_phase_spectrum(self):
+        plotter = Plotter()
+        plotter.filtered_amp_and_phase_spectrum_plot(
+            signal_freqs=self.frequencies,
+            amp_spectrum=self.amplitude_spectrum,
+            phase_spectrum=self.phase_spectrum,
         )
 
-        if frequency_cutoff:
-            stf_waveform_filt = butter_bandpass_filter(stf_waveform_raw, 0.25, frequency_cutoff, 1/stf_metadata["sampling_rate"])
-            stf_waveform = stf_waveform_filt - stf_waveform_filt[0]
-
-        stf_handler.waveform_data = stf_waveform_raw
-        stf_handler.metadata = stf_metadata
-        return stf_handler
-
+    # --------- legacy JSON helpers (for old STF JSONs) ----------
     def load_waveform_json(self, infile_path: Path) -> Tuple[np.ndarray, Dict]:
         with open(infile_path, "r") as json_file:
             data_dict = json.load(json_file)
@@ -167,83 +268,23 @@ class UltrasonicDataHandler:
         return data, metadata
 
     def save_waveform_json(self, data: np.ndarray, metadata: dict, outfile_path: Path) -> None:
-        serialized_metadata = {key: self.serialize_value(value) for key, value in metadata.items()}
+        serialized_metadata = {k: self.serialize_value(v) for k, v in metadata.items()}
         data_dict = {"metadata": serialized_metadata, "data": data.tolist()}
         with open(outfile_path, "w") as output_json:
             json.dump(data_dict, output_json)
 
     @staticmethod
     def serialize_value(value):
-        if isinstance(value, (np.ndarray, np.generic)):
+        import numpy as _np
+        if isinstance(value, (_np.ndarray, _np.generic)):
             return value.tolist()
-        elif isinstance(value, (np.integer, np.floating)):
+        elif isinstance(value, (_np.integer, _np.floating)):
             return value.item()
-        elif isinstance(value, np.bool_):
+        elif isinstance(value, _np.bool_):
             return bool(value)
-        elif isinstance(value, np.str_):
-            return str(value)
         return value
-
-    def compute_amplitude_phase_spectrum(self) -> tuple:
-            """
-            Computes the amplitude and phase spectrum (via FFT) for each waveform
-            stored in `self.waveform_data`.
-
-            Returns
-            -------
-            freq : np.ndarray
-                1D array of frequency bins corresponding to the FFT. The units depend on
-                the units of 'sampling_rate' in metadata. For example, if 'sampling_rate'
-                is in microseconds, `freq` will be in MHz.
-            amplitude_spectrum : np.ndarray
-                2D array of the amplitude spectrum of shape [n_waveforms, n_samples].
-            phase_spectrum : np.ndarray
-                2D array of the phase spectrum in radians of shape [n_waveforms, n_samples].
-            """
-            # Handle the case of empty data
-            if self.waveform_data.size == 0:
-                raise ValueError("No waveform data is present to compute spectra.")
-
-            # If the data is 1D, reshape to 2D for uniform processing
-            data_2d = self.waveform_data
-
-            if self.waveform_data.ndim == 1:
-                n_samples = len(data_2d)  # shape (1, n_samples)
-            else:
-                n_waveforms, n_samples = data_2d.shape  # shape (n_waveforms, n_samples)
-
-            # Retrieve the sampling interval from metadata
-            # e.g. if sampling_rate is in microseconds, freq will be in MHz
-            if "sampling_rate" not in self.metadata:
-                raise KeyError("metadata does not contain 'sampling_rate' key.")
-
-            dt = self.metadata["sampling_rate"]
-
-            # Construct the frequency axis (fftshift not used here; if you prefer a
-            # shifted axis, you can use np.fft.fftshift and np.fft.fftfreq accordingly)
-            self.frequencies = np.fft.rfftfreq(n_samples, d=dt)
-
-            # Compute the FFT along the sample axis
-            try:
-                fft_data = np.fft.rfft(data_2d, axis=1)
-            except:
-                fft_data = np.fft.rfft(data_2d)
-
-            # Compute amplitude and phase
-            self.amplitude_spectrum = np.abs(fft_data)
-            self.phase_spectrum = np.angle(fft_data)
-
-            return self.frequencies, self.amplitude_spectrum, self.phase_spectrum
-
-    def plot_amplitude_and_phase_spectrum(self):
-
-        plotter = Plotter()
-        plotter.filtered_amp_and_phase_spectrum_plot(
-                                             signal_freqs = self.frequencies,
-                                             amp_spectrum = self.amplitude_spectrum,
-                                             phase_spectrum = self.phase_spectrum,
-        )
-###############################################################################
+        
+#########s######################################################################
 # CLASS: MechanicalDataHandler
 ###############################################################################
 class MechanicalDataHandler:
@@ -258,42 +299,52 @@ class MechanicalDataHandler:
     def load_mechanical_data(cls, infile_path: Path) -> "MechanicalDataHandler":
         try:
             mech_data = pd.read_csv(infile_path, engine="python", sep=None, skiprows=[1])
-            metadata = {"file_path": infile_path}
+            metadata = {"file_path": Path(infile_path)}
             logger.info(f"Mechanical data loaded successfully from {infile_path}.")
             return cls(mech_data=mech_data, metadata=metadata)
         except Exception as e:
             logger.error(f"Error loading mechanical data from {infile_path}: {e}")
             raise
 
+    # NEW: simple resolver by folder + file name (no DirectoryManager)
+    @classmethod
+    def find_and_load(
+        cls,
+        folder: Path,
+        filename: str,
+    ) -> Tuple[pd.DataFrame, Optional[np.ndarray], Optional[np.ndarray]]:
+        """
+        Load mechanical CSV from an explicit folder/filename and return
+        (mech_data, sync_data, sync_peaks).
+        """
+        path = Path(folder) / filename
+        if not path.exists():
+            raise FileNotFoundError(f"{path} not found.")
+        handler = cls.load_mechanical_data(path)
+        sync_data, sync_peaks = handler.find_sync_values()
+        return handler.mech_data, sync_data, sync_peaks
+
+    # BACK-COMPAT: keep old signature, but just resolve the path and forward
     @classmethod
     def locate_and_load_data(
         cls,
-        dir_manager: DirectoryManager,
+        dir_manager,  # DirectoryManager (legacy)
         machine_name: str,
         experiment_name: str,
         data_type_mech: str,
         mech_file_name: str
     ) -> Tuple[pd.DataFrame, Optional[np.ndarray], Optional[np.ndarray]]:
         """
-        Class-level approach: find the mechanical CSV via dir_manager, load it, then find sync.
-        Returns (mech_data, sync_data, sync_peaks).
+        DEPRECATED: use MechanicalDataHandler.find_and_load(folder, filename).
         """
-        infile_path_list_mech = dir_manager.make_infile_path_list(
-            machine_name, experiment_name, data_type=data_type_mech
+        warnings.warn(
+            "MechanicalDataHandler.locate_and_load_data() is deprecated; "
+            "use MechanicalDataHandler.find_and_load(folder, filename).",
+            DeprecationWarning,
+            stacklevel=2,
         )
-        mech_data_path = None
-        for infile_path in infile_path_list_mech:
-            if infile_path.name == mech_file_name:
-                mech_data_path = infile_path
-                break
-        if mech_data_path is None:
-            raise FileNotFoundError(f"{mech_file_name} not found in mechanical data.")
-
-        # Instantiate
-        handler = cls.load_mechanical_data(mech_data_path)
-        mech_data = handler.mech_data
-        sync_data, sync_peaks = handler.find_sync_values()
-        return mech_data, sync_data, sync_peaks
+        folder = Path(dir_manager.base_dir) / f"experiments_{machine_name}" / experiment_name / data_type_mech
+        return cls.find_and_load(folder, mech_file_name)
 
     def find_sync_values(self) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
         try:
@@ -431,44 +482,30 @@ class BlockMetadataHandler:
     @classmethod
     def load_blocks_metadata(
         cls,
-        dir_manager: Any,
-        blocks_metadata_name: str,
+        config_path: Path,
         block_keys: Tuple[str, ...]
     ) -> Tuple[dict, ...]:
         """
-        Class method that:
-          1) Builds the path from a DirectoryManager + blocks_metadata_name
-          2) Loads the JSON into a BlockMetadataHandler
-          3) Retrieves a tuple of block dictionaries for the given 'block_keys'
-
-        Parameters
-        ----------
-        dir_manager : DirectoryManager
-            Directory manager for building paths.
-        blocks_metadata_name : str
-            Name of the blocks metadata JSON file (e.g. "blocks_metadata.json").
-        block_keys : Tuple[str, ...]
-            Keys in the JSON for the blocks (e.g. ("mauro_side1", "central_block1"))
-
-        Returns
-        -------
-        Tuple[dict, ...]
-            A tuple of dictionaries for each block key.
+        Path-first loader: pass the full JSON path (e.g., base/metadata/blocks_metadata.json)
+        and the block keys to extract.
         """
-        blocks_metadata_path = dir_manager.base_dir / "metadata" / blocks_metadata_name
-        block_handler = cls.from_json(blocks_metadata_path)
+        handler = cls.from_json(Path(config_path))
+        return tuple(handler.get_block_params(bk) for bk in block_keys)
 
-        results = []
-        for bk in block_keys:
-            results.append(block_handler.get_block_params(bk))
-
-        return tuple(results)
-    
-from scipy.signal import butter, lfilter
-def butter_bandpass(lowcut, highcut, fs, order=5):
-    return butter(order, [lowcut, highcut], fs=fs, btype='band')
-
-def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
-    b, a = butter_bandpass(lowcut, highcut, fs, order=order)
-    y = lfilter(b, a, data)
-    return y
+    # BACK-COMPAT: keep old signature, but resolve path then delegate
+    @classmethod
+    def load_blocks_metadata_legacy(
+        cls,
+        dir_manager,                   # DirectoryManager (legacy)
+        blocks_metadata_name: str,
+        block_keys: Tuple[str, ...]
+    ) -> Tuple[dict, ...]:
+        warnings.warn(
+            "BlockMetadataHandler.load_blocks_metadata_legacy() is deprecated; "
+            "use BlockMetadataHandler.load_blocks_metadata(config_path, block_keys).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        config_path = Path(dir_manager.base_dir) / "metadata" / blocks_metadata_name
+        return cls.load_blocks_metadata(config_path=config_path, block_keys=block_keys)
+ 
