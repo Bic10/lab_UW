@@ -3,7 +3,7 @@
 import sys
 import time as tm
 import scipy.signal
-from lab_uw.data_io import UltrasonicDataHandler
+from lab_uw.data_io.data_io import UltrasonicDataHandler
 from lab_uw.directory_manager import DirectoryManager
 from lab_uw.signal_processing import SignalProcessor
 from lab_uw.plotting import Plotter

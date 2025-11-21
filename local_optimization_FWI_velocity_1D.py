@@ -1,4 +1,4 @@
-# lab_uw/global_optimization_velocity_homogeneus.py
+# lab_uw/local_optimization_velocity_homogeneus.py
 
 import sys
 from pathlib import Path
@@ -17,7 +17,6 @@ from lab_uw.forward_modeling import *
 from lab_uw.plotting import Plotter
 from lab_uw.forward_modeling import UltrasonicModeler
 from lab_uw.utils import *
-from global_optimization_velocity_homogeneus import *
 
 def min_assembly_velocity(assembly_dict: Dict[str, Any]):
     return min(assembly_dict["gouge_velocity_1"], 
@@ -577,18 +576,22 @@ if __name__ == "__main__":
         "reduce_factor"             : 10/9
     }
 
-    # Load the Source Time Function
-    stf_handler = UltrasonicDataHandler.load_stf(
-        dir_manager         = dir_manager,
-        machine_name_stf    = "on_bench",
-        experiment_name_stf = "STF_ss10_05",
-        data_type_stf       = "data_analysis/source_time_functions" + wave_type,
-        stf_chosen          = "width250_volt70_local_inversion",
-        # stf_chosen          = "width250_volt70",
-        # frequency_cutoff= 6 # params["frequency_cutoff"]
+    # Load the Source Time Function (HDF5)
+    stf_h5_path = (
+        dir_manager.paths.analysis_root("on_bench", "STF_ss10_05")
+        / f"source_time_functions{wave_type}"
+        / "stf.h5"
     )
 
-    stf_handler.waveform_data = (-stf_handler.waveform_data).squeeze()  # now (L,)
+    # read the STF saved under /stf/width250_volt70/cycle_000000/source_waveform
+    stf_handler = UltrasonicDataHandler.read_stf_h5(
+        stf_h5_path,
+        name="width250_volt70",   # "width250_volt70_local_inversion" when available
+        cycle_index=0,
+    )
+
+    # keep the sign convention you had before; make it 1D if your solver expects 1D
+    stf_handler.waveform_data = (-stf_handler.waveform_data).squeeze(0)   # shape (L,)
 
     # Load Mechanical Data
     mech_folder = Path(dir_manager.base_dir) / f"experiments_{machine_name}" / experiment_name / data_type_mech

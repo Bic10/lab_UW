@@ -6,7 +6,6 @@ import pandas as pd
 from scipy.signal import find_peaks
 
 import logging
-import warnings
 from typing import Tuple, Dict, Optional
 from pathlib import Path
 
@@ -14,9 +13,6 @@ from lab_uw.data_io.schema import UWFrame
 from lab_uw.data_io.readers.tsv_reader import read_tsv
 from lab_uw.data_io.readers.hdf5_reader import read_hdf5, read_stf_hdf5
 from lab_uw.data_io.writers.hdf5_writer import write_hdf5, write_stf_hdf5
-
-from lab_uw.directory_manager import DirectoryManager
-from lab_uw.plotting import Plotter
 
 logger = logging.getLogger(__name__)
 
@@ -53,12 +49,6 @@ class UltrasonicDataHandler:
         if ext in {".h5", ".hdf5"}:
             return cls.read_hdf5(path, **h5_options)
         raise ValueError(f"Unsupported file type: {path}")
-
-    # (optional) compatibility alias
-    @classmethod
-    def load(cls, *args, **kwargs) -> "UltrasonicDataHandler":
-        logger.warning("UltrasonicDataHandler.load() is deprecated; use .open().")
-        return cls.open(*args, **kwargs)
 
     # --------- STF helpers (HDF5) ----------
     @classmethod
@@ -115,67 +105,6 @@ class UltrasonicDataHandler:
             include_passive_stub=include_passive_stub,
             t0_unix_s=t0_unix_s,
         )
-
-    # --- legacy, concise STF loader (JSON on disk) ---
-    @classmethod
-    def load_stf(
-        cls,
-        *,
-        dir_manager,
-        machine_name_stf: str,
-        experiment_name_stf: str,
-        data_type_stf: str,
-        stf_chosen: str,
-        frequency_cutoff: float | None = None,
-    ) -> "UltrasonicDataHandler":
-        """
-        Find <stf_chosen>.json under the given experiment tree (via DirectoryManager),
-        load it, re-zero time to start at 0, and optionally lowpass-filter it.
-        Keeps the old short call-site intact.
-        """
-        # discover candidate files via DirectoryManager (no base_dir attr needed)
-        candidates = dir_manager.make_infile_path_list(
-            machine_name=machine_name_stf,
-            experiment_name=experiment_name_stf,
-            data_type=data_type_stf,
-        )
-        try:
-            stf_path = next(p for p in candidates if p.stem == stf_chosen)
-        except StopIteration:
-            raise FileNotFoundError(
-                f"STF '{stf_chosen}' not found in "
-                f"{machine_name_stf}/{experiment_name_stf}/{data_type_stf}"
-            )
-
-        # reuse our tiny JSON helpers
-        tmp = cls()
-        data, meta = tmp.load_waveform_json(stf_path)
-
-        # re-zero time axis to start at 0 µs (matches your old behavior)
-        if "time_ax_waveform" in meta:
-            t = np.asarray(meta["time_ax_waveform"], dtype=float)
-            meta["time_ax_waveform"] = (t - t[0]).tolist()
-
-        h = cls(data, meta)
-
-        # optional lowpass right here for backward-compatibility
-        if frequency_cutoff:
-            try:
-                from scipy.signal import butter, lfilter
-                def _butter_band(lowcut, highcut, fs, order=5):
-                    from scipy.signal import butter as _butter
-                    return _butter(order, [lowcut, highcut], fs=fs, btype="band")
-                def _filt(x, lowcut, highcut, fs, order=5):
-                    b, a = _butter_band(lowcut, highcut, fs, order)
-                    return lfilter(b, a, x)
-
-                dt_us = float(h.metadata["sampling_rate"])     # µs/sample
-                fs_mhz = 1.0 / dt_us                            # MHz
-                h.waveform_data = _filt(h.waveform_data, 0.25, frequency_cutoff, fs=fs_mhz)
-            except Exception as e:
-                logger.warning(f"STF lowpass skipped ({e})")
-
-        return h
 
     # --------- properties ----------
     @property
@@ -251,38 +180,6 @@ class UltrasonicDataHandler:
         self.phase_spectrum = np.angle(fft_data)
         return self.frequencies, self.amplitude_spectrum, self.phase_spectrum
 
-    def plot_amplitude_and_phase_spectrum(self):
-        plotter = Plotter()
-        plotter.filtered_amp_and_phase_spectrum_plot(
-            signal_freqs=self.frequencies,
-            amp_spectrum=self.amplitude_spectrum,
-            phase_spectrum=self.phase_spectrum,
-        )
-
-    # --------- legacy JSON helpers (for old STF JSONs) ----------
-    def load_waveform_json(self, infile_path: Path) -> Tuple[np.ndarray, Dict]:
-        with open(infile_path, "r") as json_file:
-            data_dict = json.load(json_file)
-        data = np.array(data_dict["data"])
-        metadata = data_dict["metadata"]
-        return data, metadata
-
-    def save_waveform_json(self, data: np.ndarray, metadata: dict, outfile_path: Path) -> None:
-        serialized_metadata = {k: self.serialize_value(v) for k, v in metadata.items()}
-        data_dict = {"metadata": serialized_metadata, "data": data.tolist()}
-        with open(outfile_path, "w") as output_json:
-            json.dump(data_dict, output_json)
-
-    @staticmethod
-    def serialize_value(value):
-        import numpy as _np
-        if isinstance(value, (_np.ndarray, _np.generic)):
-            return value.tolist()
-        elif isinstance(value, (_np.integer, _np.floating)):
-            return value.item()
-        elif isinstance(value, _np.bool_):
-            return bool(value)
-        return value
         
 #########s######################################################################
 # CLASS: MechanicalDataHandler
@@ -323,28 +220,6 @@ class MechanicalDataHandler:
         handler = cls.load_mechanical_data(path)
         sync_data, sync_peaks = handler.find_sync_values()
         return handler.mech_data, sync_data, sync_peaks
-
-    # BACK-COMPAT: keep old signature, but just resolve the path and forward
-    @classmethod
-    def locate_and_load_data(
-        cls,
-        dir_manager,  # DirectoryManager (legacy)
-        machine_name: str,
-        experiment_name: str,
-        data_type_mech: str,
-        mech_file_name: str
-    ) -> Tuple[pd.DataFrame, Optional[np.ndarray], Optional[np.ndarray]]:
-        """
-        DEPRECATED: use MechanicalDataHandler.find_and_load(folder, filename).
-        """
-        warnings.warn(
-            "MechanicalDataHandler.locate_and_load_data() is deprecated; "
-            "use MechanicalDataHandler.find_and_load(folder, filename).",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        folder = Path(dir_manager.base_dir) / f"experiments_{machine_name}" / experiment_name / data_type_mech
-        return cls.find_and_load(folder, mech_file_name)
 
     def find_sync_values(self) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
         try:
@@ -490,22 +365,4 @@ class BlockMetadataHandler:
         and the block keys to extract.
         """
         handler = cls.from_json(Path(config_path))
-        return tuple(handler.get_block_params(bk) for bk in block_keys)
-
-    # BACK-COMPAT: keep old signature, but resolve path then delegate
-    @classmethod
-    def load_blocks_metadata_legacy(
-        cls,
-        dir_manager,                   # DirectoryManager (legacy)
-        blocks_metadata_name: str,
-        block_keys: Tuple[str, ...]
-    ) -> Tuple[dict, ...]:
-        warnings.warn(
-            "BlockMetadataHandler.load_blocks_metadata_legacy() is deprecated; "
-            "use BlockMetadataHandler.load_blocks_metadata(config_path, block_keys).",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        config_path = Path(dir_manager.base_dir) / "metadata" / blocks_metadata_name
-        return cls.load_blocks_metadata(config_path=config_path, block_keys=block_keys)
- 
+        return tuple(handler.get_block_params(bk) for bk in block_keys) 

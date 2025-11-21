@@ -2,18 +2,15 @@
 
 from pathlib import Path
 import matplotlib
-matplotlib.use('Agg')  # or 'pdf', 'svg', anything non-interactive
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from matplotlib.patches import Rectangle
 from matplotlib import animation
-
 import cycler
-
 import numpy as np
 from typing import Optional, Dict, List, Union, Tuple
-from tkinter import Button
 import pickle
+import os
 
 class Plotter:
     """
@@ -2014,93 +2011,95 @@ class Plotter:
         fig.tight_layout()
         self.output_path_choice(fig=fig, outfile_path=outfile_path)
 
+def _get_pyplot():
+    """
+    Ensure an interactive backend if possible, then import and return pyplot.
+    Respect MPLBACKEND if the user set it in the environment.
+    """
+    if "MPLBACKEND" not in os.environ:
+        # Try TkAgg first (requires tkinter), then Qt-based backends if available
+        for be in ("TkAgg", "Qt5Agg", "QtAgg"):
+            try:
+                matplotlib.use(be, force=True)
+                break
+            except Exception:
+                continue
+    # Now import pyplot under the chosen backend
+    import matplotlib.pyplot as plt
+    return plt
+
+def _get_button_widget():
+    # Import the widget only after backend is set and pyplot is importable
+    from matplotlib.widgets import Button as MplButton
+    return MplButton
+
+
 class InteractivePlotter(Plotter):
-    """
-    A specialized Plotter class that provides interactive methods for human-needed operations.
-    Inherits from Plotter so it has self.settings, etc.
-    """
     def manual_pick_arrival_times(
         self,
         observed_time: np.ndarray,
         observed_waveform: np.ndarray,
-        start_time: Optional[float]= 0,
-        outfile_path: Optional[Path] = None
+        start_time: float = 0.0,
+        outfile_path: Optional[Path] = None,
     ) -> List[float]:
-        """
-        Manually pick arrival times from waveform data to estimate initial velocities.
-        Uses the same self.settings as other plotting methods in this class.
-        """
-        # Validate inputs
+        # --- import after backend selection ---
+        plt = _get_pyplot()
+        MplButton = _get_button_widget()
+
+        # --- input checks ---
         if observed_time.ndim != 1 or observed_waveform.ndim != 1:
             raise ValueError("observed_time and observed_waveform must be 1D numpy arrays.")
         if len(observed_time) != len(observed_waveform):
             raise ValueError("observed_time and observed_waveform must have the same length.")
 
         picked_times: List[float] = []
-        picking_mode = [False]  # store in mutable for closure
+        picking_mode = [False]  # mutable closure
 
         def onclick(event):
-            """
-            Only pick if in picking mode. Otherwise, let zoom/pan do its job.
-            """
-
-            if picking_mode[0] and event.button == 1 and event.inaxes:
-                picking_mode[0] = not picking_mode[0]
-                print(f"Picking mode = {picking_mode[0]}")
-                picked_time = event.xdata
-                picked_times.append(picked_time)
-                print(f"Picked time: {picked_time:.6f}")
-                event.inaxes.axvline(x=picked_time, color='r', linestyle='--')
+            if picking_mode[0] and (event.button == 1) and event.inaxes is ax:
+                picking_mode[0] = False
+                t = float(event.xdata)
+                picked_times.append(t)
+                event.inaxes.axvline(x=t, color="r", linestyle="--")
                 plt.draw()
 
-        def start_picking_callback(event):
-            """
-            Button callback to enable picking mode.
-            """
+        def start_picking_callback(_event):
             picking_mode[0] = True
             print("Picking mode enabled. Left-click to pick arrival times.")
 
-        # 1. Create figure/axes
-        fig, ax = plt.subplots(figsize=self.settings['figure_size'])
-        plt.subplots_adjust(bottom=0.2)  # leave room for button
+        # 1) figure
+        fig, ax = plt.subplots(figsize=self.settings["figure_size"])
+        plt.subplots_adjust(bottom=0.2)
 
-        # 2. Plot the waveform
-        ax.plot(observed_time, observed_waveform, label='Waveform')
-        ax.set_xlabel('Time [$\\mu s$]', fontsize=self.settings['fontsize_labels'])
-        ax.set_ylabel('Amplitude', fontsize=self.settings['fontsize_labels'])
-        if outfile_path is not None:
-            title_str = f"File: {outfile_path.name}"
-        else:
-            title_str = "Pick Arrival Times"
-        ax.set_title(title_str, fontsize=self.settings['fontsize_title'])
-        ax.set_xlim([observed_time[0], observed_time[-1]])
-        ax.set_ylim([np.amin(observed_waveform), np.amax(observed_waveform)])
+        # 2) plot
+        ax.plot(observed_time, observed_waveform, label="Waveform")
+        ax.set_xlabel('Time [$\\mu s$]', fontsize=self.settings["fontsize_labels"])
+        ax.set_ylabel("Amplitude", fontsize=self.settings["fontsize_labels"])
+        ax.set_title("Pick Arrival Times", fontsize=self.settings["fontsize_title"])
+        ax.set_xlim(observed_time[0], observed_time[-1])
+        ax.set_ylim(np.min(observed_waveform), np.max(observed_waveform))
         ax.legend()
         ax.grid(True)
 
-        # Visual reference up to start_time
-        ax.axvspan(0, start_time, facecolor='0.2', alpha=0.3)
-        ax.vlines(x=start_time, ymin=np.amin(observed_waveform), ymax=np.amax(observed_waveform), colors="k")
+        ax.axvspan(0, start_time, facecolor="0.2", alpha=0.3)
+        ax.vlines(x=start_time, ymin=np.min(observed_waveform), ymax=np.max(observed_waveform), colors="k")
 
-        # 3. Create a "Start Picking" button
-        ax_button = plt.axes([0.7, 0.05, 0.2, 0.075])  # [left, bottom, width, height]
-        pick_button = Button(ax_button, "Click to Allow Picking")
-
-        # 4. Connect callbacks
-        cid = fig.canvas.mpl_connect('button_press_event', onclick)
+        # 3) button
+        ax_button = plt.axes([0.70, 0.05, 0.25, 0.08])
+        pick_button = MplButton(ax_button, "Click to Allow Picking")
         pick_button.on_clicked(start_picking_callback)
 
-        # 5. Show the plot and wait for user interaction
-        plt.show()
+        # 4) connect + show
+        cid = fig.canvas.mpl_connect("button_press_event", onclick)
+        try:
+            plt.show()
+        finally:
+            fig.canvas.mpl_disconnect(cid)
 
-        # After the figure is closed, disable picking
-        fig.canvas.mpl_disconnect(cid)
-
-        # 6. Save the picked times if desired
+        # 5) optional save
         if outfile_path:
             outfile_path.parent.mkdir(parents=True, exist_ok=True)
             with open(outfile_path, "wb") as f:
                 pickle.dump(picked_times, f)
-            print(f"Picked times saved to {outfile_path}")
 
         return picked_times

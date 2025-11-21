@@ -329,6 +329,7 @@ class UltrasonicModeler:
         else:
             pzt_vel_label     = str(round(1e4*pzt_velocity)).replace(".",",")
             steel_vel_label   = str(round(1e4*steel_velocity)).replace(".",",")  
+            misfit_label    = str(round(misfit,5)).replace(".",",")
             label = f"_pzt_{pzt_vel_label}_vel_{steel_vel_label}_global_search_{misfit_label}_waveform"
 
         if enable_plotting:

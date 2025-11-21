@@ -9,7 +9,7 @@ from multiprocessing import Pool, cpu_count
 from typing import Any, Dict, Union
 import matplotlib.pyplot as plt
 
-from lab_uw.data_io import UltrasonicDataHandler, BlockMetadataHandler
+from lab_uw.data_io.data_io import UltrasonicDataHandler, BlockMetadataHandler
 from lab_uw.directory_manager import DirectoryManager
 from lab_uw.forward_modeling import UltrasonicModeler
 from lab_uw.plotting import Plotter
@@ -58,12 +58,13 @@ def process_uw_file(
     # Unpack parameters
     outdir_path_l2norm          = params["outdir_path_l2norm"]
 
-    # Load and preprocess uw data
-    uw_data_handler = UltrasonicDataHandler.load_and_process_uw(
-        infile_path=infile_path,
-        frequency_cutoff=params["frequency_cutoff"],
-        maxtime2simulate=params["maxtime2simulate"],    
-        number_of_waveforms2process=params["number_of_waveforms2process"]
+    # Load & process ultrasonic data and metadata from TSV, with preprocessing
+    uw_data_handler = (
+        UltrasonicDataHandler.read_tsv(infile_path)
+            .remove_mean()
+            .downsample_waveforms(params["number_of_waveforms2process"])     # keep N waveforms (evenly sampled)
+            .truncate_time(params["maxtime2simulate"])                # limit to maxtime [µs]
+            .lowpass(params["frequency_cutoff"])                    # optional, cutoff in MHz
     )
 
     observed_waveform_data = uw_data_handler.waveform_data
@@ -348,12 +349,27 @@ def process_waveform(
     # stf_handler.waveform_data = butter_bandpass_filter(stf_handler.waveform_data, 0.25, 12.49, 1/stf_handler.metadata["sampling_rate"])    
 
     if params["save_local_inversion_STF"]:
-        stf_from_inverison_outfile_name = stf_handler.infile.name + params["saved_STF_file_name"]
-        stf_from_inverison_outfile_path = stf_handler.infile.parent / stf_from_inverison_outfile_name
+        # where to save
+        stf_h5 = (
+            dir_manager.paths.analysis_root(machine_name, experiment_name)
+            / f"source_time_functions{wave_type}"
+            / "stf.h5"
+        )
 
-        stf_handler.save_waveform_json(data = stf_handler.waveform_data, 
-                                        metadata = stf_handler.metadata, 
-                                        outfile_path = stf_from_inverison_outfile_path)
+        # base name of the rough STF we started from
+        base_name = stf_handler.metadata.get("stf_name", "unnamed_stf")
+        out_name  = f"{base_name}{params['saved_STF_file_name'] or '_local_inversion'}"
+
+        # ensure 1D waveform for STF writer, keep metadata (dt_us etc.)
+        # (UltrasonicDataHandler.write_stf_hdf5 uses only row 0 if 2D)
+        stf_handler.write_stf_hdf5(
+            out_path=stf_h5,
+            stf_name=out_name,
+            cycle_index=0,
+            include_active_stub=False,
+            include_passive_stub=False,
+            t0_unix_s=None,
+        )
 
     # Return final info
     return {
@@ -496,11 +512,10 @@ if __name__ == "__main__":
         "reduce_factor"             : 10/9
     }
 
-    # Build dictionary with assembly metadata
+    # Build a dictionary containing all the relevant assembly parameters
+    blocks_json = Path(dir_manager.base_dir) / "metadata" / "blocks_metadata.json"
     block = BlockMetadataHandler.load_blocks_metadata(
-        dir_manager=dir_manager,
-        blocks_metadata_name="blocks_metadata.json",
-        block_keys=("on_bench_STF2",)
+    blocks_json, ("on_bench_STF2",)
     )
 
     assembly_dict = block[0]
@@ -541,18 +556,16 @@ if __name__ == "__main__":
         infile_name = infile_path.name.split(".")[0]
         if infile_name != stf_chosen:
             continue
-        # Load the Source Time Function
-        stf_handler = UltrasonicDataHandler.load_stf(
-            dir_manager=dir_manager,
-            machine_name_stf=machine_name,
-            experiment_name_stf=experiment_name,
-            data_type_stf="data_analysis/source_time_functions" + wave_type,
-            # stf_chosen= "width250_volt70_local_inversion_bigboss",
-            stf_chosen= "width250_volt70_local_inversion",
-
-            # stf_chosen=stf_chosen,
-            # frequency_cutoff= 12.49  # LEAVE THE NIQUIST, BUT FIX IT! SOMEHOW THE LOWPASS IS WRONG, IT DISTORTS THE WAVE
+        # Load the Source Time Function from HDF5
+        stf_h5 = (
+            dir_manager.paths.analysis_root(machine_name, experiment_name)
+            / f"source_time_functions{wave_type}"
+            / "stf.h5"
         )
+        stf_name = "width250_volt70"  # 
+        stf_handler = UltrasonicDataHandler.read_stf_h5(stf_h5, name=stf_name, cycle_index=0)
+        # if you need polarity flip:
+        stf_handler.waveform_data = (-stf_handler.waveform_data).squeeze(0)
 
         # stf_handler.waveform_data *= 53         # found by linsearch with multiplier parameters
         # Run the main simulation routine

@@ -1,15 +1,24 @@
+# identify_manually_STF.py 
+
 import sys
 import numpy as np
 from pathlib import Path
 
 from lab_uw.directory_manager import DirectoryManager
-from lab_uw.data_io import UltrasonicDataHandler, BlockMetadataHandler
+from lab_uw.data_io.data_io import UltrasonicDataHandler, BlockMetadataHandler
+from lab_uw.data_io.schema import UWFrame
+from lab_uw.data_io.writers.hdf5_writer import write_stf_hdf5
+
+import os
+os.environ["MPLBACKEND"] = "TkAgg"   # or "Qt5Agg" if you installed PyQt5
+import matplotlib
+matplotlib.use("TkAgg", force=True)
+
+# now it is safe to import things that might import pyplot
+from lab_uw.plotting import InteractivePlotter
 from lab_uw.plotting import InteractivePlotter, Plotter
 
-def pick_direct_arrival(
-    observed_time: np.ndarray,
-    waveform: np.ndarray
-) -> tuple[float, float]:
+def pick_direct_arrival(observed_time: np.ndarray, waveform: np.ndarray) -> tuple[float, float]:
     """
     Lets the user pick two times: start and end of the direct arrival.
 
@@ -25,16 +34,19 @@ def pick_direct_arrival(
     (t_start_direct, t_end_direct) : (float, float)
         The two picked times in ascending order.
     """
+    import matplotlib
+    print("Matplotlib backend:", matplotlib.get_backend())
+
     picks = InteractivePlotter().manual_pick_arrival_times(
         observed_time=observed_time,
         observed_waveform=waveform,
-        start_time=0.0,  # Just a reference
+        start_time=0.0,
         outfile_path=None
     )
     if len(picks) < 2:
         sys.exit("Not enough picks made. Please re-run and pick at least 2 times.")
-    picks_sorted = sorted(picks)
-    return picks_sorted[0], picks_sorted[1]
+    a, b = sorted(picks)
+    return a, b
 
 def compute_reflections_arrival_time(
     t_start_direct: float,
@@ -114,12 +126,6 @@ def compute_reflections_correlation(
 
     reflection_info_list = []
     direct_len = idx_Dend - idx_Dstart
-
-    # List-of-1D wave snippets; first row => direct wave snippet
-    wave_snippets = []
-    wave_snippets.append(direct_wave_data)  # index 0 => direct wave
-
-    # Build reflection snippets
     for i, arr_time in enumerate(arrivals):
         if i == 0:
             # The arrivals[0] is the direct arrival time -> skip
@@ -127,11 +133,9 @@ def compute_reflections_correlation(
 
         ref_start_idx = np.searchsorted(observed_time, arr_time)
         ref_end_idx   = ref_start_idx + direct_len
-
         if ref_end_idx > len(observed_time):
             # reflection snippet out of bounds; skip
             break
-
         reflection_time = observed_time[ref_start_idx:ref_end_idx]
         reflection_data = waveform[ref_start_idx:ref_end_idx]
 
@@ -196,7 +200,7 @@ def iterate_direct_arrival_times(
     from numpy import inf
     best_t_start  = t_start_nominal
     best_corr_score = -inf
-    best_reflection_info_list = []  
+    best_reflection_info_list = []
 
     # Prepare candidate times
     t_min = max(0, t_start_nominal - search_margin)
@@ -210,8 +214,6 @@ def iterate_direct_arrival_times(
         candidate_t_end = candidate_t_start + direct_arrival_span
         if candidate_t_end > max_time:
             continue
-
-        # direct wave snippet
         idxD_start = np.searchsorted(observed_time, candidate_t_start)
         idxD_end   = np.searchsorted(observed_time, candidate_t_end)
         direct_data = waveform[idxD_start:idxD_end]
@@ -232,15 +234,13 @@ def iterate_direct_arrival_times(
             observed_time=observed_time,
             waveform=waveform
         )
-        # Evaluate correlation
-        # reflection_info is a list of dict: each has 'corr_coeff'
-        corr_score = 0.0
-        for ref in reflection_info_list:
-            if not np.isnan(ref['corr_coeff']):
-                corr_score += ref['corr_coeff']
-        corr_score = corr_score/len(reflection_info_list)
 
-        # 5) keep track of best
+        # guard if none collected (avoid division by zero)
+        usable = [r['corr_coeff'] for r in reflection_info_list if not np.isnan(r['corr_coeff'])]
+        if len(usable) == 0:
+            continue
+        corr_score = float(np.sum(usable)) / len(usable)
+
         if corr_score > best_corr_score:
             best_corr_score  = corr_score
             best_t_start = candidate_t_start
@@ -252,14 +252,13 @@ def iterate_direct_arrival_times(
         "best_reflection_info_list": best_reflection_info_list,
     }
 
-
 #################################################################################################
 def main():
     base_dir = "/home/michele/Desktop/Dottorato/active_source_implementation"
     machine_name = "on_bench"
     experiment_name = "STF_ss10_05"
     data_type = "uw_data/data_tsv_files"
-    wave_tipe = "_s"
+    wave_type = "_s"
     block_metadata_filename = "blocks_metadata.json"
     block_id = "on_bench_STF2"
     # Guess or define a margin, step_size
@@ -267,27 +266,44 @@ def main():
     step_size = 0.01     # [mus] increments step. At best should be the sampling frequency
 
     dir_manager = DirectoryManager(base_dir=base_dir)
-    # Load block thickness
+
+    # block metadata (thickness etc.)
+    blocks_json = Path(dir_manager.base_dir) / "metadata" / "blocks_metadata.json"
     block_params, = BlockMetadataHandler.load_blocks_metadata(
-        dir_manager=dir_manager,
-        blocks_metadata_name=block_metadata_filename,
-        block_keys=(block_id,)
+    blocks_json, (block_id,)
     )
+
+    # input files
     infile_path_list = sorted(dir_manager.make_infile_path_list(
-        machine_name, experiment_name, data_type=data_type + wave_tipe
+        machine_name, experiment_name, data_type=data_type + wave_type
     ))
 
     # Use only one file for manual picking, then the same guess will be used for all the others
+
+    # output roots
+    out_types = [
+        "source_time_functions" + wave_type,
+        "stf_images_reflection_windows" + wave_type,
+        "stf_images_direct-reflections_correlation" + wave_type,
+    ]
+    outdir_data, outdir_win, outdir_overlay = dir_manager.make_data_analysis_folders(
+        machine_name=machine_name, experiment_name=experiment_name, data_types=out_types
+    )
+
+    # single HDF5 for all STFs of this experiment+wave
+    stf_h5_path = Path(outdir_data) / "stf.h5"
+
+    # do the manual pick once on a single randomly chosen file
     file_manual_pick = np.random.choice(len(infile_path_list))
 
     for infile_path in infile_path_list:
         
         # Load the single file and get the wave/time
-        ultrasonic_handler = UltrasonicDataHandler.load_UW_data(infile_path)
-        data, metadata = ultrasonic_handler.waveform_data, ultrasonic_handler.metadata
-        observed_time = metadata['time_ax_waveform']
-        # Average all waveforms in that file
-        waveform = np.mean(data, axis=0)
+
+        uw = UltrasonicDataHandler.read_tsv(infile_path)
+        data, meta = uw.waveform_data, uw.metadata
+        observed_time = meta["time_ax_waveform"]  # [µs]
+        waveform = data.mean(axis=0)              # average all waveforms
 
         # Pick direct arrival times
         if file_manual_pick:
@@ -310,66 +326,66 @@ def main():
         best_reflection_info_list = results["best_reflection_info_list"]
         best_corr_score = results["best_corr_score"]
 
-        print(f"Best t_start = {best_t_start:.3f} %\\mu%s")
-        print(f"Best correlation score =\n{best_corr_score}")
+        print(f"{infile_path.stem}: best t_start = {best_t_start:.3f} µs; corr = {best_corr_score:.4f}")
 
-        #  best snippet => direct wave snippet
-        final_idx_Dstart = np.searchsorted(observed_time, best_t_start)
-        final_idx_Dend   = np.searchsorted(observed_time, best_t_start+direct_arrival_span)
-        direct_wave_data = waveform[final_idx_Dstart:final_idx_Dend]
-        direct_wave_time = observed_time[final_idx_Dstart:final_idx_Dend]
+        # final STF snippet
+        i0 = int(np.searchsorted(observed_time, best_t_start))
+        i1 = int(np.searchsorted(observed_time, best_t_start + direct_arrival_span))
+        stf_data  = waveform[i0:i1]
+        stf_time  = observed_time[i0:i1]
 
-        # SAVE STFs AND THEIR METADATA 
-        data_types_output = ["source_time_functions"+wave_tipe,"stf_images_reflection_windows"+wave_tipe,"stf_images_direct-reflections_correlation"+wave_tipe]
-        outdir_path_data = dir_manager.make_data_analysis_folders(machine_name = machine_name, experiment_name=experiment_name, data_types=data_types_output)
+        # build STF frame (metadata stays in µs)
+        stf_meta = dict(meta)  # copy
+        stf_meta["number_of_samples"]  = int(stf_data.size)
+        stf_meta["number_of_waveforms"] = 1
+        stf_meta["time_ax_waveform"]   = stf_time
 
-        infile_path = Path(infile_path)  # Convert to Path object
+        stf_frame = UWFrame(stf_data[None, :], stf_meta)
+
+        # --- save STF into HDF5 under /stf/<name>/cycle_000000 ---
         while infile_path.suffix:
             infile_path = infile_path.with_suffix('')
-        infile_name = infile_path.stem
-        outfile_name = infile_name 
-
-        stf_data = direct_wave_data
-        # HEREDITATE METADATA AND UPDATE IT
-        stf_metadata = metadata.copy()         # copy is needed, otherwise both will point to the same memory!!!
-        stf_metadata['number_of_samples'] = len(stf_data)
-        stf_metadata['number_of_waveforms'] = 1
-        stf_metadata['time_ax_waveform'] = metadata['time_ax_waveform'][final_idx_Dstart:final_idx_Dend]
-        ultrasonic_handler.save_waveform_json(data = stf_data, 
-                                            metadata = stf_metadata, 
-                                            outfile_path = Path(outdir_path_data[0]) / outfile_name)
+        write_stf_hdf5(
+            stf=stf_frame,
+            out_path=stf_h5_path,
+            stf_name=infile_path.stem,
+            cycle_index=0,
+            include_active_stub=False,
+            include_passive_stub=False,
+            t0_unix_s=None,
+        )
 
         # Plot final reflection windows
         plotter = Plotter()
-        try: 
+        try:
             plotter.plot_reflection_windows(
                 observed_time=observed_time,
                 waveform=waveform,
                 t_start_direct=best_t_start,
                 t_end_direct=best_t_start + direct_arrival_span,
                 reflection_info_list=best_reflection_info_list,
-                idx_Dstart=final_idx_Dstart,
-                idx_Dend=final_idx_Dend,
-                title="Reflection windows for best t_start",
-                outfile_path= Path(outdir_path_data[1]) / outfile_name
+                idx_Dstart=i0,
+                idx_Dend=i1,
+                title=f"Reflection windows: {infile_path.stem}",
+                outfile_path=Path(outdir_win) / infile_path.stem,
             )
+        except Exception as e:
+            print("Window plot error:", e)
 
-        except:
-            print(observed_time.size)
-            print(waveform.size)
+        try:
+            plotter.plot_direct_and_reflections(
+                direct_wave_time=stf_time,
+                direct_wave_data=stf_data,
+                reflection_info_list=best_reflection_info_list,
+                outfile_path=Path(outdir_overlay) / infile_path.stem,
+            )
+        except Exception as e:
+            print("Overlay plot error:", e)
 
-        # Also overlay the final correlations:
-        plotter.plot_direct_and_reflections(
-            direct_wave_time=direct_wave_time,
-            direct_wave_data=direct_wave_data,
-            reflection_info_list=best_reflection_info_list,
-            outfile_path= Path(outdir_path_data[2]) / outfile_name 
-        )
-
-        # Compute velocity
-        block_thickness_cm = block_params["z"]
-        velocity_estimate = block_thickness_cm / best_t_start
-        print(f"Estimated velocity = {velocity_estimate:.4f} cm/us (assuming t_start is one-way travel)")
+        # velocity (simple estimate)
+        thickness_cm = float(block_params["z"])
+        v_est = thickness_cm / float(best_t_start)
+        print(f"Estimated velocity for {infile_path.stem}: {v_est:.4f} cm/µs")
 
 if __name__ == "__main__":
     main()
