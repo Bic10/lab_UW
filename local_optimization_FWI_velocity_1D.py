@@ -5,6 +5,7 @@ from pathlib import Path
 import pickle
 import time as tm
 import numpy as np
+import pandas as pd
 from multiprocessing import Pool, cpu_count
 from typing import Any, Dict
 from itertools import product
@@ -17,6 +18,107 @@ from lab_uw.forward_modeling import *
 from lab_uw.plotting import Plotter
 from lab_uw.forward_modeling import UltrasonicModeler
 from lab_uw.utils import *
+
+import os
+
+# 1) Make Matplotlib non-interactive (no X server use)
+os.environ["MPLBACKEND"] = "Agg"
+
+# 2) Prevent Numba from using TBB (which is the one complaining)
+os.environ["NUMBA_THREADING_LAYER"] = "workqueue"
+# optional: cap threads to avoid oversubscription
+# os.environ["NUMBA_NUM_THREADS"] = "4"
+
+def _set_start_method():
+    import multiprocessing as mp
+    try:
+        mp.set_start_method("spawn", force=True)  # avoid fork
+    except RuntimeError:
+        pass  # already set
+
+_set_start_method()
+
+def build_time_paired_waveform_mech_table(
+    observed_waveform_data: np.ndarray,
+    waveform_metadata: Dict[str, Any],
+    mechanical_dataframe: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Pair UW waveforms to mechanical samples using time in seconds.
+
+    Assumptions:
+      - waveform_metadata["time_ax_acquisition"] is in seconds (as shown by 0, 0.1, ..., 999)
+      - mechanical_dataframe["time_s"] is in seconds
+
+    The UW axis is treated as relative to the UW file start; we shift it by the first
+    mechanical time (start of synced slice) to get absolute seconds.
+    """
+
+    n_uw = len(observed_waveform_data)
+
+    if "time_s" not in mechanical_dataframe.columns:
+        raise ValueError("mechanical_dataframe must contain a 'time_s' column in seconds.")
+
+    mech_df = (
+        mechanical_dataframe.sort_values("time_s")
+        .reset_index()
+        .rename(columns={"index": "Index"})
+        .reset_index(drop=True)
+    )
+
+    t_uw_rel_s = waveform_metadata.get("time_ax_acquisition", None)
+    if t_uw_rel_s is None:
+        # Fallback: distribute across mech window
+        mech_time = mech_df["time_s"].to_numpy()
+        if mech_time.size < 2:
+            raise ValueError("Mechanical dataframe has insufficient time_s samples for pairing.")
+        t_uw_abs_s = np.linspace(mech_time[0], mech_time[-1], n_uw)
+    else:
+        t_uw_rel_s = np.asarray(t_uw_rel_s, dtype=float)
+        if t_uw_rel_s.size != n_uw:
+            raise ValueError(
+                f"time_ax_acquisition length ({t_uw_rel_s.size}) != number of waveforms ({n_uw})."
+            )
+        t0_mech_s = float(mech_df["time_s"].iloc[0])
+        t_uw_abs_s = t_uw_rel_s + t0_mech_s
+
+    uw_df = (
+        pd.DataFrame({"uw_time_s": t_uw_abs_s, "uw_idx": np.arange(n_uw, dtype=int)})
+        .sort_values("uw_time_s")
+        .reset_index(drop=True)
+    )
+
+    # Tolerance: half the mechanical sampling interval (this is the right scale)
+    mech_time = mech_df["time_s"].to_numpy()
+    if mech_time.size > 2:
+        mech_dt = float(np.median(np.diff(mech_time)))
+        tol_s = 0.5 * mech_dt if np.isfinite(mech_dt) and mech_dt > 0 else None
+    else:
+        tol_s = None
+
+    paired = pd.merge_asof(
+        uw_df,
+        mech_df,
+        left_on="uw_time_s",
+        right_on="time_s",
+        direction="nearest",
+        tolerance=tol_s,   # optional; can remove if you prefer never skipping
+    )
+
+    paired["match_error_s"] = np.abs(paired["uw_time_s"] - paired["time_s"])
+    return paired
+
+def load_pickle_log(path):
+    out = []
+    if not path.exists():
+        return out
+    with open(path, "rb") as f:
+        while True:
+            try:
+                out.append(pickle.load(f))
+            except EOFError:
+                break
+    return out
 
 def min_assembly_velocity(assembly_dict: Dict[str, Any]):
     return min(assembly_dict["gouge_velocity_1"], 
@@ -45,7 +147,7 @@ def update_assembly_dict_with_mech_data(
     assembly_dict["shear_stress"]           = mech_data.shear_stress_MPa
     assembly_dict["ec_disp_mm"]             = mech_data.ec_disp_mm
     assembly_dict["acquisition_time"]       = mech_data.time_s
-    assembly_dict["rec_n"]                  = mech_data.records_na
+    assembly_dict["rec_n"]                  = int(mech_data.records_na)
     assembly_dict['idx_wave']               = mech_data.Index
     # define assembly sample_dimensions all together. It is usefull for handling forward modeling 
     assembly_dict["sample_dimensions"] = [
@@ -125,13 +227,13 @@ def compute_dds_travel_time(
       + (central_params["z"] - 2 * central_params["h_grooves"]) / central_params["velocity" + wave_type]
     )
 
-    if v_gouge_1 and v_gouge_2:
+    if (v_gouge_1 is not None) and (v_gouge_2 is not None):
         # Gouge thickness contributions
         thick_g1 = assembly_dict["gouge_thickness_1"]  # in cm
         thick_g2 = assembly_dict["gouge_thickness_2"]  # in cm
 
         # Groove mixing contributions
-        groove_time = 2*(
+        groove_time = (
           side1_params["h_grooves"] / (side1_params["velocity" + wave_type] + v_gouge_1)
         + central_params["h_grooves"] / (side1_params["velocity" + wave_type] + v_gouge_1)
         + central_params["h_grooves"] / (side1_params["velocity" + wave_type] + v_gouge_2)
@@ -172,82 +274,98 @@ def process_uw_file(
     outfile_name = infile_path.name.split(".")[0]
     outfile_path = outdir_path_l2norm / outfile_name
  
-    # Prepare for the loop
     first_waveform = True
+    last_good_result = None  # <-- NEW: keep last successful inversion result
 
     observed_waveform_data = uw_data_handler.waveform_data
     waveform_metadata = uw_data_handler.metadata
 
-    # Iterate over waveforms and mechanical data in sync
-    for observed_waveform, mech_data in zip(observed_waveform_data, mechanical_dataframe.itertuples()):
+    # -----------------------------
+    # Time-based pairing (robust to different sampling frequencies)
+    # -----------------------------
+    paired = build_time_paired_waveform_mech_table(
+        observed_waveform_data=observed_waveform_data,
+        waveform_metadata=waveform_metadata,
+        mechanical_dataframe=mechanical_dataframe,
+    )
 
-        update_assembly_dict_with_mech_data(assembly_dict=assembly_dict, mech_data=mech_data)
-        rec_n = assembly_dict["rec_n"]
-        outfile_name_wave = outfile_name + f"_rec_n_{int(rec_n)}"
-        
-        if first_waveform:
+    results_pkl = outfile_path.with_suffix(".pkl")
 
-            result = global_search_waveform(
-                observed_waveform       = observed_waveform,
-                waveform_metadata       = waveform_metadata,
-                outfile_name            = outfile_name_wave,
-                stf_handler             = stf_handler,
-                params                  = params,
-                assembly_dict           = assembly_dict
-            )
+    with open(results_pkl, "ab") as f_results:
+
+        # Iterate over waveforms using time-based mechanical pairing
+        for row in paired.itertuples(index=False):
+
+            # If merge_asof could not find a mech sample within tolerance, row will contain NaNs
+            # (normal_stress_MPa is a reliable sentinel column in your mech table)
+            if not np.isfinite(getattr(row, "Index", np.nan)):
+                print(f"WARNING: No mechanical match within tolerance for UW idx={row.uw_idx} at t_us={row.uw_time_s}. Skipping.")
+                continue
+
+            observed_waveform = observed_waveform_data[int(row.uw_idx)]
+            mech_data = row
+
+            update_assembly_dict_with_mech_data(assembly_dict=assembly_dict, mech_data=mech_data)
+            rec_n = assembly_dict["rec_n"]
+            outfile_name_wave = outfile_name + f"_rec_n_{rec_n}"
+
+
+            # --- Build search grids ---
+            # Default: keep whatever params already have (e.g., your broad prior)
+            # Refined: only if we have a valid last_good_result
+            if (not first_waveform) and (last_good_result is not None):
+                velo_mean = last_good_result.get("best_gouge_velocity", None)
+                damp_mean = last_good_result.get("best_gouge_damping", None)
+
+                # Refine velocity grid only if numeric and positive
+                if isinstance(velo_mean, (int, float)) and np.isfinite(velo_mean) and (velo_mean > 0.0):
+                    velo_min  = velo_mean - 0.02 * velo_mean
+                    velo_max  = velo_mean + 0.02 * velo_mean
+                    velo_step = 0.1 * velo_mean
+
+                    # Protect against degenerate ranges
+                    if (velo_max > velo_min) and (velo_step > 0.0):
+                        params["velocity_initial_list"] = np.arange(velo_min, velo_max, velo_step)
+
+                # Refine damping grid only if numeric and finite
+                if isinstance(damp_mean, (int, float)) and np.isfinite(damp_mean):
+                    damp_min  = damp_mean - 0.01 * damp_mean
+                    damp_max  = damp_mean + 0.01 * damp_mean
+                    damp_step = 0.1 * damp_mean
+
+                    if (damp_max > damp_min) and (damp_step > 0.0):
+                        params["damping_initial_list"] = np.arange(damp_min, damp_max, damp_step)
+                    else:
+                        params["damping_initial_list"] = [0.0]
+
+            # --- Always run the waveform search so SNR gating prints every time ---
+            try:
+                result = global_search_waveform(
+                    observed_waveform       = observed_waveform,
+                    waveform_metadata       = waveform_metadata,
+                    outfile_name            = outfile_name_wave,
+                    stf_handler             = stf_handler,
+                    params                  = params,
+                    assembly_dict           = assembly_dict
+                )
+            except Exception as e:
+                # Do not silently swallow: you want to know if you are not processing waveforms
+                print(f"Exception while processing rec_n={rec_n}: {type(e).__name__}: {e}")
+                continue
+            finally:
+                plt.close('all')
 
             first_waveform = False
-            plt.close('all')          # add right after each call
 
-        else:
+            # Update last_good_result only if we actually got a solution
+            # (Your SNR skip path returns best_gouge_velocity=None)
+            if isinstance(result, dict) and result.get("best_gouge_velocity", None) is not None:
+                last_good_result = result
 
-            velo_mean =  result["best_gouge_velocity"]
-            velo_min  = velo_mean - 0.02 * velo_mean
-            velo_max  = velo_mean + 0.02 * velo_mean
-            velo_step = 0.001 * velo_mean
-            params["velocity_initial_list"] = np.arange(velo_min, velo_max, velo_step)
-
-            damp_mean =  result["best_gouge_damping"]
-            damp_min  = damp_mean - 0.01 * damp_mean
-            damp_max  = damp_mean + 0.01 * damp_mean
-            damp_step = 0.001 * damp_mean
-            params["damping_initial_list"]  = np.arange(damp_min, damp_max, damp_step)
-
-            result = global_search_waveform(
-                observed_waveform       = observed_waveform,
-                waveform_metadata       = waveform_metadata,
-                outfile_name            = outfile_name_wave,
-                stf_handler             = stf_handler,
-                params                  = params,
-                assembly_dict           = assembly_dict
-            )
-
-            plt.close('all')          # add right after each call
-
-        results_pkl = outfile_path.with_suffix(".pkl")
-
-        # 1. load old results if the file is already there
-        if results_pkl.exists():
-            with open(results_pkl, "rb") as f:
-                all_results = pickle.load(f)
-        else:
-            all_results = {}
-
-        # 2. add / update the current result
-        all_results[rec_n] = {
-            "L2norm_waveform_list": result["L2norm_waveform_list"],
-            "velocity_ranges":      result["gouge_velocity_list"],
-            "estimated_velocity":   result["best_gouge_velocity"],
-            "damping_ranges":       result["gouge_damping_list"],
-            "estimated_damping":    result["best_gouge_damping"],
-            "gouge_velocity_model": result["gouge_velocity_model"],
-            "gouge_damping_model":  result["gouge_damping_model"],
-        }
-
-        # Save results
-        # 3. write back the *one* big dict
-        with open(results_pkl, "wb") as f:
-            pickle.dump(all_results, f)
+            # --- Persist results as you already do ---
+            pickle.dump(result, f_results, protocol=pickle.HIGHEST_PROTOCOL)
+            f_results.flush()
+ 
 
     print(f"--- {tm.time() - start_time:.2f} seconds for processing {infile_path.name} ---")
 
@@ -277,8 +395,8 @@ def global_search_waveform(
     if  waveform_snr < minimum_SNR:
         normal_stress = assembly_dict["normal_stress"]
         shear_stress = assembly_dict["shear_stress"]
-        print(f"SNR {waveform_snr:.2f} < {minimum_SNR}. Skipping waveform at {rec_n}, Normal Stress: {normal_stress:.2f}, Shear Stress: {shear_stress:.2f}.")
-        {
+        print(f"SNR {waveform_snr:.2f} < {minimum_SNR}. Skipping waveform at rec n: {rec_n}, Normal Stress: {normal_stress:.2f}, Shear Stress: {shear_stress:.2f}.")
+        return {
         'gouge_velocity_list' : None,
         'best_gouge_velocity' : None,
         'gouge_damping_list'  : None,
@@ -287,6 +405,10 @@ def global_search_waveform(
         'gouge_velocity_model': None,
         'gouge_damping_model':  None
         }
+
+    # plt.plot(observed_time,observed_waveform)
+    # plt.show()
+
     # Generate velocity array
     gouge_velocity_list = params["velocity_initial_list"]
     gouge_damping_list  = params["damping_initial_list"]
@@ -337,31 +459,32 @@ def global_search_waveform(
     misfit_interval_list = np.array([res[2] for res in results_sorted])
     gouge_damping_list   = np.array([res[3] for res in results_sorted])
 
-    # Possibly plot L2 norm vs. velocity
-    save_l2norm_plot = (assembly_dict['idx_wave'] % l2norm_plot_interval == 0) 
-    if save_l2norm_plot:
-        unique_vels = np.unique(gouge_velocity_list)
-        unique_damps = np.unique(gouge_damping_list)
-        misfit_grid = np.full((len(unique_vels), len(unique_damps)), np.nan)
+    # # Possibly plot L2 norm vs. velocity
+    # save_l2norm_plot = (assembly_dict['idx_wave'] % l2norm_plot_interval == 0) 
+    # if save_l2norm_plot:
+    #     unique_vels = np.unique(gouge_velocity_list)
+    #     unique_damps = np.unique(gouge_damping_list)
+    #     misfit_grid = np.full((len(unique_vels), len(unique_damps)), np.nan)
 
-        vel_to_row = {vel: idx for idx, vel in enumerate(unique_vels)}
-        damp_to_col = {damp: idx for idx, damp in enumerate(unique_damps)}
+    #     vel_to_row = {vel: idx for idx, vel in enumerate(unique_vels)}
+    #     damp_to_col = {damp: idx for idx, damp in enumerate(unique_damps)}
 
-        for (v, misfit, _, a) in results_sorted:
-            row = vel_to_row[v]
-            col = damp_to_col[a]
-            misfit_grid[row, col] = misfit
+    #     for (v, misfit, _, a) in results_sorted:
+    #         row = vel_to_row[v]
+    #         col = damp_to_col[a]
+    #         misfit_grid[row, col] = misfit
 
-        l2norm_plot_name = f"{outfile_name}_L2norm"
-        l2norm_plot_path = outdir_path_image / l2norm_plot_name
+    #     l2norm_plot_name = f"{outfile_name}_L2norm"
+    #     l2norm_plot_path = outdir_path_image / l2norm_plot_name
 
-        plotter = Plotter()
-        plotter.misfit_map(
-            misfit_grid=misfit_grid,
-            unique_damps=unique_damps,
-            unique_vels=unique_vels,
-            outfile_path=l2norm_plot_path
-        )
+    #     plotter = Plotter()
+    #     plotter.misfit_map(
+    #         misfit_grid=misfit_grid,
+    #         unique_damps=unique_damps,
+    #         unique_vels=unique_vels,
+    #         outfile_path=l2norm_plot_path
+    #     )
+
 
     #####################################################
     # RE RUN WITH THE BEST MISFIT PARAMETERS
@@ -461,7 +584,7 @@ def global_search_waveform(
         plot_output_path     = plot_output_path,
         movie_output_path    = movie_output_path
         )
-    
+
     return (
             {
         'gouge_velocity_list' : gouge_velocity_list,
@@ -512,7 +635,7 @@ def global_search_run(args):
         maximum_velocity        = maximum_velocity, 
         maximum_damping         = maximum_damping, 
         normalize_waveform      = True,
-        enable_plotting         = True,
+        enable_plotting         = False,
         plot_output_path        = plot_output_path
     )
     
@@ -537,12 +660,12 @@ if __name__ == "__main__":
     
     # Basic experiment info
     machine_name    = "Brava_2"
-    experiment_name = "s0244suwanh3_30"
-    wave_type       = "_s"    # that "_" is ugly, but needed
+    experiment_name = "s0273suw03anhdol_5030"
+    wave_type       = "_p"    # that "_" is ugly, but needed
     data_type_uw    = "uw_data/data_tsv_files" # + wave_type
     data_type_mech  = "mechanical_data"
     mech_file_name  = f"{experiment_name}_data_rp"
-    outfolder_name  = "test_on_tiepie_data"
+    outfolder_name  = "test_christmass"
     # Create output directories
     outdir_path_l2norm = dir_manager.make_data_analysis_folders(
         machine_name    = machine_name,
@@ -559,27 +682,31 @@ if __name__ == "__main__":
     # Basic simulation parameters 
     params = {
         "absorbing"                 : False,        # set absorbing bounday, merdoso silicone maledetto
-        "num_waveform2process"      : 1000,         # int, equespatially waveforms to sample for processing. Of "None", process all
+        "num_waveform2process"      : 10,         # int, equespatially waveforms to sample for processing. Of "None", process all
         "maxtime2simulate"          : 40,           # [mus]
         "frequency_cutoff"          : 4,            # [MHz] low pass onserved data and simulate up to this frequency
-        "minimum_SNR"               : 3,            # skip computation until time interval where signal should be is above SNR times surely-only-noise part 
-        "velocity_initial_list"     : np.linspace(0.182, 0.200, 100),  # [cm/mus] first guess of best velocity. There is a visual tool for it, if needed
-        "min_velocity2simulate"     : 0.16,         # [cm/mus] if not passed, computed by assembly and gouge velocity range
-        "max_velocity2simulate"     : 0.35,         # [cm/mus]
-        "damping_initial_list"      : np.linspace(0.0002,0.0012, 20),
-        "plot_save_interval"        : 10,
+        "minimum_SNR"               : 15,            # skip computation until time interval where signal should be is above SNR times surely-only-noise part 
+        "velocity_initial_list"     : np.linspace(0.26, 0.3000, 10),  # [cm/mus] first guess of best velocity. There is a visual tool for it, if needed
+        "min_velocity2simulate"     : 0.20,         # [cm/mus] if not passed, computed by assembly and gouge velocity range
+        "max_velocity2simulate"     : 0.61,         # [cm/mus]
+        "damping_initial_list"      : np.linspace(0.0000,0.0007, 5),
+        "plot_save_interval"        : 1,
         "movie_save_interval"       : 1000,
         "l2norm_plot_interval"      : 1000,
         "outdir_path_l2norm"        : outdir_path_l2norm[0],
         "outdir_path_image"         : outdir_path_image[0],
-        "n_iterations"              : 70,
+        "n_iterations"              : 10,
         "reduce_factor"             : 10/9
     }
 
     # Load the Source Time Function (HDF5)
-    stf_h5_path = (
+    stf_h5_path = (# FAKE FIX
         dir_manager.paths.analysis_root("on_bench", "STF_ss10_05")
-        / f"source_time_functions{wave_type}"
+        # / f"source_time_functions{wave_type}"
+#################################################
+# # FAKE FIX !!!!!!!!!!!!!!!!!!!!!!! WRONG SOURCE TIME FUNCTION
+#########################################################
+        / f"source_time_functions_s" 
         / "stf.h5"
     )
 
@@ -591,7 +718,11 @@ if __name__ == "__main__":
     )
 
     # keep the sign convention you had before; make it 1D if your solver expects 1D
-    stf_handler.waveform_data = (-stf_handler.waveform_data).squeeze(0)   # shape (L,)
+    stf_handler.waveform_data = (stf_handler.waveform_data).squeeze(0)   # shape (L,)
+    stf_handler.lowpass(cutoff_mhz=params['frequency_cutoff'])
+    stf_handler.waveform_data = stf_handler.waveform_data[:86]
+    stf_handler.metadata['time_ax_waveform'] =     stf_handler.metadata['time_ax_waveform'][:86]
+
 
     # Load Mechanical Data
     mech_folder = Path(dir_manager.base_dir) / f"experiments_{machine_name}" / experiment_name / data_type_mech
@@ -600,9 +731,8 @@ if __name__ == "__main__":
     # Build a dictionary containing all the relevant assembly parameters
     blocks_json = Path(dir_manager.base_dir) / "metadata" / "blocks_metadata.json"
     side1_params, side2_params, central_params = BlockMetadataHandler.load_blocks_metadata(
-    blocks_json, ("mauro_desolda_side1","mauro_desolda_side2","central_block1")
+    blocks_json, ("guglielmi_side1","guglielmi_side2","central_block_titanium")
     )
-
 
     assembly_dict = {
         "side1_params"        : side1_params,
@@ -623,7 +753,7 @@ if __name__ == "__main__":
     for chosen_uw_file, infile_path in enumerate(infile_path_list_uw):
         infile_name = infile_path.name.split(".")[0]
 
-        if infile_name != "007_hold1000sec":
+        if infile_name != "001_compaction":
             print(infile_name)
             continue
 
@@ -639,16 +769,50 @@ if __name__ == "__main__":
                 .downsample_waveforms(params["num_waveform2process"])     # keep N waveforms (evenly sampled)
                 .truncate_time(params["maxtime2simulate"])                # limit to maxtime [µs]
                 .zero_before(assembly_dict["steel_only_time_p_wave"] / 5) # zero early window [µs]
-                # .lowpass(params["frequency_cutoff"])                    # optional, cutoff in MHz
+                .lowpass(params["frequency_cutoff"])                    # optional, cutoff in MHz
         )
 
-        # (Optional) shift the acquisition axis start, like your old code:
-        if "time_ax_acquisition" in uw_data_handler.metadata:
-            # If mech time is in SECONDS, convert to µs: + 1e6 * mech_data_slice["time_s"].values[0]
-            uw_data_handler.metadata["time_ax_acquisition"] = (
-                uw_data_handler.metadata["time_ax_acquisition"]
-                + mech_data_slice["time_s"].values[0]        # ← use 1e6 * (...) if your mech time is in seconds
-            )
+        t_acq = uw_data_handler.metadata.get("time_ax_acquisition", None)
+        print("mech time start/end =", mech_data_slice["time_s"].iloc[0], mech_data_slice["time_s"].iloc[-1])
+
+        # import matplotlib.pyplot as plt
+        # import matplotlib.cm as cm
+        # import matplotlib.colors as colors
+        # import numpy as np
+
+        # time = uw_data_handler.metadata['time_ax_waveform']
+        # data = uw_data_handler.waveform_data[500:,:]   # (n_waveforms, n_samples)
+
+        # n_waveforms = data.shape[0]
+        # norm = colors.Normalize(vmin=0, vmax=n_waveforms - 1)
+        # cmap = cm.winter
+
+        # fig, ax = plt.subplots(figsize=(8, 5))
+
+        # for i in range(n_waveforms):
+        #     ax.plot(
+        #         time,
+        #         data[i, :],
+        #         color=cmap(norm(i)),
+        #         alpha=0.2,
+        #         linewidth=0.7
+        #     )
+
+        # sm = cm.ScalarMappable(norm=norm, cmap=cmap)
+        # sm.set_array([])
+
+        # cbar = fig.colorbar(sm, ax=ax, label="Waveform index (time order)")
+        # cbar.set_ticks([0, n_waveforms//2, n_waveforms-1])
+        # cbar.set_ticklabels(["0", f"{n_waveforms//2}", f"{n_waveforms-1}"])
+
+        # # fig.colorbar(sm, ax=ax, label="Waveform index (time order)")
+
+        # ax.set_xlabel("Time")
+        # ax.set_ylabel("Amplitude")
+        # ax.set_title("Waveform Evolution Over Time")
+
+        # plt.show()
+        # sys.exit()
 
         process_uw_file(
             infile_path             = infile_path,

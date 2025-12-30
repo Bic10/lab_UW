@@ -26,11 +26,11 @@ def write_hdf5(
       /<run_name>/cycle_000000/
           attrs:
               [optional] t0_unix_s, iso_time
-              sample_rate_Hz
+              fs_Hz
           datasets:
               <dataset>        float32 [C, N]   (CH1=receiver by convention)
               passive          float32 [C, 1]
-              source_waveform  float32 [0]      (empty placeholder)
+              v_input  float32 [0]      (empty placeholder)
 
     Notes
     -----
@@ -56,7 +56,7 @@ def write_hdf5(
             if add_timestamps:
                 cyc.attrs["t0_unix_s"] = float(now.timestamp())
                 cyc.attrs["iso_time"] = now.isoformat().replace("+00:00", "Z")
-            cyc.attrs["sample_rate_Hz"] = fs_hz
+            cyc.attrs["fs"] = fs_hz
 
             # active/passive datasets
             active = np.zeros((channel_count, n_samp), dtype=np.float32)
@@ -68,7 +68,7 @@ def write_hdf5(
             ds_pas.attrs["fs"] = fs_hz
 
             # optional placeholder for compatibility
-            cyc.create_dataset("source_waveform", data=np.zeros((0,), np.float32), compression="gzip")
+            cyc.create_dataset("v_input", data=np.zeros((0,), np.float32), compression="gzip")
 
 
 def write_stf_hdf5(

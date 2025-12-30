@@ -227,7 +227,7 @@ class VelocityModel1D_SingleBlock(VelocityModel1DBase):
         steel_velocity: float,
         pzt_velocity: float,
         pla_velocity: float,
-        plotting: bool = True,
+        plotting: bool = False,
         outfile_path: Optional[Path] = None
     ):
         super().__init__(
@@ -395,7 +395,7 @@ class VelocityModel1D_DDS(VelocityModel1DBase):
         pzt_velocity: float,
         pla_velocity: float,
         outfile_path: Optional[Path] = None,
-        plotting: bool = True
+        plotting: bool = False
     ):
         # Store main attributes
         self.x = x
@@ -516,23 +516,23 @@ class VelocityModel1D_DDS(VelocityModel1DBase):
         self.assign_constant_velocity('pzt_1', self.pzt_velocity)
         # Side Block 1 remains steel_velocity
 
-        # self.assign_groove_velocity('groove_sb1', self.gouge_velocity[0], is_start=True)
-        self.assign_constant_velocity('groove_sb1', self.gouge_velocity[0])
+        self.assign_groove_velocity('groove_sb1', self.gouge_velocity[0], is_start=True)
+        # self.assign_constant_velocity('groove_sb1', self.steel_velocity)
 
         self.assign_gouge_velocity('gouge_1', self.gouge_velocity[0])
  
-        # self.assign_groove_velocity('groove_cb1', self.gouge_velocity[0], is_start=False)
-        self.assign_constant_velocity('groove_cb1', self.gouge_velocity[0])
+        self.assign_groove_velocity('groove_cb1', self.gouge_velocity[0], is_start=False)
+        # self.assign_constant_velocity('groove_cb1', self.steel_velocity)
 
         self.assign_constant_velocity('central_block', self.steel_velocity)
 
-        # self.assign_groove_velocity('groove_cb2', self.gouge_velocity[1], is_start=True)
-        self.assign_constant_velocity('groove_cb2', self.gouge_velocity[1])
+        self.assign_groove_velocity('groove_cb2', self.gouge_velocity[1], is_start=True)
+        # self.assign_constant_velocity('groove_cb2', self.steel_velocity)
 
         self.assign_gouge_velocity('gouge_2', self.gouge_velocity[1])
 
-        # self.assign_groove_velocity('groove_sb2', self.gouge_velocity[1], is_start=False)
-        self.assign_constant_velocity('groove_sb2', self.gouge_velocity[1])
+        self.assign_groove_velocity('groove_sb2', self.gouge_velocity[1], is_start=False)
+        # self.assign_constant_velocity('groove_sb2', self.steel_velocity)
 
         # Side Block 2 remains steel_velocity
         self.assign_constant_velocity('pzt_2', self.pzt_velocity)
@@ -543,24 +543,21 @@ class VelocityModel1D_DDS(VelocityModel1DBase):
         Assign damping to the guge region and the ramp to the grooves ones.
         '''
 
-        # self.assign_groove_damping('groove_sb1', self.gouge_damping[0], is_start=True)
-        self.assign_gouge_damping('groove_sb1', self.gouge_damping[0])
+        self.assign_groove_damping('groove_sb1', self.gouge_damping[0], is_start=True)
+        # self.assign_gouge_damping('groove_sb1', self.gouge_damping[0])
 
         self.assign_gouge_damping('gouge_1', self.gouge_damping[0])
 
-        # self.assign_groove_damping('groove_cb1', self.gouge_damping[0], is_start=False)
-        self.assign_gouge_damping('groove_cb1', self.gouge_damping[0])
-
-        # self.assign_groove_damping('groove_cb2', self.gouge_damping[1], is_start=True)
-        self.assign_gouge_damping('groove_cb2', self.gouge_damping[1])
+        self.assign_groove_damping('groove_cb1', self.gouge_damping[0], is_start=False)
+        # self.assign_gouge_damping('groove_cb1', self.gouge_damping[0])
 
         self.assign_gouge_damping('gouge_2', self.gouge_damping[1])
 
-        # self.assign_groove_damping('groove_cb2', self.gouge_damping[1], is_start=True)
-        self.assign_gouge_damping('groove_cb2', self.gouge_damping[1])
+        self.assign_groove_damping('groove_cb2', self.gouge_damping[1], is_start=True)
+        # self.assign_gouge_damping('groove_cb2', self.gouge_damping[1])
 
-        # self.assign_groove_damping('groove_sb2', self.gouge_damping[1], is_start=False)
-        self.assign_gouge_damping('groove_sb2', self.gouge_damping[1])
+        self.assign_groove_damping('groove_sb2', self.gouge_damping[1], is_start=False)
+        # self.assign_gouge_damping('groove_sb2', self.gouge_damping[1])
 
     def assign_constant_velocity(self, region_name: str, velocity: float):
         '''
@@ -568,6 +565,9 @@ class VelocityModel1D_DDS(VelocityModel1DBase):
         '''
         indices = self.idx_dict.get(region_name, [])
         self.velocity_array[indices] = velocity
+
+    import numpy as np
+    from typing import Union
 
     def assign_gouge_velocity(self, region_name: str, gouge_velocity: Union[float, np.ndarray]):
         '''
@@ -597,39 +597,113 @@ class VelocityModel1D_DDS(VelocityModel1DBase):
         else:
             self.damping_array[indices] = gouge_damping
 
-    def assign_groove_velocity(self, region_name: str, adjacent_velocity: Union[float, np.ndarray], is_start: bool):
-        '''
-        Assign velocities in groove regions with linear gradients.
-        '''
+    def assign_groove_velocity(self,
+                            region_name: str,
+                            adjacent_velocity: Union[float, np.ndarray],
+                            is_start: bool):
+        """
+        Same logic as your working version, but physically-motivated mapping:
+        - build a linear fill fraction f across the groove
+        - mix stiffness mu = v^2 linearly: mu = (1-f)*mu_start + f*mu_end
+        - recover v = sqrt(mu)
+
+        This is still a 1D effective model, but avoids the less-physical 'linear v' ramp.
+        """
         indices = self.idx_dict.get(region_name, [])
         if not indices.size:
             return
+
         groove_length = len(indices)
         if groove_length == 1:
-            self.velocity_array[indices] = adjacent_velocity[0] if isinstance(adjacent_velocity, np.ndarray) else adjacent_velocity
+            v_adj = adjacent_velocity[0] if isinstance(adjacent_velocity, np.ndarray) else float(adjacent_velocity)
+            self.velocity_array[indices] = v_adj
             return
 
-        start_vel = self.steel_velocity if is_start else (adjacent_velocity[-1] if isinstance(adjacent_velocity, np.ndarray) else adjacent_velocity)
-        end_vel = (adjacent_velocity[0] if isinstance(adjacent_velocity, np.ndarray) else adjacent_velocity) if is_start else self.steel_velocity
+        # ---- keep your exact end-member selection logic ----
+        start_vel = float(self.steel_velocity) if is_start else float(
+            adjacent_velocity[-1] if isinstance(adjacent_velocity, np.ndarray) else adjacent_velocity
+        )
+        end_vel = float(
+            adjacent_velocity[0] if isinstance(adjacent_velocity, np.ndarray) else adjacent_velocity
+        ) if is_start else float(self.steel_velocity)
 
-        self.velocity_array[indices] = np.linspace(start_vel, end_vel, groove_length)
+        # ---- same orientation as np.linspace(start, end) ----
+        f = np.linspace(0.0, 1.0, groove_length)
 
-    def assign_groove_damping(self, region_name: str, adjacent_damping: Union[float, np.ndarray], is_start: bool):
-        '''
-        Assign velocities in groove regions with linear gradients.
-        '''
+        # stiffness-like mixing (density-normalized): mu = v^2
+        mu_start = start_vel * start_vel
+        mu_end   = end_vel   * end_vel
+        mu_eff   = (1.0 - f) * mu_start + f * mu_end
+
+        self.velocity_array[indices] = np.sqrt(mu_eff)
+
+
+    def assign_groove_damping(self,
+                            region_name: str,
+                            adjacent_damping: Union[float, np.ndarray],
+                            is_start: bool):
+        """
+        Same logic as your working version, but consistent mixture model for Kelvin–Voigt nu.
+        Assumes steel damping baseline is 0 (your current convention).
+        If you want nonzero steel damping, set nu_steel accordingly.
+        """
         indices = self.idx_dict.get(region_name, [])
         if not indices.size:
             return
+
         groove_length = len(indices)
         if groove_length == 1:
-            self.damping_array[indices] = adjacent_damping[0] if isinstance(adjacent_damping, np.ndarray) else adjacent_damping
+            nu_adj = adjacent_damping[0] if isinstance(adjacent_damping, np.ndarray) else float(adjacent_damping)
+            self.damping_array[indices] = nu_adj
             return
 
-        start_damp = 0 if is_start else (adjacent_damping[-1] if isinstance(adjacent_damping, np.ndarray) else adjacent_damping)
-        end_damp = (adjacent_damping[0] if isinstance(adjacent_damping, np.ndarray) else adjacent_damping) if is_start else 0
+        # ---- keep your exact end-member selection logic ----
+        start_damp = 0.0 if is_start else float(
+            adjacent_damping[-1] if isinstance(adjacent_damping, np.ndarray) else adjacent_damping
+        )
+        end_damp = float(
+            adjacent_damping[0] if isinstance(adjacent_damping, np.ndarray) else adjacent_damping
+        ) if is_start else 0.0
 
-        self.damping_array[indices] = np.linspace(start_damp, end_damp, groove_length)
+        f = np.linspace(0.0, 1.0, groove_length)
+
+        # linear mixture for nu
+        self.damping_array[indices] = (1.0 - f) * start_damp + f * end_damp
+
+
+    # def assign_groove_velocity(self, region_name: str, adjacent_velocity: Union[float, np.ndarray], is_start: bool):
+    #     '''
+    #     Assign velocities in groove regions with linear gradients.
+    #     '''
+    #     indices = self.idx_dict.get(region_name, [])
+    #     if not indices.size:
+    #         return
+    #     groove_length = len(indices)
+    #     if groove_length == 1:
+    #         self.velocity_array[indices] = adjacent_velocity[0] if isinstance(adjacent_velocity, np.ndarray) else adjacent_velocity
+    #         return
+
+    #     start_vel = self.steel_velocity if is_start else (adjacent_velocity[-1] if isinstance(adjacent_velocity, np.ndarray) else adjacent_velocity)
+    #     end_vel = (adjacent_velocity[0] if isinstance(adjacent_velocity, np.ndarray) else adjacent_velocity) if is_start else self.steel_velocity
+
+    #     self.velocity_array[indices] = np.linspace(start_vel, end_vel, groove_length)
+
+    # def assign_groove_damping(self, region_name: str, adjacent_damping: Union[float, np.ndarray], is_start: bool):
+    #     '''
+    #     Assign velocities in groove regions with linear gradients.
+    #     '''
+    #     indices = self.idx_dict.get(region_name, [])
+    #     if not indices.size:
+    #         return
+    #     groove_length = len(indices)
+    #     if groove_length == 1:
+    #         self.damping_array[indices] = adjacent_damping[0] if isinstance(adjacent_damping, np.ndarray) else adjacent_damping
+    #         return
+
+    #     start_damp = 0 if is_start else (adjacent_damping[-1] if isinstance(adjacent_damping, np.ndarray) else adjacent_damping)
+    #     end_damp = (adjacent_damping[0] if isinstance(adjacent_damping, np.ndarray) else adjacent_damping) if is_start else 0
+
+    #     self.damping_array[indices] = np.linspace(start_damp, end_damp, groove_length)
 
     def apply_smoothing_between(self, region_from: str, region_to: str, n_smooth: int):
         """
@@ -821,7 +895,7 @@ def arbitrary_source_and_receiver_positioning(
     if radius is None:
         radius = int(round(pzt_layer_width / (2*dx)))
     if extension is None:
-        extension = pzt_layer_width
+        extension = pzt_layer_width/2
 
     window_len = 2*radius+1
     filter_window = kaiser(window_len,beta)

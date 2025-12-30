@@ -141,7 +141,7 @@ class UltrasonicModeler:
             cmin=minimum_velocity,
             fmax=frequency_cutoff,
             grid_len=total_length,
-            ppt=10  # points per wavelength
+            ppt=5  # points per wavelength
         )
         spatial_axis = grid_handler.spatial_axis
         dx           = grid_handler.dx
@@ -217,7 +217,7 @@ class UltrasonicModeler:
             )
 
         velocity_model = velocity_model_handler.velocity_array
-        damping_model  = velocity_model_handler.damping_array if geometry_type == "dds" else 0
+        damping_model  = velocity_model_handler.damping_array if geometry_type == "dds" else None
 
         # BUILD SOURCE
         self.transmitter_position_relative = (
@@ -345,7 +345,7 @@ class UltrasonicModeler:
 
             model_output_name = plot_output_path.name + "_velocity_model"
             model_output_path = plot_output_path.parent / model_output_name
-            self.velocity_model_handler.plot(model=self.velocity_model_handler.velocity_array, outfile_path=model_output_path)
+            # self.velocity_model_handler.plot(model=self.velocity_model_handler.velocity_array, outfile_path=model_output_path)
 
         # if make_movie:
         #     self.plotter.make_movie_from_simulation(
@@ -566,8 +566,8 @@ class UltrasonicModeler:
         best_source_spatial_function     = initial_source_spatial_function
         best_receiver_spatial_function   = initial_receiver_spatial_function
         best_wavefield_forward           = initial_wavefield_forward
-        best_laplacian_wavefield         = compute_laplacian(best_wavefield_forward, delta_x)
-        best_first_derivative_laplacian  = compute_dt_laplacian(best_laplacian_wavefield, delta_t)
+        best_ux_forward   = compute_dx(best_wavefield_forward, delta_x)
+        best_uxt_forward  = compute_dt(best_ux_forward, delta_t)
 
         best_synthetic_waveform          = initial_synthetic_waveform
         best_misfit                      = initial_misfit
@@ -638,17 +638,20 @@ class UltrasonicModeler:
                     absorbing               = absorbing
                 )
                 wav_adj_flipped   = np.flipud(wavefield_adjoint)   # ONE global flip
+                adj_ux = compute_dx(wav_adj_flipped, delta_x)
 
                 # ----------------------------------------------------------
                 # GRADIENTS
                 # ----------------------------------------------------------
                 if dc_max and activate_velocity:
-                    temp = +(2.0 * best_velocity_model) * wav_adj_flipped * best_laplacian_wavefield
-                    gradient_vel = temp.sum(0)                     # no extra copy
+                    # gradient for v through mu=v^2
+                    temp = +(2.0 * best_velocity_model) * (adj_ux * best_ux_forward)
+                    gradient_vel = temp.sum(0)
                     max_vel_grad = np.abs(gradient_vel[regions_to_update]).max()
 
                 if da_max and activate_damping:
-                    temp = +wav_adj_flipped * best_first_derivative_laplacian
+                    # gradient for nu (per density)
+                    temp = +(adj_ux * best_uxt_forward)
                     gradient_damp = temp.sum(0)
                     max_damp_grad = np.abs(gradient_damp[regions_to_update]).max()
 
@@ -717,9 +720,8 @@ class UltrasonicModeler:
                 damping_model           = updated_damping_model,
                 absorbing               = absorbing
             )
-
-            laplacian_wavefield_updated         = compute_laplacian(wavefield_forward_updated, delta_x)
-            first_derivative_laplacian_updated  = compute_dt_laplacian(laplacian_wavefield_updated, delta_t)
+            ux_forward_updated  = compute_dx(wavefield_forward_updated, delta_x)
+            uxt_forward_updated = compute_dt(ux_forward_updated, delta_t)
 
             # Extract updated synthetic waveform
             updated_simulated_waveform = np.sum(
@@ -771,8 +773,8 @@ class UltrasonicModeler:
                 best_receiver_spatial_function      = updated_receiver_spatial_function
 
                 best_wavefield_forward              = wavefield_forward_updated
-                best_laplacian_wavefield            = laplacian_wavefield_updated
-                best_first_derivative_laplacian     = first_derivative_laplacian_updated
+                best_ux_forward                     = ux_forward_updated
+                best_uxt_forward                    = uxt_forward_updated
 
                 best_synthetic_waveform             = updated_synthetic_waveform
 
@@ -870,6 +872,8 @@ class UltrasonicModeler:
         #     )
     
 # ------------------------------------------------------------------
+import numpy as np
+
 def pseudospectral_1D_damped(
     num_x: int,
     delta_x: float,
@@ -882,8 +886,26 @@ def pseudospectral_1D_damped(
     absorbing: np.ndarray    = False,
     N_pad: int = 200,
 ):
-    """vectorised + FFT‑optimised replacement of the original routine."""
-    # ------------------------- set‑up ---------------------------------
+    """
+    1D Kelvin–Voigt wave equation in divergence form, finite-difference in space:
+
+        u_tt = d/dx ( mu(x) u_x + nu(x) u_xt ) + f(x) s(t)
+
+    with mu(x) = v(x)^2 (density-normalized), nu(x) = damping_model (also density-normalized).
+
+    Time stepping: leapfrog / 2nd-order explicit:
+        u^{n+1} = 2u^n - u^{n-1} + dt^2 * RHS^n
+
+    Spatial discretization: conservative staggered flux:
+        q_{i+1/2} = mu_{i+1/2} * (u_{i+1}-u_i)/dx
+                  + nu_{i+1/2} * ( (u_{i+1}-u_i) - (u_past_{i+1}-u_past_i) )/(dx*dt)
+
+        (dqdx)_i = (q_{i+1/2} - q_{i-1/2})/dx
+
+    Boundary: traction-free at external ends => q = 0 at boundaries.
+    """
+
+    # ------------------------- set-up ---------------------------------
     if damping_model is None:
         damping_model = np.zeros_like(velocity_model)
 
@@ -902,66 +924,108 @@ def pseudospectral_1D_damped(
         N_ext = num_x
         velocity_ext  = velocity_model
         damping_ext   = damping_model
-        absorbing_taper = None      # sentinel
+        absorbing_taper = None
 
-    # --------------- pre‑compute constants / arrays -------------------
-    dt2     = delta_t * delta_t
-    vel2dt2 = (velocity_ext ** 2) * dt2
+    # density-normalized coefficients
+    mu = velocity_ext**2          # mu(x) = v(x)^2
+    nu = damping_ext              # nu(x) = nu_eff/rho
 
-    src_x_term = np.zeros(N_ext)
-    src_x_term[N_pad:N_pad + num_x] = source_spatial_function * dt2  # used each step
+    dx  = float(delta_x)
+    dt  = float(delta_t)
+    dt2 = dt * dt
+    inv_dx = 1.0 / dx
+    inv_dx2 = inv_dx * inv_dx
 
-    # k‑vector for real FFT:  k = 2π * n / L
-    L     = N_ext * delta_x
-    k     = 2.0 * np.pi * np.fft.rfftfreq(N_ext, d=delta_x)
-    k2    = -(k ** 2)                         # minus sign already included
+    # Source term: keep your convention (dt^2 factor outside)
+    src_x_term = np.zeros(N_ext, dtype=np.float64)
+    src_x_term[N_pad:N_pad + num_x] = source_spatial_function # * dt2
 
-    # time integrator buffers
-    u_past    = np.zeros(N_ext)
-    u_curr    = np.zeros(N_ext)
-    u_fut     = np.zeros(N_ext)
-    dxx_past  = np.zeros(N_ext)
-    dxx_curr  = np.zeros(N_ext)               # reused every step
+    # Precompute half-grid coefficients (simple arithmetic average)
+    # mu_{i+1/2}, nu_{i+1/2} of length N_ext-1
+    mu_half = 0.5 * (mu[1:] + mu[:-1])
+    nu_half = 0.5 * (nu[1:] + nu[:-1])
 
-    wave_out  = np.empty((num_t, num_x))      # final result
+    # -------------------- time integrator buffers ----------------------
+    u_past = np.zeros(N_ext, dtype=np.float64)
+    u_curr = np.zeros(N_ext, dtype=np.float64)
+    u_fut  = np.zeros(N_ext, dtype=np.float64)
 
-    # -------------------------- time loop -----------------------------
+    # flux q on half-grid: indices 0..N_ext-2 represent i+1/2
+    q_half = np.zeros(N_ext - 1, dtype=np.float64)
+
+    # dqdx on full grid
+    dqdx = np.zeros(N_ext, dtype=np.float64)
+
+    wave_out = np.empty((num_t, num_x), dtype=np.float64)
+
+    # -------------------------- time loop ------------------------------
     for it in range(num_t):
-        # ∂²/∂x² via spectral multiplier  (≈ 60 % of runtime)
-        _spectral_dxx(u_curr, k2, dxx_curr)
 
-        # u_tt update (all in‑place, no temporaries)
-        u_fut[:] = (2.0 * u_curr
-                    - u_past
-                    + vel2dt2 * dxx_curr)
+        # Differences on half-grid
+        du_curr = (u_curr[1:] - u_curr[:-1])         # length N_ext-1
+        du_past = (u_past[1:] - u_past[:-1])
 
-        # add source   s(x)*w(t)
+        # u_x at half-grid: (u_{i+1}-u_i)/dx
+        ux_half = du_curr * inv_dx
+
+        # u_xt at half-grid:
+        # u_xt ≈ (u_x^n - u_x^{n-1})/dt
+        uxt_half = ((du_curr - du_past) * inv_dx) / dt
+
+        # Flux at half-grid: q = mu u_x + nu u_xt
+        q_half[:] = mu_half * ux_half + nu_half * uxt_half
+
+
+        # Choose effective exterior speeds (in your normalized units)
+        q_left_face  = 0.0   # q_{-1/2} at the left external face (PZT back face)
+        q_right_face = 0.0   # q_{N-1/2} at the right external face (PZT back face)
+
+        dqdx[:] = 0.0
+        dqdx[0]    = (q_half[0] - q_left_face) * inv_dx
+        dqdx[1:-1] = (q_half[1:] - q_half[:-1]) * inv_dx
+        dqdx[-1]   = (q_right_face - q_half[-1]) * inv_dx
+
+        # Explicit leapfrog update
+        u_fut[:] = 2.0 * u_curr - u_past + dt2 * dqdx
+
+        # Add source
         u_fut[N_pad:N_pad + num_x] += src_x_term[N_pad:N_pad + num_x] * source_time_function[it]
 
-        # Kelvin–Voigt damping term
-        u_fut += damping_ext * delta_t * (dxx_curr - dxx_past)
-
-        # boundary treatment
+        # Optional absorbing taper (still fine with FD)
         if absorbing_taper is not None:
             u_fut *= absorbing_taper
-        else:                                  # hard walls (Dirichlet)
-            u_fut[0] = u_fut[-1] = 0.0
 
-        # roll buffers (fast view swap – no copy)
+        else:
+            u_fut[0] = 0.0
+            u_curr[0] = 0.0
+            u_past[0] = 0.0
+            u_fut[-1] = 0.0
+            u_curr[-1] = 0.0
+            u_past[-1] = 0.0
+
+        # Swap buffers
         u_past, u_curr, u_fut = u_curr, u_fut, u_past
-        dxx_past, dxx_curr    = dxx_curr, dxx_past
 
-        # store interior slice
+        # Store interior slice
         wave_out[it] = u_curr[N_pad:N_pad + num_x]
 
     return wave_out
 
+#########################################################################
 import numpy as np
 from numpy.fft import rfft, irfft   # real FFT → half the work
 
 # ------------------------------------------------------------------
 # Helper: 2‑nd derivative via *pre‑tabulated* spectral multiplier
 # ------------------------------------------------------------------
+def _spectral_dx(u, ik, out):
+    """
+    in-place 1st spatial derivative of a 1-D real signal.
+    ik : (N//2+1,) complex128 = 1j * k  (precomputed)
+    """
+    out[:] = irfft(rfft(u) * ik, n=u.size)
+    return out
+
 def _spectral_dxx(u, k2, out):
     """
     in‑place 2‑nd spatial derivative of a 1‑D real signal.
@@ -995,7 +1059,9 @@ def compute_time_derivatives(wavefield_out, delta_t):
     
     return wavefield_tt
 
-# jit_kernels.py
+########################################
+# JIT KERNEL FOR FASTER COMPUTATION
+#######################################
 import numpy as np
 from numba import njit, prange
 # ------------------------------------------------------------
@@ -1038,7 +1104,33 @@ def compute_dt_laplacian(lap: np.ndarray, dt: float) -> np.ndarray:
             out[it, ix] = (lap[it + 1, ix] - lap[it - 1, ix]) * coeff
     return out
 
+@njit(parallel=True, fastmath=True)
+def compute_dx(u: np.ndarray, dx: float) -> np.ndarray:
+    nt, nx = u.shape
+    coeff = 1.0 / (2.0 * dx)
+    out = np.empty_like(u)
+    for it in prange(nt):
+        out[it, 0] = 0.0
+        out[it, nx-1] = 0.0
+        for ix in range(1, nx-1):
+            out[it, ix] = (u[it, ix+1] - u[it, ix-1]) * coeff
+    return out
 
+@njit(parallel=True, fastmath=True)
+def compute_dt(u: np.ndarray, dt: float) -> np.ndarray:
+    nt, nx = u.shape
+    coeff = 1.0 / (2.0 * dt)
+    out = np.empty_like(u)
+    for ix in prange(nx):
+        out[0, ix] = 0.0
+        out[nt-1, ix] = 0.0
+        for it in range(1, nt-1):
+            out[it, ix] = (u[it+1, ix] - u[it-1, ix]) * coeff
+    return out
+
+##############################################
+# BOUNDARY CONDITION
+##############################################
 def extend_model(original_model, N_pad):
     """
     Extend a 1D array 'original_model' by N_pad on each side
